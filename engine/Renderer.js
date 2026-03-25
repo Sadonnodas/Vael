@@ -27,13 +27,10 @@ class Renderer {
   }
 
   _resize() {
-    // Use device pixel ratio for sharp rendering on retina
-    const dpr = window.devicePixelRatio || 1;
-    const w   = this.canvas.clientWidth  || window.innerWidth;
-    const h   = this.canvas.clientHeight || window.innerHeight;
-    this.canvas.width  = w * dpr;
-    this.canvas.height = h * dpr;
-    this.ctx.scale(dpr, dpr);
+    const w = this.canvas.clientWidth  || window.innerWidth;
+    const h = this.canvas.clientHeight || window.innerHeight;
+    this.canvas.width  = w;
+    this.canvas.height = h;
     this._cssW = w;
     this._cssH = h;
   }
