@@ -52,16 +52,13 @@ class GradientLayer extends BaseLayer {
     const { hueA, hueB, angle } = this.params;
     const shift = this._hueShift;
 
-    const rad  = VaelMath.degToRad(angle);
-    const hw   = width  / 2;
-    const hh   = height / 2;
-    const dx   = Math.cos(rad) * Math.max(width, height);
-    const dy   = Math.sin(rad) * Math.max(width, height);
+    const rad = VaelMath.degToRad(angle);
+    const dx  = Math.cos(rad) * Math.max(width, height);
+    const dy  = Math.sin(rad) * Math.max(width, height);
 
-    const grad = ctx.createLinearGradient(
-      hw - dx, hh - dy,
-      hw + dx, hh + dy
-    );
+    // Renderer has already translated to (width/2, height/2).
+    // So we draw from (-width/2, -height/2) to fill the whole canvas.
+    const grad = ctx.createLinearGradient(-dx, -dy, dx, dy);
 
     const hA = (hueA + shift) % 360;
     const hB = (hueB + shift) % 360;
@@ -71,7 +68,7 @@ class GradientLayer extends BaseLayer {
     grad.addColorStop(1,   VaelColor.hsl(hB, 0.6, 0.14));
 
     ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, width, height);
+    ctx.fillRect(-width / 2, -height / 2, width, height);
   }
 
   toJSON() {

@@ -19,6 +19,22 @@
   renderer.audioData  = audio.smoothed;
   renderer.videoData  = video.smoothed;
 
+  // Currently selected layer for param editing
+  let _selectedLayerId = null;
+
+  // ── Layer factory (used by preset loader) ────────────────────
+  function layerFactory(typeName, id) {
+    const uid = id || `${typeName}-${Date.now()}`;
+    switch (typeName) {
+      case 'GradientLayer':    return new GradientLayer(uid);
+      case 'MathVisualizer':   return new MathVisualizer(uid);
+      case 'ParticleLayer':    return new ParticleLayer(uid);
+      case 'NoiseFieldLayer':  return new NoiseFieldLayer(uid);
+      case 'VideoPlayerLayer': return new VideoPlayerLayer(uid, video.videoElement);
+      default: console.warn('Unknown layer type:', typeName); return null;
+    }
+  }
+
   // ── Layer picker config ──────────────────────────────────────
   const LAYER_TYPES = [
     { id: 'gradient',  label: 'Gradient',      cls: () => new GradientLayer(`gradient-${Date.now()}`) },
@@ -49,35 +65,67 @@
   renderer.start();
 
   // ── Layer panel ──────────────────────────────────────────────
-  const layerList  = document.getElementById('layer-list');
-  const emptyState = document.getElementById('layers-empty');
+  const layerList    = document.getElementById('layer-list');
+  const emptyState   = document.getElementById('layers-empty');
+  const paramsEmpty  = document.getElementById('params-empty');
+  const paramsContent = document.getElementById('params-content');
 
   layers.onChanged = () => renderLayerList();
+
+  function selectLayer(id) {
+    _selectedLayerId = id;
+    const layer = layers.layers.find(l => l.id === id);
+    if (!layer) return;
+
+    // Highlight selected row
+    document.querySelectorAll('.layer-row').forEach(r => {
+      r.style.borderColor = r.dataset.id === id
+        ? 'var(--accent)' : 'var(--border-dim)';
+    });
+
+    // Render params panel
+    paramsEmpty.style.display   = 'none';
+    paramsContent.style.display = 'block';
+    ParamPanel.render(layer, paramsContent, audio);
+
+    // Switch to params tab
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    document.querySelector('[data-tab="params"]').classList.add('active');
+    document.getElementById('tab-params').classList.add('active');
+  }
 
   function renderLayerList() {
     layerList.innerHTML = '';
     const hasLayers = layers.count > 0;
     emptyState.style.display = hasLayers ? 'none' : 'block';
 
-    // Render in reverse (top layer shown first in UI)
+    // Render in reverse so top layer appears first in UI
     [...layers.layers].reverse().forEach(layer => {
       const row = document.createElement('div');
+      row.className    = 'layer-row';
+      row.dataset.id   = layer.id;
       row.style.cssText = `
         background: var(--bg-card);
-        border: 1px solid var(--border-dim);
+        border: 1px solid ${layer.id === _selectedLayerId ? 'var(--accent)' : 'var(--border-dim)'};
         border-radius: 5px;
         padding: 8px 10px;
         margin-bottom: 6px;
         cursor: pointer;
+        transition: border-color 0.15s;
       `;
 
       row.innerHTML = `
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
           <button class="vis-toggle" data-id="${layer.id}" title="Toggle visibility"
-            style="background:none;border:none;cursor:pointer;font-size:13px;color:${layer.visible ? 'var(--accent)' : 'var(--text-dim)'}">
+            style="background:none;border:none;cursor:pointer;font-size:13px;
+                   color:${layer.visible ? 'var(--accent)' : 'var(--text-dim)'}">
             ${layer.visible ? '◉' : '○'}
           </button>
-          <span style="flex:1;font-family:var(--font-mono);font-size:10px;color:var(--text)">${layer.name}</span>
+          <span class="layer-name-btn" style="flex:1;font-family:var(--font-mono);
+                font-size:10px;color:var(--text);cursor:pointer">
+            ${layer.name}
+          </span>
           <button class="layer-up"   data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px" title="Move up">↑</button>
           <button class="layer-down" data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px" title="Move down">↓</button>
           <button class="layer-del"  data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:#ff4444;font-size:11px" title="Remove">✕</button>
@@ -87,20 +135,30 @@
           <input type="range" class="opacity-sl" data-id="${layer.id}"
             min="0" max="1" step="0.01" value="${layer.opacity}"
             style="flex:1;accent-color:var(--accent)">
-          <span class="opacity-val" style="font-family:var(--font-mono);font-size:9px;color:var(--accent);width:28px;text-align:right">
+          <span class="opacity-val" style="font-family:var(--font-mono);font-size:9px;
+                color:var(--accent);width:28px;text-align:right">
             ${Math.round(layer.opacity * 100)}%
           </span>
         </div>
         <div style="display:flex;align-items:center;gap:8px;margin-top:5px">
           <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);width:30px">blend</span>
           <select class="blend-sel" data-id="${layer.id}"
-            style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);font-family:var(--font-mono);font-size:9px;padding:3px;border-radius:3px">
-            ${BLEND_MODES.map(m => `<option value="${m}" ${layer.blendMode === m ? 'selected' : ''}>${m}</option>`).join('')}
+            style="flex:1;background:var(--bg);border:1px solid var(--border);
+                   color:var(--text);font-family:var(--font-mono);font-size:9px;
+                   padding:3px;border-radius:3px">
+            ${BLEND_MODES.map(m =>
+              `<option value="${m}" ${layer.blendMode === m ? 'selected' : ''}>${m}</option>`
+            ).join('')}
           </select>
         </div>
       `;
 
-      // Events
+      // Click layer name → open params
+      row.querySelector('.layer-name-btn').addEventListener('click', e => {
+        e.stopPropagation();
+        selectLayer(layer.id);
+      });
+
       row.querySelector('.vis-toggle').addEventListener('click', e => {
         e.stopPropagation();
         layers.setVisible(layer.id, !layer.visible);
@@ -115,7 +173,14 @@
       });
       row.querySelector('.layer-del').addEventListener('click', e => {
         e.stopPropagation();
-        if (confirm(`Remove "${layer.name}"?`)) layers.remove(layer.id);
+        if (confirm(`Remove "${layer.name}"?`)) {
+          if (_selectedLayerId === layer.id) {
+            _selectedLayerId = null;
+            paramsContent.innerHTML = '';
+            paramsEmpty.style.display = 'block';
+          }
+          layers.remove(layer.id);
+        }
       });
       row.querySelector('.opacity-sl').addEventListener('input', e => {
         const v = parseFloat(e.target.value);
@@ -136,20 +201,17 @@
   });
 
   function showLayerPicker() {
-    // Remove existing picker if any
     document.getElementById('layer-picker')?.remove();
-
     const picker = document.createElement('div');
     picker.id = 'layer-picker';
     picker.style.cssText = `
-      position: fixed; inset: 0; background: rgba(0,0,0,0.7);
-      display: flex; align-items: center; justify-content: center;
-      z-index: 1000; backdrop-filter: blur(4px);
+      position:fixed;inset:0;background:rgba(0,0,0,0.7);
+      display:flex;align-items:center;justify-content:center;
+      z-index:1000;backdrop-filter:blur(4px);
     `;
-
     picker.innerHTML = `
-      <div style="background:var(--bg-mid);border:1px solid var(--border);border-radius:8px;
-                  padding:20px;min-width:260px;max-width:320px">
+      <div style="background:var(--bg-mid);border:1px solid var(--border);
+                  border-radius:8px;padding:20px;min-width:260px;max-width:320px">
         <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:2px;
                     color:var(--accent);margin-bottom:16px">ADD LAYER</div>
         ${LAYER_TYPES.map(t => `
@@ -158,12 +220,10 @@
             ${t.label}
           </button>
         `).join('')}
-        <button id="picker-cancel" class="btn" style="width:100%;margin-top:4px;color:var(--text-dim)">
-          Cancel
-        </button>
+        <button id="picker-cancel" class="btn"
+          style="width:100%;margin-top:4px;color:var(--text-dim)">Cancel</button>
       </div>
     `;
-
     picker.addEventListener('click', e => {
       const typeId = e.target.closest('[data-type]')?.dataset.type;
       if (typeId) {
@@ -172,14 +232,43 @@
           const layer = def.cls();
           if (typeof layer.init === 'function') layer.init({});
           layers.add(layer);
+          // Auto-select and show params
+          setTimeout(() => selectLayer(layer.id), 50);
         }
         picker.remove();
       }
       if (e.target.id === 'picker-cancel' || e.target === picker) picker.remove();
     });
-
     document.body.appendChild(picker);
   }
+
+  // ── Preset save / load ────────────────────────────────────────
+  document.getElementById('btn-preset-save').addEventListener('click', () => {
+    const name = document.getElementById('preset-name').value.trim() || 'scene';
+    const preset = PresetManager.save(layers, name);
+    PresetManager.storeRecent(preset);
+  });
+
+  document.getElementById('btn-preset-load').addEventListener('click', () => {
+    document.getElementById('input-preset-file').click();
+  });
+
+  document.getElementById('input-preset-file').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const preset = await PresetManager.load(file, layers, layerFactory);
+      if (preset.name) {
+        document.getElementById('preset-name').value = preset.name;
+      }
+      _selectedLayerId = null;
+      paramsContent.innerHTML = '';
+      paramsEmpty.style.display = 'block';
+    } catch (err) {
+      alert(`Could not load preset:\n${err.message}`);
+    }
+    e.target.value = '';
+  });
 
   // Initial render of layer list
   renderLayerList();

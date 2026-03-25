@@ -71,7 +71,8 @@ class MathVisualizer extends BaseLayer {
     if (!digits) return;
     const mode = this.params.mode;
     ctx.save();
-    ctx.translate(width / 2, height / 2);
+    // Note: Renderer already translates to (width/2, height/2) before calling render.
+    // So (0,0) here IS the centre of the canvas. No additional translate needed.
     ctx.scale(this._zoomSmooth, this._zoomSmooth);
 
     switch (mode) {
@@ -129,6 +130,7 @@ class MathVisualizer extends BaseLayer {
 
   _drawTree(ctx, digits, width, height) {
     const baseLen = Math.min(width, height) * 0.18;
+    // Start from bottom-centre (0 is already the canvas centre)
     ctx.translate(0, height * 0.35);
     this._branch(ctx, digits, 0, 0, -Math.PI / 2, baseLen, 0, 8);
   }

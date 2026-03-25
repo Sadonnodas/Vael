@@ -453,6 +453,7 @@
 
     <div id="sidebar-tabs">
       <button class="tab-btn active" data-tab="layers">LAYERS</button>
+      <button class="tab-btn" data-tab="params">PARAMS</button>
       <button class="tab-btn" data-tab="audio">AUDIO</button>
       <button class="tab-btn" data-tab="video">VIDEO</button>
       <button class="tab-btn" data-tab="record">REC</button>
@@ -469,6 +470,28 @@
         <div class="btn-row" style="margin-top: 10px;">
           <button class="btn accent" id="btn-add-layer">+ Add layer</button>
         </div>
+
+        <!-- Preset controls inside layers tab -->
+        <div class="divider" style="margin-top:18px"></div>
+        <div class="section-label">Scene</div>
+        <div style="display:flex;gap:6px;margin-bottom:6px;">
+          <input type="text" id="preset-name" value="my-scene" placeholder="scene name"
+            style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:4px;
+                   color:var(--text);font-family:var(--font-mono);font-size:10px;padding:6px 8px;" />
+        </div>
+        <div class="btn-row">
+          <button class="btn accent" id="btn-preset-save">↓ Save scene</button>
+          <button class="btn" id="btn-preset-load">↑ Load scene</button>
+        </div>
+        <input type="file" id="input-preset-file" accept=".json" style="display:none" />
+      </div>
+
+      <!-- PARAMS TAB -->
+      <div class="tab-panel" id="tab-params">
+        <div class="empty-state" id="params-empty">
+          Click a layer name<br>to edit its parameters.
+        </div>
+        <div id="params-content"></div>
       </div>
 
       <!-- AUDIO TAB -->
@@ -690,6 +713,7 @@
 <script src="engine/Recorder.js"></script>
 <script src="engine/LayerStack.js"></script>
 <script src="engine/Renderer.js"></script>
+<script src="engine/PresetManager.js"></script>
 
 <!-- Layer base class -->
 <script src="layers/_BaseLayer.js"></script>
@@ -702,6 +726,7 @@
 <script src="layers/VideoPlayerLayer.js"></script>
 
 <!-- UI -->
+<script src="ui/ParamPanel.js"></script>
 <script src="ui/App.js"></script>
 
 <style>
