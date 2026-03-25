@@ -1,8 +1,7 @@
 /**
  * ui/App.js
  * Top-level application controller.
- * Initialises all engine modules, wires them to the UI,
- * and keeps the status strip updated every frame.
+ * Wires all engine modules to the UI.
  */
 
 (function () {
@@ -16,20 +15,174 @@
   const recorder = new Recorder();
   const layers   = new LayerStack();
 
-  // Wire renderer
   renderer.layerStack = layers;
   renderer.audioData  = audio.smoothed;
   renderer.videoData  = video.smoothed;
 
-  // Add default layers
-  const gradientLayer  = new GradientLayer('gradient-1');
-  const mathLayer      = new MathVisualizer('math-1');
-  gradientLayer.init();
-  layers.add(gradientLayer);
+  // ── Layer picker config ──────────────────────────────────────
+  const LAYER_TYPES = [
+    { id: 'gradient',  label: 'Gradient',      cls: () => new GradientLayer(`gradient-${Date.now()}`) },
+    { id: 'math',      label: 'Math Visualizer',cls: () => new MathVisualizer(`math-${Date.now()}`) },
+    { id: 'particles', label: 'Particles',      cls: () => new ParticleLayer(`particles-${Date.now()}`) },
+    { id: 'noise',     label: 'Noise Field',    cls: () => new NoiseFieldLayer(`noise-${Date.now()}`) },
+    { id: 'video',     label: 'Video',          cls: () => {
+      const l = new VideoPlayerLayer(`video-${Date.now()}`, video.videoElement);
+      return l;
+    }},
+  ];
+
+  const BLEND_MODES = ['normal','multiply','screen','overlay','add','softlight','difference','luminosity'];
+
+  // ── Default scene ────────────────────────────────────────────
+  const noiseLayer = new NoiseFieldLayer('noise-default');
+  noiseLayer.init({ hueA: 200, hueB: 270, lightness: 0.12 });
+  noiseLayer.opacity = 1.0;
+
+  const mathLayer = new MathVisualizer('math-default');
+  mathLayer.init({ mode: 'path', constant: 'pi', colorMode: 'rainbow', digitCount: 600 });
+  mathLayer.opacity   = 0.85;
+  mathLayer.blendMode = 'screen';
+
+  layers.add(noiseLayer);
   layers.add(mathLayer);
 
-  // Start render loop
   renderer.start();
+
+  // ── Layer panel ──────────────────────────────────────────────
+  const layerList  = document.getElementById('layer-list');
+  const emptyState = document.getElementById('layers-empty');
+
+  layers.onChanged = () => renderLayerList();
+
+  function renderLayerList() {
+    layerList.innerHTML = '';
+    const hasLayers = layers.count > 0;
+    emptyState.style.display = hasLayers ? 'none' : 'block';
+
+    // Render in reverse (top layer shown first in UI)
+    [...layers.layers].reverse().forEach(layer => {
+      const row = document.createElement('div');
+      row.style.cssText = `
+        background: var(--bg-card);
+        border: 1px solid var(--border-dim);
+        border-radius: 5px;
+        padding: 8px 10px;
+        margin-bottom: 6px;
+        cursor: pointer;
+      `;
+
+      row.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <button class="vis-toggle" data-id="${layer.id}" title="Toggle visibility"
+            style="background:none;border:none;cursor:pointer;font-size:13px;color:${layer.visible ? 'var(--accent)' : 'var(--text-dim)'}">
+            ${layer.visible ? '◉' : '○'}
+          </button>
+          <span style="flex:1;font-family:var(--font-mono);font-size:10px;color:var(--text)">${layer.name}</span>
+          <button class="layer-up"   data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px" title="Move up">↑</button>
+          <button class="layer-down" data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px" title="Move down">↓</button>
+          <button class="layer-del"  data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:#ff4444;font-size:11px" title="Remove">✕</button>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);width:30px">opac</span>
+          <input type="range" class="opacity-sl" data-id="${layer.id}"
+            min="0" max="1" step="0.01" value="${layer.opacity}"
+            style="flex:1;accent-color:var(--accent)">
+          <span class="opacity-val" style="font-family:var(--font-mono);font-size:9px;color:var(--accent);width:28px;text-align:right">
+            ${Math.round(layer.opacity * 100)}%
+          </span>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:5px">
+          <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);width:30px">blend</span>
+          <select class="blend-sel" data-id="${layer.id}"
+            style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);font-family:var(--font-mono);font-size:9px;padding:3px;border-radius:3px">
+            ${BLEND_MODES.map(m => `<option value="${m}" ${layer.blendMode === m ? 'selected' : ''}>${m}</option>`).join('')}
+          </select>
+        </div>
+      `;
+
+      // Events
+      row.querySelector('.vis-toggle').addEventListener('click', e => {
+        e.stopPropagation();
+        layers.setVisible(layer.id, !layer.visible);
+      });
+      row.querySelector('.layer-up').addEventListener('click', e => {
+        e.stopPropagation();
+        layers.moveUp(layer.id);
+      });
+      row.querySelector('.layer-down').addEventListener('click', e => {
+        e.stopPropagation();
+        layers.moveDown(layer.id);
+      });
+      row.querySelector('.layer-del').addEventListener('click', e => {
+        e.stopPropagation();
+        if (confirm(`Remove "${layer.name}"?`)) layers.remove(layer.id);
+      });
+      row.querySelector('.opacity-sl').addEventListener('input', e => {
+        const v = parseFloat(e.target.value);
+        layers.setOpacity(layer.id, v);
+        row.querySelector('.opacity-val').textContent = Math.round(v * 100) + '%';
+      });
+      row.querySelector('.blend-sel').addEventListener('change', e => {
+        layers.setBlendMode(layer.id, e.target.value);
+      });
+
+      layerList.appendChild(row);
+    });
+  }
+
+  // Add layer button → simple picker
+  document.getElementById('btn-add-layer').addEventListener('click', () => {
+    showLayerPicker();
+  });
+
+  function showLayerPicker() {
+    // Remove existing picker if any
+    document.getElementById('layer-picker')?.remove();
+
+    const picker = document.createElement('div');
+    picker.id = 'layer-picker';
+    picker.style.cssText = `
+      position: fixed; inset: 0; background: rgba(0,0,0,0.7);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 1000; backdrop-filter: blur(4px);
+    `;
+
+    picker.innerHTML = `
+      <div style="background:var(--bg-mid);border:1px solid var(--border);border-radius:8px;
+                  padding:20px;min-width:260px;max-width:320px">
+        <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:2px;
+                    color:var(--accent);margin-bottom:16px">ADD LAYER</div>
+        ${LAYER_TYPES.map(t => `
+          <button class="btn" data-type="${t.id}"
+            style="width:100%;margin-bottom:8px;justify-content:flex-start;font-size:11px">
+            ${t.label}
+          </button>
+        `).join('')}
+        <button id="picker-cancel" class="btn" style="width:100%;margin-top:4px;color:var(--text-dim)">
+          Cancel
+        </button>
+      </div>
+    `;
+
+    picker.addEventListener('click', e => {
+      const typeId = e.target.closest('[data-type]')?.dataset.type;
+      if (typeId) {
+        const def = LAYER_TYPES.find(t => t.id === typeId);
+        if (def) {
+          const layer = def.cls();
+          if (typeof layer.init === 'function') layer.init({});
+          layers.add(layer);
+        }
+        picker.remove();
+      }
+      if (e.target.id === 'picker-cancel' || e.target === picker) picker.remove();
+    });
+
+    document.body.appendChild(picker);
+  }
+
+  // Initial render of layer list
+  renderLayerList();
 
   // ── Status strip ─────────────────────────────────────────────
   const dotAudio    = document.getElementById('dot-audio');
@@ -43,50 +196,59 @@
     labelFps.textContent    = `${fps} fps`;
     labelLayers.textContent = `${layers.count} layer${layers.count !== 1 ? 's' : ''}`;
 
-    // Audio dot
+    // Keep renderer data refs fresh
+    renderer.audioData = audio.smoothed;
+    renderer.videoData = video.smoothed;
+
+    // Audio status
     const audioActive = audio.smoothed.isActive;
     dotAudio.classList.toggle('inactive', !audioActive);
-    if (!audioActive) labelAudio.textContent = 'No audio';
 
-    // Update VU meters when active
+    // VU meters
     if (audioActive) {
-      const s = audio.smoothed;
-      updateVU('bass',   s.bass);
-      updateVU('mid',    s.mid);
-      updateVU('treble', s.treble);
-      updateVU('volume', s.volume);
+      updateVU('bass',   audio.smoothed.bass);
+      updateVU('mid',    audio.smoothed.mid);
+      updateVU('treble', audio.smoothed.treble);
+      updateVU('volume', audio.smoothed.volume);
     }
 
     // Video scrubber
-    if (video.sourceType === 'file' && video.isPlaying) {
-      const pos = video.currentTime;
-      const dur = video.duration;
-      updateScrubber('video', pos, dur);
+    if (video.sourceType === 'file') {
+      updateScrubber('video', video.currentTime, video.duration);
     }
 
     // Audio scrubber
     if (audio.sourceType === 'file') {
-      const pos = audio.currentTime;
-      const dur = audio.duration;
-      updateScrubber('audio', pos, dur);
+      updateScrubber('audio', audio.currentTime, audio.duration);
+    }
+
+    // Video VU
+    if (video.smoothed.isActive) {
+      updateVUById('vu-bright', 'vn-bright', video.smoothed.brightness);
+      updateVUById('vu-motion', 'vn-motion', video.smoothed.motion);
+      updateVUById('vu-edges',  'vn-edges',  video.smoothed.edgeDensity);
     }
   };
 
   function updateVU(band, value) {
-    const fill = document.getElementById(`vu-${band}`);
-    const num  = document.getElementById(`vn-${band}`);
+    updateVUById(`vu-${band}`, `vn-${band}`, value);
+  }
+
+  function updateVUById(fillId, numId, value) {
+    const fill = document.getElementById(fillId);
+    const num  = document.getElementById(numId);
     if (fill) fill.style.width = `${Math.round(value * 100)}%`;
     if (num)  num.textContent  = Math.round(value * 100);
   }
 
   function updateScrubber(type, pos, dur) {
-    const pct = dur > 0 ? pos / dur : 0;
+    const pct  = dur > 0 ? pos / dur : 0;
     const fill = document.getElementById(`${type}-fill`);
     const head = document.getElementById(`${type}-head`);
-    const posEl = document.getElementById(`${type}-pos`);
-    const durEl = document.getElementById(`${type}-duration`);
-    if (fill) fill.style.width = `${pct * 100}%`;
-    if (head) head.style.left  = `${pct * 100}%`;
+    const posEl= document.getElementById(`${type}-pos`);
+    const durEl= document.getElementById(`${type}-duration`);
+    if (fill)  fill.style.width = `${pct * 100}%`;
+    if (head)  head.style.left  = `${pct * 100}%`;
     if (posEl) posEl.textContent = VaelMath.formatTime(pos);
     if (durEl) durEl.textContent = VaelMath.formatTime(dur);
   }
@@ -105,32 +267,27 @@
   // ── Audio tab ─────────────────────────────────────────────────
   const inputAudioFile = document.getElementById('input-audio-file');
   const audioTransport = document.getElementById('audio-transport');
-  const micActive      = document.getElementById('mic-active');
+  const micActiveEl    = document.getElementById('mic-active');
   const audioLevels    = document.getElementById('audio-levels-section');
   const audioFilename  = document.getElementById('audio-filename');
   const btnAudioPlay   = document.getElementById('btn-audio-play');
 
-  document.getElementById('btn-audio-file').addEventListener('click', () => {
-    inputAudioFile.click();
-  });
+  document.getElementById('btn-audio-file').addEventListener('click', () => inputAudioFile.click());
 
   inputAudioFile.addEventListener('change', async e => {
     const file = e.target.files[0];
     if (!file) return;
     try {
       await audio.loadFile(file);
-      audioFilename.textContent = file.name;
+      audioFilename.textContent    = file.name;
       audioTransport.style.display = 'block';
-      micActive.style.display      = 'none';
+      micActiveEl.style.display    = 'none';
       audioLevels.style.display    = 'block';
       dotAudio.classList.remove('inactive');
       labelAudio.textContent = file.name.replace(/\.[^.]+$/, '');
       audio.play();
       btnAudioPlay.textContent = '⏸';
-      updateScrubber('audio', 0, audio.duration);
-    } catch (err) {
-      console.error(err);
-    }
+    } catch (err) { console.error(err); }
     e.target.value = '';
   });
 
@@ -138,23 +295,16 @@
     try {
       await audio.startMic();
       audioTransport.style.display = 'none';
-      micActive.style.display      = 'block';
+      micActiveEl.style.display    = 'block';
       audioLevels.style.display    = 'block';
       dotAudio.classList.remove('inactive');
       labelAudio.textContent = 'Microphone';
-    } catch (err) {
-      alert('Microphone access denied.');
-    }
+    } catch { alert('Microphone access denied.'); }
   });
 
   btnAudioPlay.addEventListener('click', () => {
-    if (audio.isPlaying) {
-      audio.pause();
-      btnAudioPlay.textContent = '▶';
-    } else {
-      audio.play();
-      btnAudioPlay.textContent = '⏸';
-    }
+    if (audio.isPlaying) { audio.pause(); btnAudioPlay.textContent = '▶'; }
+    else                 { audio.play();  btnAudioPlay.textContent = '⏸'; }
   });
 
   document.getElementById('btn-audio-stop').addEventListener('click', () => {
@@ -168,27 +318,17 @@
 
   document.getElementById('btn-mic-stop').addEventListener('click', () => {
     audio.stop();
-    micActive.style.display   = 'none';
+    micActiveEl.style.display = 'none';
     audioLevels.style.display = 'none';
     dotAudio.classList.add('inactive');
     labelAudio.textContent = 'No audio';
   });
 
-  // Audio scrubber
-  const audioSeek = document.getElementById('audio-seek');
-  audioSeek.addEventListener('input', () => {
-    const pos = parseFloat(audioSeek.value) * audio.duration;
-    audio.seekTo(pos);
+  document.getElementById('audio-seek').addEventListener('input', e => {
+    audio.seekTo(parseFloat(e.target.value) * audio.duration);
   });
 
-  // Keep seek range in sync with duration
-  audio.onStateChange = state => {
-    if (state.duration > 0) audioSeek.max = 1;
-    renderer.audioData = audio.smoothed;
-  };
-
-  // Audio smoothing slider
-  const slAudioSpeed = document.getElementById('sl-audio-speed');
+  const slAudioSpeed  = document.getElementById('sl-audio-speed');
   const valAudioSpeed = document.getElementById('val-audio-speed');
   slAudioSpeed.addEventListener('input', () => {
     const v = parseFloat(slAudioSpeed.value);
@@ -199,28 +339,31 @@
   // ── Video tab ─────────────────────────────────────────────────
   const inputVideoFile  = document.getElementById('input-video-file');
   const videoTransport  = document.getElementById('video-transport');
-  const webcamActive    = document.getElementById('webcam-active');
+  const webcamActiveEl  = document.getElementById('webcam-active');
   const videoLevels     = document.getElementById('video-levels-section');
   const videoMonitorEl  = document.getElementById('video-monitor');
   const videoEl         = document.getElementById('video-el');
   const videoFilename   = document.getElementById('video-filename');
   const btnVideoPlay    = document.getElementById('btn-video-play');
 
-  document.getElementById('btn-video-file').addEventListener('click', () => {
-    inputVideoFile.click();
-  });
+  document.getElementById('btn-video-file').addEventListener('click', () => inputVideoFile.click());
 
   inputVideoFile.addEventListener('change', async e => {
     const file = e.target.files[0];
     if (!file) return;
     const url = URL.createObjectURL(file);
-    videoEl.src = url;
+    videoEl.src  = url;
     videoEl.loop = true;
     await videoEl.play();
+
+    // Also wire the VideoEngine for pixel analysis
+    await video.loadFile(file);
+
     videoFilename.textContent    = file.name;
     videoTransport.style.display = 'block';
     videoMonitorEl.style.display = 'block';
-    webcamActive.style.display   = 'none';
+    webcamActiveEl.style.display = 'none';
+    videoLevels.style.display    = 'block';
     dotVideo.classList.remove('inactive');
     labelVideo.textContent = file.name.replace(/\.[^.]+$/, '');
     btnVideoPlay.textContent = '⏸';
@@ -229,49 +372,47 @@
 
   document.getElementById('btn-video-webcam').addEventListener('click', async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      videoEl.srcObject = stream;
-      videoEl.play();
+      await video.startWebcam();
+      const stream = video.videoElement.srcObject;
+      if (stream) { videoEl.srcObject = stream; videoEl.play(); }
       videoMonitorEl.style.display = 'block';
       videoTransport.style.display = 'none';
-      webcamActive.style.display   = 'block';
+      webcamActiveEl.style.display = 'block';
+      videoLevels.style.display    = 'block';
       dotVideo.classList.remove('inactive');
       labelVideo.textContent = 'Webcam';
-    } catch {
-      alert('Camera access denied.');
-    }
+    } catch { alert('Camera access denied.'); }
   });
 
   btnVideoPlay.addEventListener('click', () => {
-    if (videoEl.paused) { videoEl.play(); btnVideoPlay.textContent = '⏸'; }
-    else                { videoEl.pause(); btnVideoPlay.textContent = '▶'; }
+    if (videoEl.paused) { videoEl.play(); video.play(); btnVideoPlay.textContent = '⏸'; }
+    else                { videoEl.pause(); video.pause(); btnVideoPlay.textContent = '▶'; }
   });
 
   document.getElementById('btn-video-stop').addEventListener('click', () => {
-    videoEl.pause();
-    videoEl.src = '';
-    videoEl.srcObject = null;
+    videoEl.pause(); videoEl.src = ''; videoEl.srcObject = null;
+    video.stop();
     videoTransport.style.display = 'none';
     videoMonitorEl.style.display = 'none';
+    videoLevels.style.display    = 'none';
     dotVideo.classList.add('inactive');
     labelVideo.textContent = 'No video';
   });
 
   document.getElementById('btn-webcam-stop').addEventListener('click', () => {
-    if (videoEl.srcObject) {
-      videoEl.srcObject.getTracks().forEach(t => t.stop());
-      videoEl.srcObject = null;
-    }
+    video.stop();
+    if (videoEl.srcObject) { videoEl.srcObject.getTracks().forEach(t => t.stop()); videoEl.srcObject = null; }
     videoMonitorEl.style.display = 'none';
-    webcamActive.style.display   = 'none';
+    webcamActiveEl.style.display = 'none';
+    videoLevels.style.display    = 'none';
     dotVideo.classList.add('inactive');
     labelVideo.textContent = 'No video';
   });
 
-  // Video scrubber
   document.getElementById('video-seek').addEventListener('input', e => {
     const pct = parseFloat(e.target.value);
     if (videoEl.duration) videoEl.currentTime = pct * videoEl.duration;
+    video.seekTo(pct * video.duration);
   });
 
   // ── Record tab ────────────────────────────────────────────────
@@ -283,29 +424,29 @@
   const slFps     = document.getElementById('sl-fps');
   const valFps    = document.getElementById('val-fps');
 
-  slFps.addEventListener('input', () => {
-    valFps.textContent = `${slFps.value} fps`;
-  });
+  slFps.addEventListener('input', () => { valFps.textContent = `${slFps.value} fps`; });
 
   document.getElementById('btn-rec-start').addEventListener('click', () => {
-    recorder.start(canvas);
+    recorder.start(canvas, parseInt(slFps.value));
     recIdle.style.display   = 'none';
     recActive.style.display = 'block';
     recDone.style.display   = 'none';
-    // Update timer display
-    let elapsed = 0;
-    recorder._timerInterval = setInterval(() => {
-      elapsed++;
-      recTimer.textContent = VaelMath.formatTime(elapsed);
-    }, 1000);
+    recTimer.textContent    = '0:00';
+
+    recorder._uiTimer = setInterval(() => {
+      recTimer.textContent = VaelMath.formatTime(recorder.duration);
+    }, 500);
   });
 
   document.getElementById('btn-rec-stop').addEventListener('click', () => {
     recorder.stop();
-    clearInterval(recorder._timerInterval);
-    recActive.style.display = 'none';
-    recDone.style.display   = 'block';
-    recInfo.textContent     = `Recorded ${recTimer.textContent}`;
+    clearInterval(recorder._uiTimer);
+    // Wait for onstop to fire
+    setTimeout(() => {
+      recActive.style.display = 'none';
+      recDone.style.display   = 'block';
+      recInfo.textContent     = `${recTimer.textContent} recorded — ready to download`;
+    }, 200);
   });
 
   document.getElementById('btn-rec-download').addEventListener('click', () => {
@@ -321,7 +462,7 @@
 
   // ── Keyboard shortcuts ────────────────────────────────────────
   document.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT') return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
     switch (e.key) {
       case ' ':
         e.preventDefault();
@@ -330,8 +471,7 @@
           else                 { audio.play();  btnAudioPlay.textContent = '⏸'; }
         }
         break;
-      case 'f':
-      case 'F':
+      case 'f': case 'F':
         document.body.classList.toggle('performance');
         if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
         else document.exitFullscreen?.();
@@ -339,18 +479,20 @@
     }
   });
 
-  // ── Layers tab (minimal for now) ─────────────────────────────
-  document.getElementById('btn-add-layer').addEventListener('click', () => {
-    // Placeholder — full layer picker in next session
-    alert('Layer picker coming in the next session!\n\nFor now, layers are added via code in App.js.');
+  // ── Performance HUD ──────────────────────────────────────────
+  const hud = document.getElementById('perf-hud');
+  let hudTimeout;
+  document.addEventListener('mousemove', () => {
+    if (!document.body.classList.contains('performance')) return;
+    hud.classList.remove('hidden');
+    clearTimeout(hudTimeout);
+    hudTimeout = setTimeout(() => hud.classList.add('hidden'), 2500);
   });
 
-  // Hide empty state since we added layers by default
-  document.getElementById('layers-empty').style.display = 'none';
-
-  console.log('%cVAEL%c — Light onto Sound — loaded successfully',
-    'color:#00d4aa;font-weight:bold;font-size:16px;',
-    'color:#7878a0;font-size:12px;'
+  console.log(
+    '%cVAEL%c — Light onto Sound',
+    'color:#00d4aa;font-weight:bold;font-size:18px;letter-spacing:4px',
+    'color:#7878a0;font-size:12px'
   );
 
 })();
