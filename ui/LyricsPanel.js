@@ -1,32 +1,28 @@
 /**
  * ui/LyricsPanel.js
  * Inline editor for LyricsLayer instances.
- * Shows when a LyricsLayer is selected in the params panel.
- * Provides a textarea for lines, prev/next controls, and live preview.
+ *
+ * CHANGES:
+ * - Uses ParamPanel._buildNameHeader() so the layer can be renamed
+ *   from the params panel, consistent with all other layer types.
+ * - Delegates control building to ParamPanel.buildControl() instead
+ *   of maintaining its own duplicate set of builders.
  */
 
 const LyricsPanel = (() => {
 
-  /**
-   * Render the lyrics editor into container for the given layer.
-   * @param {LyricsLayer} layer
-   * @param {HTMLElement} container
-   */
   function render(layer, container) {
     container.innerHTML = '';
 
-    // Header
-    const header = document.createElement('div');
-    header.style.cssText = `
-      font-family: var(--font-mono);
-      font-size: 10px;
-      letter-spacing: 1.5px;
-      color: var(--accent);
-      margin-bottom: 14px;
-      text-transform: uppercase;
-    `;
-    header.textContent = 'Lyrics / Text';
-    container.appendChild(header);
+    // Editable name header — shared with ParamPanel and ShaderPanel
+    if (typeof ParamPanel !== 'undefined' && ParamPanel._buildNameHeader) {
+      container.appendChild(ParamPanel._buildNameHeader(layer, 'Lyrics / Text'));
+    } else {
+      const header = document.createElement('div');
+      header.style.cssText = 'font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:16px';
+      header.textContent   = layer.name || 'Lyrics';
+      container.appendChild(header);
+    }
 
     // Lines textarea
     const linesLabel = document.createElement('div');
@@ -80,15 +76,9 @@ const LyricsPanel = (() => {
     `;
     container.appendChild(navRow);
 
-    navRow.querySelector('#lyr-prev').addEventListener('click', () => {
-      layer.prev(); updateProgress();
-    });
-    navRow.querySelector('#lyr-next').addEventListener('click', () => {
-      layer.next(); updateProgress();
-    });
-    navRow.querySelector('#lyr-hide').addEventListener('click', () => {
-      layer.hide(); updateProgress();
-    });
+    navRow.querySelector('#lyr-prev').addEventListener('click', () => { layer.prev(); updateProgress(); });
+    navRow.querySelector('#lyr-next').addEventListener('click', () => { layer.next(); updateProgress(); });
+    navRow.querySelector('#lyr-hide').addEventListener('click', () => { layer.hide(); updateProgress(); });
 
     // Custom text input
     const customLabel = document.createElement('div');
@@ -109,24 +99,18 @@ const LyricsPanel = (() => {
 
     const customInput = customRow.querySelector('#lyr-custom');
     customRow.querySelector('#lyr-show').addEventListener('click', () => {
-      if (customInput.value.trim()) {
-        layer.show(customInput.value.trim());
-        updateProgress();
-      }
+      if (customInput.value.trim()) { layer.show(customInput.value.trim()); updateProgress(); }
     });
     customInput.addEventListener('keydown', e => {
-      if (e.key === 'Enter') {
-        layer.show(customInput.value.trim());
-        updateProgress();
-      }
+      if (e.key === 'Enter') { layer.show(customInput.value.trim()); updateProgress(); }
     });
 
-    // Divider before standard params
+    // Divider
     const divider = document.createElement('div');
     divider.style.cssText = 'height:1px;background:var(--border-dim);margin:4px 0 14px';
     container.appendChild(divider);
 
-    // Standard param controls (font size, position, color, transition, duration)
+    // Style params — delegate to ParamPanel.buildControl() to avoid duplication
     const manifest = layer.constructor.manifest;
     if (manifest?.params) {
       const paramHeader = document.createElement('div');
@@ -136,95 +120,59 @@ const LyricsPanel = (() => {
 
       manifest.params.forEach(param => {
         const current = layer.params?.[param.id] ?? param.default;
-        const el = _buildControl(param, current, layer);
+        // Use ParamPanel builders if available, otherwise fall back to inline
+        const el = (typeof ParamPanel !== 'undefined')
+          ? ParamPanel.buildControl(param, current, layer)
+          : _buildControlFallback(param, current, layer);
         container.appendChild(el);
       });
     }
-  }
 
-  // ── Control builders (simplified subset of ParamPanel) ───────
-
-  function _buildControl(param, current, layer) {
-    switch (param.type) {
-      case 'float':
-      case 'int':   return _buildSlider(param, current, layer);
-      case 'enum':  return _buildDropdown(param, current, layer);
-      case 'bool':  return _buildToggle(param, current, layer);
-      case 'color': return _buildColor(param, current, layer);
-      default:      return _buildSlider(param, current, layer);
+    // Modulation + FX — same as every other layer
+    if (layer.modMatrix && typeof ModMatrixPanel !== 'undefined') {
+      ModMatrixPanel.render(layer, container);
+    }
+    if (typeof LayerFXPanel !== 'undefined') {
+      LayerFXPanel.render(layer, container);
     }
   }
 
-  function _buildSlider(param, current, layer) {
-    const isInt = param.type === 'int';
-    const wrap  = document.createElement('div');
+  // ── Minimal fallback builders (only used if ParamPanel not loaded) ──
+
+  function _buildControlFallback(param, current, layer) {
+    const wrap = document.createElement('div');
     wrap.style.cssText = 'margin-bottom:12px';
-    const fmt = v => isInt ? Math.round(v) : parseFloat(v).toFixed(2);
-    wrap.innerHTML = `
-      <div style="display:flex;justify-content:space-between;margin-bottom:4px">
+    if (param.type === 'bool') {
+      wrap.innerHTML = `<label style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);display:flex;align-items:center;gap:8px;cursor:pointer">
+        <input type="checkbox" ${current ? 'checked' : ''} /> ${param.label}
+      </label>`;
+      wrap.querySelector('input').addEventListener('change', e => { layer.params[param.id] = e.target.checked; });
+    } else if (param.type === 'color') {
+      wrap.innerHTML = `<div style="display:flex;align-items:center;justify-content:space-between">
         <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted)">${param.label}</span>
-        <span class="pv" style="font-family:var(--font-mono);font-size:9px;color:var(--accent)">${fmt(current)}</span>
+        <input type="color" value="${current || '#ffffff'}" style="width:36px;height:24px;cursor:pointer" />
+      </div>`;
+      wrap.querySelector('input').addEventListener('input', e => { layer.params[param.id] = e.target.value; });
+    } else if (param.type === 'enum') {
+      wrap.innerHTML = `<div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-bottom:4px">${param.label}</div>
+        <select style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:10px;padding:5px 8px">
+          ${(param.options||[]).map(o=>`<option value="${o}" ${o===current?'selected':''}>${o}</option>`).join('')}
+        </select>`;
+      wrap.querySelector('select').addEventListener('change', e => { layer.params[param.id] = e.target.value; });
+    } else {
+      const isInt = param.type === 'int';
+      wrap.innerHTML = `<div style="display:flex;justify-content:space-between;margin-bottom:4px">
+        <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted)">${param.label}</span>
+        <span class="pv" style="font-family:var(--font-mono);font-size:9px;color:var(--accent)">${isInt ? Math.round(current) : parseFloat(current).toFixed(2)}</span>
       </div>
-      <input type="range" min="${param.min}" max="${param.max}" step="${isInt ? 1 : 0.01}"
-             value="${current}" style="width:100%;accent-color:var(--accent)" />
-    `;
-    const valEl = wrap.querySelector('.pv');
-    wrap.querySelector('input').addEventListener('input', e => {
-      const v = isInt ? parseInt(e.target.value) : parseFloat(e.target.value);
-      valEl.textContent = fmt(v);
-      layer.params[param.id] = v;
-    });
-    return wrap;
-  }
-
-  function _buildDropdown(param, current, layer) {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'margin-bottom:12px';
-    wrap.innerHTML = `
-      <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-bottom:4px">${param.label}</div>
-      <select style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;
-                     color:var(--text);font-family:var(--font-mono);font-size:10px;padding:5px 8px">
-        ${(param.options || []).map(o => `<option value="${o}" ${o === current ? 'selected' : ''}>${o}</option>`).join('')}
-      </select>
-    `;
-    wrap.querySelector('select').addEventListener('change', e => { layer.params[param.id] = e.target.value; });
-    return wrap;
-  }
-
-  function _buildToggle(param, current, layer) {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'margin-bottom:12px;display:flex;align-items:center;justify-content:space-between';
-    let state = !!current;
-    wrap.innerHTML = `
-      <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted)">${param.label}</span>
-      <button style="width:40px;height:20px;border-radius:10px;border:1px solid var(--border);
-        background:${state ? 'var(--accent)' : 'var(--bg)'};cursor:pointer;position:relative;transition:background 0.2s">
-        <span style="position:absolute;top:2px;left:${state ? '20px' : '2px'};width:14px;height:14px;
-          border-radius:50%;background:${state ? 'var(--bg)' : 'var(--text-dim)'};transition:left 0.2s"></span>
-      </button>
-    `;
-    const btn  = wrap.querySelector('button');
-    const knob = btn.querySelector('span');
-    btn.addEventListener('click', () => {
-      state = !state;
-      btn.style.background  = state ? 'var(--accent)' : 'var(--bg)';
-      knob.style.left       = state ? '20px' : '2px';
-      knob.style.background = state ? 'var(--bg)' : 'var(--text-dim)';
-      layer.params[param.id] = state;
-    });
-    return wrap;
-  }
-
-  function _buildColor(param, current, layer) {
-    const wrap = document.createElement('div');
-    wrap.style.cssText = 'margin-bottom:12px;display:flex;align-items:center;justify-content:space-between';
-    wrap.innerHTML = `
-      <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted)">${param.label}</span>
-      <input type="color" value="${current || '#ffffff'}"
-        style="width:36px;height:24px;padding:2px;border:1px solid var(--border);
-               border-radius:4px;background:var(--bg);cursor:pointer" />
-    `;
-    wrap.querySelector('input').addEventListener('input', e => { layer.params[param.id] = e.target.value; });
+      <input type="range" min="${param.min??0}" max="${param.max??1}" step="${isInt?1:0.01}" value="${current}" style="width:100%;accent-color:var(--accent)" />`;
+      const valEl = wrap.querySelector('.pv');
+      wrap.querySelector('input').addEventListener('input', e => {
+        const v = isInt ? parseInt(e.target.value) : parseFloat(e.target.value);
+        valEl.textContent = isInt ? v : v.toFixed(2);
+        layer.params[param.id] = v;
+      });
+    }
     return wrap;
   }
 

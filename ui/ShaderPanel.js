@@ -1,7 +1,14 @@
 /**
  * ui/ShaderPanel.js
  * Renders when a ShaderLayer is selected in the params panel.
- * Shows shader name, param sliders, and a GLSL paste area for custom shaders.
+ *
+ * FIXES:
+ * 1. Preset buttons now call layer.init({ shaderName }) which triggers
+ *    _gpuDirty = true and rebuilds the material correctly.
+ *    Previously called layer._selectRenderFn() which doesn't exist.
+ * 2. ModMatrixPanel and LayerFXPanel are now appended at the bottom,
+ *    giving shader layers the same modulation and FX capabilities
+ *    as every other layer type.
  */
 
 const ShaderPanel = (() => {
@@ -9,18 +16,15 @@ const ShaderPanel = (() => {
   function render(layer, container) {
     container.innerHTML = '';
 
-    // Header
-    const header = document.createElement('div');
-    header.style.cssText = `
-      font-family: var(--font-mono);
-      font-size: 10px;
-      letter-spacing: 1.5px;
-      color: var(--accent);
-      margin-bottom: 14px;
-      text-transform: uppercase;
-    `;
-    header.textContent = layer.name || 'Shader';
-    container.appendChild(header);
+    // Editable name header (shared helper from ParamPanel)
+    if (typeof ParamPanel !== 'undefined' && ParamPanel._buildNameHeader) {
+      container.appendChild(ParamPanel._buildNameHeader(layer, 'Shader'));
+    } else {
+      const header = document.createElement('div');
+      header.style.cssText = 'font-family:var(--font-mono);font-size:12px;color:var(--accent);margin-bottom:16px';
+      header.textContent   = layer.name || 'Shader';
+      container.appendChild(header);
+    }
 
     // Standard param sliders from manifest
     const manifest = layer.constructor.manifest;
@@ -32,9 +36,43 @@ const ShaderPanel = (() => {
     }
 
     // Divider
-    const div = document.createElement('div');
-    div.style.cssText = 'height:1px;background:var(--border-dim);margin:14px 0';
-    container.appendChild(div);
+    _divider(container);
+
+    // Built-in presets row — shown first so user can quickly switch
+    const presetsLabel = document.createElement('div');
+    presetsLabel.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px';
+    presetsLabel.textContent   = 'Built-in shaders';
+    container.appendChild(presetsLabel);
+
+    const presets = ['plasma', 'ripple', 'distort', 'bloom', 'chromatic'];
+    const presetRow = document.createElement('div');
+    presetRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;margin-bottom:14px';
+
+    presets.forEach(name => {
+      const btn = document.createElement('button');
+      btn.className   = 'btn';
+      btn.textContent = name;
+      const isActive  = layer._shaderName === name;
+      btn.style.cssText = `
+        font-size: 9px;
+        padding: 4px 8px;
+        ${isActive ? 'color:var(--accent);border-color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,var(--bg))' : ''}
+      `;
+      btn.addEventListener('click', () => {
+        // FIX: use layer.init() which sets _gpuDirty = true and rebuilds
+        // the WebGL material correctly on the next render frame.
+        // Old code called layer._selectRenderFn() which does not exist.
+        layer.init({ shaderName: name });
+        layer.name = `Shader — ${name}`;
+        Toast.info(`Switched to ${name}`);
+        render(layer, container);  // re-render panel to update active highlight
+      });
+      presetRow.appendChild(btn);
+    });
+    container.appendChild(presetRow);
+
+    // Divider
+    _divider(container);
 
     // GLSL editor section
     const glslLabel = document.createElement('div');
@@ -58,7 +96,7 @@ const ShaderPanel = (() => {
 
     const hint = document.createElement('p');
     hint.style.cssText = 'font-size:9px;color:var(--text-dim);line-height:1.6;margin-bottom:8px';
-    hint.textContent   = 'Paste any ShaderToy mainImage shader — runs on GPU via WebGL. Uniforms: iTime, iResolution, iBass, iMid, iTreble, iVolume, iBeat, iBpm, iMouseX, iMouseY, iSpeed, iIntensity, iScale.';
+    hint.textContent   = 'Paste any ShaderToy mainImage shader. Available uniforms: iTime, iResolution, iBass, iMid, iTreble, iVolume, iBeat, iBpm, iMouseX, iMouseY, iSpeed, iIntensity, iScale.';
     container.appendChild(hint);
 
     const textarea = document.createElement('textarea');
@@ -81,7 +119,6 @@ const ShaderPanel = (() => {
     `;
     container.appendChild(textarea);
 
-    // Load button
     const loadBtn = document.createElement('button');
     loadBtn.className   = 'btn accent';
     loadBtn.style.width = '100%';
@@ -90,38 +127,27 @@ const ShaderPanel = (() => {
       const src = textarea.value.trim();
       if (!src) { Toast.warn('Paste a GLSL shader first'); return; }
       layer.loadGLSL(src);
+      Toast.success('Custom shader loaded on GPU');
     });
     container.appendChild(loadBtn);
 
-    // Built-in presets row
-    const presetsLabel = document.createElement('div');
-    presetsLabel.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-top:14px;margin-bottom:6px';
-    presetsLabel.textContent   = 'Built-in shaders';
-    container.appendChild(presetsLabel);
+    // ── FIX: Modulation matrix — same as all other layers ──────
+    if (layer.modMatrix && typeof ModMatrixPanel !== 'undefined') {
+      ModMatrixPanel.render(layer, container);
+    }
 
-    const presets = ['plasma', 'ripple', 'distort', 'bloom', 'chromatic'];
-    const presetRow = document.createElement('div');
-    presetRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px';
+    // ── FIX: Per-layer FX chain — same as all other layers ─────
+    if (typeof LayerFXPanel !== 'undefined') {
+      LayerFXPanel.render(layer, container);
+    }
+  }
 
-    presets.forEach(name => {
-      const btn = document.createElement('button');
-      btn.className   = 'btn';
-      btn.textContent = name;
-      btn.style.cssText = `
-        font-size: 9px;
-        padding: 4px 8px;
-        ${layer._shaderName === name ? 'color:var(--accent);border-color:var(--accent)' : ''}
-      `;
-      btn.addEventListener('click', () => {
-        layer._shaderName = name;
-        layer._renderFn   = layer._selectRenderFn();
-        layer.name        = `Shader — ${name}`;
-        if (typeof Toast !== 'undefined') Toast.info(`Switched to ${name}`);
-        render(layer, container);  // re-render panel
-      });
-      presetRow.appendChild(btn);
-    });
-    container.appendChild(presetRow);
+  // ── Helpers ──────────────────────────────────────────────────
+
+  function _divider(container) {
+    const d = document.createElement('div');
+    d.style.cssText = 'height:1px;background:var(--border-dim);margin:14px 0';
+    container.appendChild(d);
   }
 
   // ── Control builders ─────────────────────────────────────────

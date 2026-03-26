@@ -1,23 +1,23 @@
 /**
  * ui/ParamPanel.js
  * Auto-generates parameter controls from a layer's static manifest.
- * Call ParamPanel.render(layer, container) to populate a DOM element
- * with sliders, dropdowns, toggles and colour pickers.
+ *
+ * CHANGE: Legacy single-band audio params (audioTarget, audioAmount, audioReact)
+ * are hidden from the UI. They still exist in layer code and presets so nothing
+ * breaks — they're just no longer shown since ModMatrix covers this more clearly.
+ * Mark any param with `legacy: true` in the manifest to hide it the same way.
  */
 
 const ParamPanel = (() => {
 
   const BANDS = ['bass', 'mid', 'treble', 'volume', 'brightness', 'motion', 'hue', 'edgeDensity'];
 
+  // Param IDs that are legacy single-band audio pickers.
+  // The ModMatrix panel replaces these more clearly.
+  const LEGACY_PARAM_IDS = new Set(['audioTarget', 'audioAmount', 'audioReact']);
+
   // ── Public API ───────────────────────────────────────────────
 
-  /**
-   * Render controls for `layer` into `container`.
-   * Clears the container first.
-   * @param {BaseLayer} layer
-   * @param {HTMLElement} container
-   * @param {AudioEngine} audioEngine  — used for live value preview
-   */
   function render(layer, container, audioEngine) {
     container.innerHTML = '';
 
@@ -31,20 +31,14 @@ const ParamPanel = (() => {
       return;
     }
 
-    // Layer name header
-    const header = document.createElement('div');
-    header.style.cssText = `
-      font-family: var(--font-mono);
-      font-size: 10px;
-      letter-spacing: 1.5px;
-      color: var(--accent);
-      margin-bottom: 14px;
-      text-transform: uppercase;
-    `;
-    header.textContent = manifest.name;
-    container.appendChild(header);
+    // Editable layer name header
+    container.appendChild(_buildNameHeader(layer, manifest.name));
 
     manifest.params.forEach(param => {
+      // Hide legacy single-band audio pickers — ModMatrix replaces these.
+      // Also hide any param explicitly marked legacy: true in the manifest.
+      if (LEGACY_PARAM_IDS.has(param.id) || param.legacy === true) return;
+
       const current = layer.params?.[param.id] ?? param.default;
       const el = buildControl(param, current, layer);
       container.appendChild(el);
@@ -66,12 +60,15 @@ const ParamPanel = (() => {
   function buildControl(param, current, layer) {
     switch (param.type) {
       case 'float':
-      case 'int':    return buildSlider(param, current, layer);
-      case 'enum':   return buildDropdown(param, current, layer);
-      case 'bool':   return buildToggle(param, current, layer);
-      case 'color':  return buildColorPicker(param, current, layer);
-      case 'band':   return buildBandPicker(param, current, layer);
-      default:       return buildSlider(param, current, layer);
+      case 'int':          return buildSlider(param, current, layer);
+      case 'enum':         return buildDropdown(param, current, layer);
+      case 'bool':         return buildToggle(param, current, layer);
+      case 'color':        return buildColorPicker(param, current, layer);
+      case 'band':         return buildBandPicker(param, current, layer);
+      case 'videolibrary': return typeof LibraryPanel !== 'undefined'
+                             ? LibraryPanel.buildVideoPicker(current, layer, param.id)
+                             : buildSlider(param, current, layer);
+      default:             return buildSlider(param, current, layer);
     }
   }
 
@@ -84,8 +81,7 @@ const ParamPanel = (() => {
     const step  = isInt ? 1 : (param.step || 0.01);
     const min   = param.min ?? 0;
     const max   = param.max ?? 1;
-
-    const fmt = v => isInt ? Math.round(v) : parseFloat(v).toFixed(2);
+    const fmt   = v => isInt ? Math.round(v) : parseFloat(v).toFixed(2);
 
     wrap.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
@@ -244,7 +240,6 @@ const ParamPanel = (() => {
     });
 
     hexIn.addEventListener('blur', e => {
-      // Auto-fix partial hex on blur
       const v = e.target.value.trim();
       if (!v.startsWith('#')) { hexIn.value = '#' + v; }
     });
@@ -252,7 +247,7 @@ const ParamPanel = (() => {
     return wrap;
   }
 
-  // Audio band picker — dropdown restricted to audio bands
+  // Audio band picker
   function buildBandPicker(param, current, layer) {
     const wrap = document.createElement('div');
     wrap.style.cssText = 'margin-bottom:14px;';
@@ -289,6 +284,101 @@ const ParamPanel = (() => {
     return wrap;
   }
 
-  return { render };
+  // ── Editable name header ─────────────────────────────────────
+  //
+  // Renders the layer's user-defined name as a click-to-edit field.
+  // Shown at the top of every params panel so the user can rename
+  // without needing to double-click in the layer list (which is hard
+  // because single-click already navigates to params).
+  //
+  // @param {BaseLayer} layer
+  // @param {string}    typeName  — shown as a subtitle (e.g. "Gradient")
+  // @returns {HTMLElement}
+
+  function _buildNameHeader(layer, typeName) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-bottom:16px';
+
+    // Subtitle — layer type, small and muted
+    const sub = document.createElement('div');
+    sub.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:3px';
+    sub.textContent   = typeName || '';
+    wrap.appendChild(sub);
+
+    // Name display — click to edit
+    const nameEl = document.createElement('div');
+    nameEl.style.cssText = `
+      font-family: var(--font-mono);
+      font-size: 12px;
+      color: var(--accent);
+      letter-spacing: 1px;
+      cursor: text;
+      padding: 2px 0;
+      border-bottom: 1px solid transparent;
+      transition: border-color 0.15s;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    `;
+    nameEl.textContent = layer.name;
+    nameEl.title       = 'Click to rename';
+    wrap.appendChild(nameEl);
+
+    // Hint shown on hover
+    nameEl.addEventListener('mouseenter', () => {
+      nameEl.style.borderBottomColor = 'var(--accent)';
+    });
+    nameEl.addEventListener('mouseleave', () => {
+      nameEl.style.borderBottomColor = 'transparent';
+    });
+
+    // Click → replace with input
+    nameEl.addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type  = 'text';
+      input.value = layer.name;
+      input.style.cssText = `
+        font-family: var(--font-mono);
+        font-size: 12px;
+        color: var(--accent);
+        letter-spacing: 1px;
+        background: transparent;
+        border: none;
+        border-bottom: 1px solid var(--accent);
+        outline: none;
+        width: 100%;
+        padding: 2px 0;
+      `;
+
+      nameEl.replaceWith(input);
+      input.focus();
+      input.select();
+
+      const commit = () => {
+        const newName   = input.value.trim() || layer.name;
+        layer.name      = newName;
+        nameEl.textContent = newName;
+        input.replaceWith(nameEl);
+        // Also update the layer list row without a full re-render
+        const rowNameEl = document.querySelector(`.layer-name-btn[data-id="${layer.id}"]`)
+          || [...document.querySelectorAll('.layer-name-btn')]
+               .find(el => el.closest('[data-id]')?.dataset.id === layer.id);
+        if (rowNameEl) rowNameEl.textContent = newName;
+        // Full list re-render to sync everything
+        if (typeof LayerPanel !== 'undefined') LayerPanel.renderLayerList();
+        Toast.info(`Renamed to "${newName}"`);
+      };
+
+      input.addEventListener('blur', commit);
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter')  { e.preventDefault(); input.blur(); }
+        if (e.key === 'Escape') { input.value = layer.name; input.blur(); }
+      });
+    });
+
+    return wrap;
+  }
+
+  return { render, buildControl, buildSlider, buildDropdown, buildToggle, buildColorPicker, buildBandPicker, _buildNameHeader };
 
 })();

@@ -117,7 +117,7 @@
     /* Sidebar tabs — two-row grid */
     #sidebar-tabs {
       display: grid;
-      grid-template-columns: repeat(4, 1fr);
+      grid-template-columns: repeat(3, 1fr);
       background: var(--bg);
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
@@ -139,7 +139,7 @@
     }
 
     /* Row separator — tabs 5-8 get a top border */
-    .tab-btn:nth-child(n+5) {
+    .tab-btn:nth-child(n+4) {
       border-top: 1px solid var(--border-dim);
     }
 
@@ -479,14 +479,16 @@
     </div>
 
     <div id="sidebar-tabs">
-      <!-- Row 1: visual/content tabs -->
+      <!-- Row 1 -->
       <button class="tab-btn active" data-tab="layers">LAYERS</button>
       <button class="tab-btn" data-tab="params">PARAMS</button>
       <button class="tab-btn" data-tab="fx">FX</button>
-      <button class="tab-btn" data-tab="beat">BEAT</button>
-      <!-- Row 2: input/output tabs -->
+      <!-- Row 2 -->
       <button class="tab-btn" data-tab="audio">AUDIO</button>
       <button class="tab-btn" data-tab="video">VIDEO</button>
+      <button class="tab-btn" data-tab="library">LIBRARY</button>
+      <!-- Row 3 -->
+      <button class="tab-btn" data-tab="beat">BEAT</button>
       <button class="tab-btn" data-tab="midi">MIDI</button>
       <button class="tab-btn" data-tab="record">REC</button>
     </div>
@@ -703,6 +705,11 @@
 
       </div>
 
+      <!-- LIBRARY TAB -->
+      <div class="tab-panel" id="tab-library">
+        <div id="library-panel-content"></div>
+      </div>
+
       <!-- BEAT TAB -->
       <div class="tab-panel" id="tab-beat">
         <div id="beat-panel-content"></div>
@@ -826,8 +833,7 @@
           </div>
         </div>
 
-      </div>
-
+      
 <!-- Keyboard shortcut help overlay -->
 <div id="shortcut-overlay" style="
   display:none;position:fixed;inset:0;
@@ -860,6 +866,12 @@
 </div>
 
 
+</div><!-- /sidebar -->
+
+</div><!-- /app -->
+
+<!-- Performance HUD -->
+<div id="perf-hud" class="hidden">
   <span id="hud-scene">Vael</span>
   &nbsp;·&nbsp;
   <span id="hud-fps">60 fps</span>
@@ -878,6 +890,7 @@
 <!-- Engine -->
 <script src="engine/AudioEngine.js"></script>
 <script src="engine/VideoEngine.js"></script>
+<script src="engine/VideoLibrary.js"></script>
 <script src="engine/Recorder.js"></script>
 <script src="engine/LayerStack.js"></script>
 <script src="engine/Renderer.js"></script>
@@ -915,6 +928,7 @@
 <script src="ui/LayerPanel.js"></script>
 <script src="ui/AudioPanel.js"></script>
 <script src="ui/VideoPanel.js"></script>
+<script src="ui/LibraryPanel.js"></script>
 <script src="ui/RecordPanel.js"></script>
 <script src="ui/ParamPanel.js"></script>
 <script src="ui/ModMatrixPanel.js"></script>
