@@ -26,7 +26,7 @@ class SetlistManager {
   // ── Setlist management ───────────────────────────────────────
 
   addEntry(entry) {
-    this.entries.push({ notes: '', ...entry });
+    this.entries.push({ notes: '', thumbnail: null, ...entry });
     if (this.currentIndex === -1) this.currentIndex = 0;
   }
 

@@ -33,6 +33,7 @@
       case 'NoiseFieldLayer':  return new NoiseFieldLayer(uid);
       case 'VideoPlayerLayer': return new VideoPlayerLayer(uid, video.videoElement);
       case 'ShaderLayer':      return new ShaderLayer(uid);
+      case 'LyricsLayer':      return new LyricsLayer(uid);
       default: console.warn('Unknown layer type:', typeName); return null;
     }
   }
@@ -58,6 +59,28 @@
   const osc = new OscBridge({ layerStack: layers, setlist, recorder });
   osc.connect('ws://localhost:8080');
 
+  // ── Post-processing FX ────────────────────────────────────────
+  PostFXPanel.init(renderer, document.getElementById('fx-panel-content'));
+
+  // ── Sequencer ────────────────────────────────────────────────
+  const seq = new Sequencer();
+  SequencerPanel.init(seq, beat, document.getElementById('beat-panel-content'));
+
+  // Wire sequencer events to visual flash overlay
+  seq.onStep = (step, event) => {
+    if (event === 'flash' || event === 'beat') {
+      // Inject isBeat signal into audio data for this frame
+      audio.smoothed.isBeat = true;
+      setTimeout(() => { audio.smoothed.isBeat = false; }, 50);
+    }
+  };
+
+  // T key for tap tempo
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.key === 't' || e.key === 'T') { e.preventDefault(); seq.tapTempo(); }
+  });
+
   // MIDI learn — triggered from MidiPanel when learn button clicked
   window.addEventListener('vael:midi-learn-requested', () => {
     if (!_selectedLayerId) {
@@ -76,14 +99,12 @@
 
   // ── Layer picker config ──────────────────────────────────────
   const LAYER_TYPES = [
-    { id: 'gradient',  label: 'Gradient',        cls: () => new GradientLayer(`gradient-${Date.now()}`) },
-    { id: 'math',      label: 'Math Visualizer',  cls: () => new MathVisualizer(`math-${Date.now()}`) },
-    { id: 'particles', label: 'Particles',        cls: () => new ParticleLayer(`particles-${Date.now()}`) },
-    { id: 'noise',     label: 'Noise Field',      cls: () => new NoiseFieldLayer(`noise-${Date.now()}`) },
-    { id: 'video',     label: 'Video',            cls: () => {
-      const l = new VideoPlayerLayer(`video-${Date.now()}`, video.videoElement);
-      return l;
-    }},
+    { id: 'gradient',    label: 'Gradient',            cls: () => new GradientLayer(`gradient-${Date.now()}`) },
+    { id: 'math',        label: 'Math Visualizer',      cls: () => new MathVisualizer(`math-${Date.now()}`) },
+    { id: 'particles',   label: 'Particles',            cls: () => new ParticleLayer(`particles-${Date.now()}`) },
+    { id: 'noise',       label: 'Noise Field',          cls: () => new NoiseFieldLayer(`noise-${Date.now()}`) },
+    { id: 'lyrics',      label: 'Lyrics / Text',        cls: () => new LyricsLayer(`lyrics-${Date.now()}`) },
+    { id: 'video',       label: 'Video',                cls: () => new VideoPlayerLayer(`video-${Date.now()}`, video.videoElement) },
     { id: 'shader-plasma',   label: 'Shader — Plasma',    cls: () => ShaderLayer.fromBuiltin('plasma') },
     { id: 'shader-ripple',   label: 'Shader — Ripple',    cls: () => ShaderLayer.fromBuiltin('ripple') },
     { id: 'shader-distort',  label: 'Shader — Distort',   cls: () => ShaderLayer.fromBuiltin('distort') },
@@ -127,10 +148,15 @@
         ? 'var(--accent)' : 'var(--border-dim)';
     });
 
-    // Render params panel
+    // Render params panel — use specialised panel for LyricsLayer
     paramsEmpty.style.display   = 'none';
     paramsContent.style.display = 'block';
-    ParamPanel.render(layer, paramsContent, audio);
+
+    if (layer instanceof LyricsLayer) {
+      LyricsPanel.render(layer, paramsContent);
+    } else {
+      ParamPanel.render(layer, paramsContent, audio);
+    }
 
     // Switch to params tab
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -339,6 +365,9 @@
     // Expose isBeat on the shared audio data so layers can read it
     audio.smoothed.isBeat = beat.isBeat;
     audio.smoothed.bpm    = beat.bpm;
+
+    // Sequencer tick
+    seq.tick(dt);
 
     // Crossfade tick
     setlist.tick(dt);
@@ -624,9 +653,10 @@
 
   // ── Keyboard shortcuts ────────────────────────────────────────
   // F, arrows, Escape, S, 1-9 are handled by PerformanceMode.
-  // Space (play/pause) stays here.
+  // Space (play/pause) and lyrics navigation stay here.
   document.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+
     if (e.key === ' ') {
       e.preventDefault();
       if (audio.sourceType === 'file') {
@@ -634,7 +664,35 @@
         else                 { audio.play();  btnAudioPlay.textContent = '⏸'; }
       }
     }
+
+    // PageDown / PageUp — advance/prev lyrics on topmost visible LyricsLayer
+    if (e.key === 'PageDown' || e.key === 'PageUp') {
+      e.preventDefault();
+      const lyricsLayer = [...layers.layers].reverse()
+        .find(l => l instanceof LyricsLayer && l.visible);
+      if (lyricsLayer) {
+        e.key === 'PageDown' ? lyricsLayer.next() : lyricsLayer.prev();
+      }
+    }
   });
+
+  // ── Auto-stop recording when audio song ends ─────────────────
+  audio.onStateChange = state => {
+    renderer.audioData = audio.smoothed;
+    // If a file just finished and we were recording, stop and prompt download
+    if (state.sourceType === 'file' && !state.isPlaying && recorder.state === 'recording') {
+      setTimeout(() => {
+        if (recorder.state !== 'recording') return;
+        recorder.stop();
+        clearInterval(recorder._uiTimer);
+        setTimeout(() => {
+          recActive.style.display = 'none';
+          recDone.style.display   = 'block';
+          recInfo.textContent     = `${recTimer.textContent} — song ended, ready to download`;
+        }, 300);
+      }, 600);
+    }
+  };
 
   console.log(
     '%cVAEL%c — Light onto Sound',

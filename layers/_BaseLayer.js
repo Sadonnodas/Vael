@@ -1,30 +1,40 @@
 /**
  * layers/_BaseLayer.js
  * Base class for all Vael layer plugins.
- * Every layer extends this and implements the methods below.
+ *
+ * Global uniforms — available in every layer's update() and render():
+ *   this.uniforms.iTime    — seconds since page load
+ *   this.uniforms.iBeat    — 1.0 on beat frame, decays to 0
+ *   this.uniforms.iBpm     — current BPM estimate
+ *   this.uniforms.iMouseX  — normalised mouse X (0–1)
+ *   this.uniforms.iMouseY  — normalised mouse Y (0–1)
+ *
+ * Updated every frame by LayerStack before calling update().
  */
 class BaseLayer {
   constructor(id, name) {
-    this.id      = id || `layer-${Date.now()}`;
-    this.name    = name || 'Layer';
-    this.visible = true;
-    this.opacity = 1.0;
+    this.id        = id   || `layer-${Date.now()}`;
+    this.name      = name || 'Layer';
+    this.visible   = true;
+    this.opacity   = 1.0;
     this.blendMode = 'normal';
+
+    // Global uniforms — read-only for layers, written by LayerStack
+    this.uniforms = {
+      iTime:   0,
+      iBeat:   0,
+      iBpm:    0,
+      iMouseX: 0.5,
+      iMouseY: 0.5,
+    };
   }
 
-  /** Called once when the layer is added. Override to set up resources. */
-  init(params) {}
+  init(params)                          {}
+  update(audioData, videoData, dt)      {}
+  render(ctx, width, height)            {}
+  dispose()                             {}
+  setParam(id, value)                   { if (this.params) this.params[id] = value; }
 
-  /** Called every frame. Override to update state. */
-  update(audioData, videoData, dt) {}
-
-  /** Called every frame after update. Override to draw. */
-  render(ctx, width, height) {}
-
-  /** Called when the layer is removed. Override to free resources. */
-  dispose() {}
-
-  /** Serialise to JSON for preset saving. */
   toJSON() {
     return {
       id:        this.id,

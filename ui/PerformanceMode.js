@@ -184,22 +184,30 @@ class PerformanceMode {
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 8px 10px;
+        padding: 7px 10px;
         border-radius: 5px;
         margin-bottom: 4px;
         background: ${isCurrent ? 'rgba(0,212,170,0.12)' : 'rgba(255,255,255,0.04)'};
         border: 1px solid ${isCurrent ? 'rgba(0,212,170,0.4)' : 'rgba(255,255,255,0.06)'};
         cursor: pointer;
-        transition: background 0.15s;
       `;
+
+      // Thumbnail
+      const thumbHtml = entry.thumbnail
+        ? `<img src="${entry.thumbnail}" style="width:48px;height:27px;border-radius:3px;
+             object-fit:cover;flex-shrink:0;border:1px solid rgba(255,255,255,0.1)">`
+        : `<div style="width:48px;height:27px;border-radius:3px;background:rgba(255,255,255,0.05);
+             flex-shrink:0;display:flex;align-items:center;justify-content:center;
+             font-size:8px;color:rgba(255,255,255,0.2)">—</div>`;
 
       row.innerHTML = `
         <span style="font-size:9px;color:${isCurrent ? '#00d4aa' : '#454560'};
-              min-width:18px;text-align:center">${i + 1}</span>
+              min-width:16px;text-align:center">${i + 1}</span>
+        ${thumbHtml}
         <span style="flex:1;font-size:10px;color:${isCurrent ? '#fff' : '#d4d4e0'}">
           ${entry.name}
         </span>
-        ${isCurrent ? '<span style="font-size:9px;color:#00d4aa">▶ now</span>' : ''}
+        ${isCurrent ? '<span style="font-size:9px;color:#00d4aa;flex-shrink:0">▶</span>' : ''}
         <button class="sl-goto" data-index="${i}"
           style="background:none;border:none;color:#7878a0;cursor:pointer;font-size:10px"
           title="Load this scene">→</button>
@@ -253,7 +261,19 @@ class PerformanceMode {
         })),
       };
 
-      this._setlist.addEntry({ name, preset });
+      // Capture thumbnail from main canvas
+      let thumbnail = null;
+      try {
+        const canvas  = document.getElementById('main-canvas');
+        const thumb   = document.createElement('canvas');
+        thumb.width   = 120;
+        thumb.height  = 68;
+        const tCtx    = thumb.getContext('2d');
+        tCtx.drawImage(canvas, 0, 0, 120, 68);
+        thumbnail = thumb.toDataURL('image/jpeg', 0.6);
+      } catch (e) { /* canvas may be cross-origin tainted — skip */ }
+
+      this._setlist.addEntry({ name, preset, thumbnail });
       nameEl.value = '';
       this._renderSetlistEntries();
       this._updateHUD();
