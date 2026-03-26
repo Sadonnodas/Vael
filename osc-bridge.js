@@ -45,8 +45,49 @@ const clients = new Set();
 wss.on('connection', ws => {
   clients.add(ws);
   console.log(`Vael connected (${clients.size} client${clients.size !== 1 ? 's' : ''})`);
+  
+  // NEW: Listen for messages from the browser UI
+  ws.on('message', async (message) => {
+    try {
+      const data = JSON.parse(message);
+      
+      // If the browser is asking us to contact Claude...
+      if (data.type === 'ai-request') {
+        console.log('Received AI request from UI, calling Anthropic...');
+        
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': data.apiKey,
+            'anthropic-version': '2023-06-01'
+          },
+          body: JSON.stringify({
+            model: 'claude-3-5-sonnet-20241022', 
+            max_tokens: 1000,
+            system: data.system,
+            messages: data.messages
+          })
+        });
+
+        if (!response.ok) throw new Error(`API Error: ${response.status}`);
+        
+        const json = await response.json();
+        
+        // Send the AI's response back to the browser
+        ws.send(JSON.stringify({
+          type: 'ai-response',
+          content: json.content[0]?.text || ''
+        }));
+      }
+    } catch (err) {
+      console.error('AI Request failed:', err.message);
+      ws.send(JSON.stringify({ type: 'ai-response', error: err.message }));
+    }
+  });
+
   ws.on('close', () => {
-    clients.delete(ws);
+    clients.add(ws);
     console.log(`Vael disconnected (${clients.size} remaining)`);
   });
 });
