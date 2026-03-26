@@ -118,6 +118,66 @@ class AudioEngine {
     this._notifyStateChange();
   }
 
+  /**
+   * Capture system/tab audio via getDisplayMedia.
+   * Works in Chrome 74+ — prompts user to share a tab/window WITH audio.
+   * This is how you route Spotify, Cubase, or any system audio into Vael.
+   */
+  async startSystemAudio() {
+    this.stop();
+    this.sourceType = 'system';
+
+    const ctx = this._getCtx();
+    if (ctx.state === 'suspended') await ctx.resume();
+
+    try {
+      // Request screen+audio capture — user picks the audio source
+      const stream = await navigator.mediaDevices.getDisplayMedia({
+        video: true,   // Chrome requires video:true even if we only want audio
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          sampleRate:       44100,
+        },
+      });
+
+      // Only keep the audio track
+      const audioTracks = stream.getAudioTracks();
+      if (audioTracks.length === 0) {
+        stream.getTracks().forEach(t => t.stop());
+        throw new Error('No audio track in capture — make sure to check "Share tab audio" in the browser prompt');
+      }
+
+      // Stop video tracks (we don't need them)
+      stream.getVideoTracks().forEach(t => t.stop());
+
+      // Create audio-only stream
+      const audioStream = new MediaStream(audioTracks);
+      this._stream = audioStream;
+
+      const analyser = this._buildAnalyser(ctx);
+      const src      = ctx.createMediaStreamSource(audioStream);
+      src.connect(analyser);
+      this._source   = src;
+      this.isPlaying = true;
+      this._startFFT();
+      this._startSmoother();
+
+      // Auto-stop when stream ends (user stops sharing)
+      audioTracks[0].addEventListener('ended', () => {
+        this.stop();
+        this._notifyStateChange();
+      });
+
+    } catch (e) {
+      console.error('AudioEngine: system audio capture failed', e);
+      this.sourceType = 'none';
+      throw e;
+    }
+
+    this._notifyStateChange();
+  }
+
   // ── Playback ─────────────────────────────────────────────────
 
   play() {

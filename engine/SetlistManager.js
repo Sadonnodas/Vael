@@ -13,11 +13,12 @@ class SetlistManager {
     this.currentIndex  = -1;
 
     // Crossfade state
-    this.fadeDuration  = 1.5;    // seconds
-    this._fading       = false;
-    this._fadeT        = 0;      // 0 → 1 progress
-    this._oldLayers    = [];     // snapshot of layers being faded out
-    this._oldOpacities = [];     // their original opacities
+    this.fadeDuration   = 1.5;
+    this.transitionType = 'crossfade';  // 'crossfade' | 'flash' | 'blur' | 'cut'
+    this._fading        = false;
+    this._fadeT         = 0;
+    this._oldLayers     = [];
+    this._oldOpacities  = [];
 
     // Callbacks
     this.onSceneChange = null;
@@ -61,7 +62,7 @@ class SetlistManager {
     this.currentIndex = index;
     const entry = this.entries[index];
 
-    if (this.fadeDuration > 0) {
+    if (this.fadeDuration > 0 && this.transitionType !== 'cut') {
       this._startFade(entry.preset);
     } else {
       this._loadPreset(entry.preset);
@@ -84,16 +85,55 @@ class SetlistManager {
     this._fadeT = Math.min(1, this._fadeT + dt / this.fadeDuration);
     const t = VaelMath.smoothstep(this._fadeT);
 
-    // Fade out old layers
-    this._oldLayers.forEach((layer, i) => {
-      layer.opacity = this._oldOpacities[i] * (1 - t);
-    });
-
-    // Fade in new layers (they started at opacity 0)
-    this._layerStack.layers.forEach(layer => {
-      if (!layer._fadeTarget) return;
-      layer.opacity = layer._fadeTarget * t;
-    });
+    switch (this.transitionType) {
+      case 'flash': {
+        // White flash then load new scene at halfway point
+        const overlay = document.getElementById('vael-transition-overlay');
+        if (overlay) {
+          const flashT = this._fadeT < 0.5
+            ? this._fadeT * 2          // flash up (0→1)
+            : (1 - this._fadeT) * 2;   // flash down (1→0)
+          overlay.style.opacity = (flashT * 0.9).toString();
+        }
+        // Load new scene at peak of flash
+        if (this._fadeT >= 0.5 && !this._flashLoaded) {
+          this._flashLoaded = true;
+          if (this._pendingPreset) {
+            this._loadPreset(this._pendingPreset);
+            this._pendingPreset = null;
+          }
+        }
+        break;
+      }
+      case 'blur': {
+        // Apply blur to canvas during transition
+        const canvas = document.getElementById('main-canvas');
+        if (canvas) {
+          const blurPeak = t < 0.5 ? t * 2 : (1 - t) * 2;
+          canvas.style.filter = `blur(${(blurPeak * 12).toFixed(1)}px)`;
+        }
+        // Swap scenes at halfway
+        if (this._fadeT >= 0.5 && !this._flashLoaded) {
+          this._flashLoaded = true;
+          if (this._pendingPreset) {
+            this._loadPreset(this._pendingPreset);
+            this._pendingPreset = null;
+          }
+        }
+        break;
+      }
+      default: { // crossfade
+        // Fade out old layers
+        this._oldLayers.forEach((layer, i) => {
+          layer.opacity = this._oldOpacities[i] * (1 - t);
+        });
+        // Fade in new layers
+        this._layerStack.layers.forEach(layer => {
+          if (!layer._fadeTarget) return;
+          layer.opacity = layer._fadeTarget * t;
+        });
+      }
+    }
 
     if (this._fadeT >= 1) {
       this._finishFade();
@@ -101,7 +141,16 @@ class SetlistManager {
   }
 
   _startFade(preset) {
-    // Snapshot current layers as "old"
+    this._flashLoaded = false;
+
+    if (this.transitionType === 'flash' || this.transitionType === 'blur') {
+      this._pendingPreset = preset;
+      this._fadeT  = 0;
+      this._fading = true;
+      return;
+    }
+
+    // Crossfade — snapshot old layers, load new at opacity 0
     this._oldLayers    = [...this._layerStack.layers];
     this._oldOpacities = this._oldLayers.map(l => l.opacity);
     this._fadeT        = 0;
@@ -129,7 +178,15 @@ class SetlistManager {
   }
 
   _finishFade() {
-    // Remove old layers
+    // Clean up blur
+    const canvas = document.getElementById('main-canvas');
+    if (canvas) canvas.style.filter = '';
+
+    // Clean up flash overlay
+    const overlay = document.getElementById('vael-transition-overlay');
+    if (overlay) overlay.style.opacity = '0';
+
+    // Remove old crossfade layers
     this._oldLayers.forEach(l => this._layerStack.remove(l.id));
 
     // Snap new layers to their target opacity
@@ -144,6 +201,7 @@ class SetlistManager {
     this._oldOpacities = [];
     this._fading       = false;
     this._fadeT        = 0;
+    this._flashLoaded  = false;
   }
 
   // ── Direct load (no fade) ────────────────────────────────────

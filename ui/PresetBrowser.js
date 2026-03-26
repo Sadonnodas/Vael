@@ -19,7 +19,121 @@ const PresetBrowser = (() => {
   let _layerFactory = null;
   let _onLoad       = null;   // callback after loading a preset
 
-  // ── Storage ──────────────────────────────────────────────────
+  // ── Starter scene templates ───────────────────────────────────
+
+  const STARTER_SCENES = [
+    {
+      id: 'campfire',
+      name: 'Campfire',
+      desc: 'Warm embers + fireflies',
+      preset: {
+        name: 'Campfire',
+        layers: [
+          { type: 'NoiseFieldLayer', name: 'Smoke', visible: true, opacity: 1,
+            blendMode: 'normal', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'flow', hueA: 20, hueB: 45, saturation: 0.5, lightness: 0.08, speed: 0.15 }},
+          { type: 'ParticleLayer', name: 'Embers', visible: true, opacity: 0.9,
+            blendMode: 'add', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'fountain', count: 200, size: 2.5, speed: 0.6, colorMode: 'ember' }},
+          { type: 'ParticleLayer', name: 'Fireflies', visible: true, opacity: 0.7,
+            blendMode: 'add', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'fireflies', count: 120, size: 1.8, speed: 0.2, colorMode: 'warm' }},
+        ]
+      }
+    },
+    {
+      id: 'aurora',
+      name: 'Aurora',
+      desc: 'Northern lights + stars',
+      preset: {
+        name: 'Aurora',
+        layers: [
+          { type: 'NoiseFieldLayer', name: 'Aurora', visible: true, opacity: 1,
+            blendMode: 'normal', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'aurora', hueA: 140, hueB: 200, saturation: 0.8, lightness: 0.12, speed: 0.08 }},
+          { type: 'ParticleLayer', name: 'Stars', visible: true, opacity: 0.6,
+            blendMode: 'add', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'drift', count: 400, size: 0.8, speed: 0.1, colorMode: 'white' }},
+          { type: 'MathVisualizer', name: 'Pi constellation', visible: true, opacity: 0.5,
+            blendMode: 'screen', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'constellation', constant: 'pi', colorMode: 'rainbow', digitCount: 300 }},
+        ]
+      }
+    },
+    {
+      id: 'forest',
+      name: 'Forest',
+      desc: 'Green marble + branches',
+      preset: {
+        name: 'Forest',
+        layers: [
+          { type: 'NoiseFieldLayer', name: 'Undergrowth', visible: true, opacity: 1,
+            blendMode: 'normal', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'marble', hueA: 100, hueB: 140, saturation: 0.6, lightness: 0.10, speed: 0.06 }},
+          { type: 'MathVisualizer', name: 'Branches', visible: true, opacity: 0.7,
+            blendMode: 'screen', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'tree', constant: 'phi', colorMode: 'rainbow', digitCount: 600, angle: 25, hueShift: 100 }},
+          { type: 'ParticleLayer', name: 'Pollen', visible: true, opacity: 0.4,
+            blendMode: 'add', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'drift', count: 200, size: 1.2, speed: 0.15, colorMode: 'cool' }},
+        ]
+      }
+    },
+    {
+      id: 'cosmos',
+      name: 'Cosmos',
+      desc: 'Deep space + nebula',
+      preset: {
+        name: 'Cosmos',
+        layers: [
+          { type: 'GradientLayer', name: 'Deep space', visible: true, opacity: 1,
+            blendMode: 'normal', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'radial', hueA: 240, hueB: 280, hueC: 200, saturation: 0.5, lightness: 0.05 }},
+          { type: 'ParticleLayer', name: 'Stars', visible: true, opacity: 0.8,
+            blendMode: 'add', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'orbit', count: 600, size: 0.7, speed: 0.15, colorMode: 'rainbow' }},
+          { type: 'ShaderLayer', name: 'Nebula', visible: true, opacity: 0.5,
+            blendMode: 'screen', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { speed: 0.3, intensity: 0.8, scale: 1.5 }},
+        ]
+      }
+    },
+    {
+      id: 'waveform-live',
+      name: 'Live Waveform',
+      desc: 'Clean audio visualizer',
+      preset: {
+        name: 'Live Waveform',
+        layers: [
+          { type: 'GradientLayer', name: 'Background', visible: true, opacity: 1,
+            blendMode: 'normal', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'linear', hueA: 210, hueB: 260, saturation: 0.4, lightness: 0.06 }},
+          { type: 'WaveformLayer', name: 'Waveform', visible: true, opacity: 1,
+            blendMode: 'screen', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'mirror', color: '#00d4aa', colorMode: 'rainbow', lineWidth: 1.5, glow: true }},
+          { type: 'WaveformLayer', name: 'Spectrum', visible: true, opacity: 0.6,
+            blendMode: 'add', transform: { x:0,y:150,scaleX:1,scaleY:0.5,rotation:0 },
+            params: { mode: 'bars', colorMode: 'frequency', barCount: 64, glow: true }},
+        ]
+      }
+    },
+    {
+      id: 'minimal',
+      name: 'Minimal',
+      desc: 'Clean + intimate',
+      preset: {
+        name: 'Minimal',
+        layers: [
+          { type: 'NoiseFieldLayer', name: 'Breath', visible: true, opacity: 1,
+            blendMode: 'normal', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'field', hueA: 200, hueB: 230, saturation: 0.3, lightness: 0.08, speed: 0.05 }},
+          { type: 'MathVisualizer', name: 'Path', visible: true, opacity: 0.6,
+            blendMode: 'screen', transform: { x:0,y:0,scaleX:1,scaleY:1,rotation:0 },
+            params: { mode: 'wave', constant: 'pi', colorMode: 'mono', digitCount: 400, lineWidth: 1 }},
+        ]
+      }
+    },
+  ];
 
   function _getAll() {
     try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); }
@@ -202,12 +316,40 @@ const PresetBrowser = (() => {
     countEl.textContent = `${presets.length} / ${MAX_CAP}`;
     grid.innerHTML = '';
 
+    // Starter templates (always shown at top if library is empty)
     if (presets.length === 0) {
-      grid.innerHTML = `
-        <div style="grid-column:1/-1;text-align:center;padding:40px 0;
-                    font-family:var(--font-mono);font-size:10px;color:var(--text-dim)">
-          No saved scenes yet.<br>Build a scene and click "Save current".
-        </div>`;
+      const startersEl = document.createElement('div');
+      startersEl.style.cssText = 'grid-column:1/-1;margin-bottom:12px';
+      startersEl.innerHTML = `
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);
+                    text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">
+          Starter scenes
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+          ${STARTER_SCENES.map(s => `
+            <button class="starter-btn" data-id="${s.id}"
+              style="background:var(--bg-card);border:1px solid var(--border-dim);
+                     border-radius:5px;padding:10px 8px;cursor:pointer;text-align:left;
+                     font-family:var(--font-mono);transition:border-color 0.15s">
+              <div style="font-size:9px;color:var(--text);margin-bottom:2px">${s.name}</div>
+              <div style="font-size:8px;color:var(--text-dim)">${s.desc}</div>
+            </button>`).join('')}
+        </div>
+      `;
+
+      startersEl.querySelectorAll('.starter-btn').forEach(btn => {
+        btn.addEventListener('mouseenter', () => btn.style.borderColor = 'var(--accent)');
+        btn.addEventListener('mouseleave', () => btn.style.borderColor = 'var(--border-dim)');
+        btn.addEventListener('click', () => {
+          const starter = STARTER_SCENES.find(s => s.id === btn.dataset.id);
+          if (starter) {
+            _applyPreset(starter.preset);
+            close();
+          }
+        });
+      });
+
+      grid.appendChild(startersEl);
       return;
     }
 

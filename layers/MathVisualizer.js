@@ -12,6 +12,8 @@ class MathVisualizer extends BaseLayer {
     params: [
       { id: 'constant',    label: 'Constant',    type: 'enum',  default: 'pi',    options: ['pi','e','phi','sqrt2','ln2','apery','euler-mascheroni','catalan'] },
       { id: 'mode',        label: 'Mode',        type: 'enum',  default: 'path',  options: ['path','tree','circle','chaos','spiral','walk','polar','lsystem','wave','constellation'] },
+      { id: 'buildMode',   label: 'Build mode',  type: 'bool',  default: false },
+      { id: 'buildSpeed',  label: 'Build speed', type: 'float', default: 8, min: 0.5, max: 60 },
       { id: 'colorMode',   label: 'Color mode',  type: 'enum',  default: 'rainbow', options: ['rainbow','digit','mono'] },
       { id: 'digitCount',  label: 'Digits',      type: 'int',   default: 800,  min: 50,  max: 2000 },
       { id: 'angle',       label: 'Angle',       type: 'float', default: 36,   min: 1,   max: 180  },
@@ -36,12 +38,16 @@ class MathVisualizer extends BaseLayer {
       zoom:        1.0,
       audioTarget: 'bass',
       hueShift:    0,
+      buildMode:   false,
+      buildSpeed:  8,
     };
-    this._time       = 0;
+    this._time        = 0;
     this._angleSmooth = 36;
     this._zoomSmooth  = 1.0;
+    this._audioSmooth = 0;
     this._chaosPoints = [];
     this._chaosInit   = false;
+    this._buildCount  = 0;  // current digit count when in build mode
   }
 
   init(params = {}) {
@@ -57,22 +63,42 @@ class MathVisualizer extends BaseLayer {
   update(audioData, videoData, dt) {
     this._time += dt;
 
-    // Smooth angle with audio
     const audioVal = audioData?.isActive ? (audioData[this.params.audioTarget] ?? 0) : 0;
+    this._audioSmooth = VaelMath.lerp(this._audioSmooth ?? 0, audioVal, 0.08);
+
     const targetAngle = this.params.angle + audioVal * 25;
     this._angleSmooth = VaelMath.lerp(this._angleSmooth, targetAngle, 0.06);
 
     const targetZoom = this.params.zoom + audioVal * 0.3;
     this._zoomSmooth = VaelMath.lerp(this._zoomSmooth, targetZoom, 0.04);
 
-    // Beat pulse — zoom spike on beat
     if (audioData?.isBeat) this._beatPulse = 1.0;
     this._beatPulse = Math.max(0, (this._beatPulse ?? 0) - dt * 5);
+
+    // Build mode — grow digit count over time
+    if (this.params.buildMode) {
+      const speed = this.params.buildSpeed * (1 + audioVal * 2);
+      this._buildCount = Math.min(
+        this.params.digitCount,
+        (this._buildCount || 0) + dt * speed
+      );
+      // Loop when complete
+      if (this._buildCount >= this.params.digitCount) {
+        setTimeout(() => { this._buildCount = 0; }, 800);
+      }
+    }
   }
 
   render(ctx, width, height) {
-    const digits = this._getDigits();
-    if (!digits) return;
+    const allDigits = this._getDigits();
+    if (!allDigits) return;
+
+    // Build mode slices the digit array
+    const digits = this.params.buildMode && this._buildCount > 0
+      ? allDigits.slice(0, Math.max(1, Math.floor(this._buildCount)))
+      : allDigits;
+
+    if (digits.length === 0) return;
     const mode = this.params.mode;
     ctx.save();
     // Note: Renderer already translates to (width/2, height/2) before calling render.

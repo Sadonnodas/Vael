@@ -43,53 +43,56 @@ ${layerList}
 - GradientLayer: params: mode(linear/radial/conic/diagonal-flow), hueA(0-360), hueB(0-360), hueC(0-360), saturation(0-1), lightness(0-0.6), speed(0-1), angle(0-360), audioReact(0-2), audioTarget(band)
 - NoiseFieldLayer: params: mode(field/flow/marble/aurora), scale(0.001-0.02), speed(0.01-1), hueA, hueB, saturation, lightness, contrast(0.3-3), audioTarget
 - ParticleLayer: params: mode(drift/fountain/orbit/pulse/fireflies), count(50-3000), size(0.5-10), speed(0.05-3), colorMode(rainbow/mono/white/accent/warm/cool/ember), audioTarget, hueShift(0-360)
-- MathVisualizer: params: constant(pi/e/phi/sqrt2/ln2/apery/euler-mascheroni/catalan), mode(path/tree/circle/chaos/spiral/walk/polar/lsystem/wave/constellation), colorMode(rainbow/digit/mono), digitCount(50-2000), angle(1-180), lineWidth(0.3-8), dotSize(0.5-12), zoom(0.2-4), audioTarget, hueShift
+- MathVisualizer: params: constant(pi/e/phi/sqrt2), mode(path/tree/circle/chaos/spiral/walk/polar/lsystem/wave/constellation), colorMode(rainbow/digit/mono), digitCount(50-2000), angle(1-180), lineWidth(0.3-8), zoom(0.2-4), audioTarget, hueShift
+- WaveformLayer: params: mode(waveform/bars/mirror/radial/particles), color(hex), colorMode(solid/rainbow/frequency), lineWidth(0.5-8), scale(0.1-4), smoothing(0-0.99), barCount(8-256), mirror(bool), glow(bool)
+- ImageLayer: params: fitMode(contain/cover/stretch/original), tintHue(0-360), tintAmount(0-1), audioTarget, audioScale(0-1), audioRotate(0-1), pulseOnBeat(bool)
 - ShaderLayer: params: speed(0-4), intensity(0-2), scale(0.1-5), audioTarget. Builtin names: plasma, ripple, distort, bloom, chromatic
 - LyricsLayer: params: fontSize(12-200), posY(0-1), color(hex), transition(fade/slide/typewriter/none), duration(0.5-30)
-- ImageLayer: params: fitMode(contain/cover/stretch/original), tintHue(0-360), tintAmount(0-1), audioTarget, audioScale(0-1), audioRotate(0-1), pulseOnBeat(bool)
-- GradientLayer: same as above
-- GroupLayer: container for other layers
+- VideoPlayerLayer: displays a video file as a layer
+- WebcamLayer: params: flipH(bool), flipV(bool), chromaKey(bool), chromaHue(0-360), chromaRange(5-120), fitMode(cover/contain/stretch)
+- GroupLayer: container for multiple layers — type="GroupLayer"
 
 ## Blend Modes
 normal, multiply, screen, overlay, add, softlight, difference, subtract, exclusion
 
-## Audio Sources (for mod routes and audioTarget)
+## Audio/Signal Sources (for mod routes and audioTarget)
 bass, mid, treble, volume, brightness(video), motion(video), edgeDensity(video), iTime, iBeat, iMouseX, iMouseY
 
-## Modulation Routes (per-layer)
-Each layer can have multiple mod routes: source → target param, with depth(0-1) and smooth(0.01-1).
-Example: bass → angle, depth 0.5, smooth 0.08 makes the angle swell slowly with bass.
+## Modulation Routes (per-layer, via addModRoute)
+Each layer can have multiple routes. source drives target param. depth(0-1) controls amount, smooth(0.01=slow, 1=instant) controls response speed.
+Good combos: bass→size (particles pop), iBeat→scaleX+scaleY (pulse), iTime→hueShift (slow color shift), mid→angle (math visualizer sways)
 
-## Per-Layer FX
-blur(radius, audioAmount), glow(radius, intensity, audioAmount), brightness(value), contrast(value), saturate(value), hue-rotate(angle, audioAmount), sepia(amount), invert(amount), vignette(darkness, size), chromatic(amount, audioAmount), threshold(threshold), color-overlay(color, opacity, blendMode), pixelate(size, audioAmount)
+## Per-Layer FX (via addLayerFX)
+blur(radius), glow(radius, intensity), brightness(value), contrast(value), saturate(value), hue-rotate(angle), sepia(amount), invert(amount), vignette(darkness, size), chromatic(amount), threshold(threshold), color-overlay(color, opacity, blendMode), pixelate(size)
 
-## Global PostFX (whole canvas)
-bloom, chromatic, distort, vignette, grain, feedback
+## Global PostFX (whole canvas, via addPostFX)
+bloom(intensity, threshold), chromatic(amount), distort(strength, speed), vignette(darkness, offset), grain(amount), feedback(amount, zoom, rotation)
 
 ## Transform
-x(pixels), y(pixels), scaleX(0.1-10), scaleY(0.1-10), rotation(degrees)
+x(pixels offset), y(pixels offset), scaleX(0.1-10), scaleY(0.1-10), rotation(degrees)
 
 ## Response Format
-Always respond with:
-1. A brief friendly explanation of what you're doing or suggesting (1-3 sentences)
-2. If executing changes, a JSON block with commands:
+Brief explanation (1-3 sentences), then if making changes:
 
 \`\`\`json
 {
   "commands": [
-    { "action": "addLayer", "type": "ParticleLayer", "name": "Stars", "params": { "mode": "drift", "count": 800, "colorMode": "white" } },
-    { "action": "setBlend", "layerId": "auto:0", "mode": "add" },
-    { "action": "addModRoute", "layerId": "auto:0", "source": "bass", "target": "size", "depth": 0.4, "smooth": 0.1 }
+    { "action": "clearScene" },
+    { "action": "addLayer", "type": "NoiseFieldLayer", "name": "Background", "params": { "mode": "aurora", "hueA": 30, "hueB": 60 }, "blend": "normal", "opacity": 1 },
+    { "action": "addLayer", "type": "ParticleLayer", "name": "Fireflies", "params": { "mode": "fireflies", "count": 400, "colorMode": "warm" }, "blend": "add", "opacity": 0.8 },
+    { "action": "addModRoute", "layerId": "auto:1", "source": "bass", "target": "size", "depth": 0.4, "smooth": 0.15 },
+    { "action": "addLayerFX", "layerId": "auto:1", "fxType": "glow", "params": { "radius": 8, "intensity": 0.6 } }
   ]
 }
 \`\`\`
 
-Use "auto:N" to reference the Nth layer added in this same response (0-indexed).
-Use actual layer ids from the current scene to modify existing layers.
+Use "auto:N" for layers added in this response (0-indexed). Use actual layer ids for existing layers.
+Available actions: addLayer, removeLayer, clearScene, setParam, setBlend, setOpacity, setTransform, addModRoute, addLayerFX, addPostFX, setName
 
-## Vibe
-You're helping create visuals for Bearfeet, an indie folk band. Their music is organic, warm, earthy. Think: fireflies, aurora, starfields, wood grain, flowing water, candlelight. Avoid harsh strobing or aggressive rave aesthetics unless specifically asked.`;
+## Vibe for Bearfeet (indie folk band)
+Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candlelight, wood grain, flowing rivers, morning mist. Avoid harsh strobing or aggressive rave aesthetics. Prefer slow breathing animations, warm color palettes (ambers, greens, teals), screen and add blend modes over harsh ones. For quiet intimate songs: low particle counts, aurora/marble noise, soft glow. For energetic songs: more particles, wave mode, beat-reactive scale pulses.`;
   }
+  
 
   // ── Command executor ──────────────────────────────────────────
 
@@ -108,13 +111,19 @@ You're helping create visuals for Bearfeet, an indie folk band. Their music is o
 
         switch (cmd.action) {
           case 'addLayer': {
-            const l = _layerFactory(cmd.type);
+            let l;
+            if (cmd.type === 'ShaderLayer' && cmd.shaderName) {
+              l = ShaderLayer.fromBuiltin(cmd.shaderName);
+            } else {
+              l = _layerFactory(cmd.type);
+            }
             if (!l) { console.warn('VaelAssistant: unknown layer type', cmd.type); break; }
             if (cmd.name) l.name = cmd.name;
             if (cmd.params && l.params) Object.assign(l.params, cmd.params);
             if (typeof l.init === 'function') l.init(l.params || {});
-            if (cmd.blend)   l.blendMode = cmd.blend;
-            if (cmd.opacity !== undefined) l.opacity = cmd.opacity;
+            if (cmd.blend)               l.blendMode = cmd.blend;
+            if (cmd.opacity !== undefined) l.opacity  = cmd.opacity;
+            if (cmd.transform)           Object.assign(l.transform, cmd.transform);
             _layers.add(l);
             newLayers.push(l);
             break;
@@ -209,14 +218,32 @@ You're helping create visuals for Bearfeet, an indie folk band. Their music is o
     }
   }
 
+  const API_KEY_STORAGE = 'vael-claude-api-key';
+
+  function _getApiKey() {
+    return localStorage.getItem(API_KEY_STORAGE) || '';
+  }
+
+  function _setApiKey(key) {
+    localStorage.setItem(API_KEY_STORAGE, key);
+  }
+
   // ── API call ─────────────────────────────────────────────────
 
   async function _callClaude(userMessage) {
+    const apiKey = _getApiKey();
+    if (!apiKey) throw new Error('No API key set — click ⚙ to add your Claude API key');
+
     const systemPrompt = _buildSystemPrompt();
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key':    apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-io': 'true',
+      },
       body: JSON.stringify({
         model:      'claude-sonnet-4-20250514',
         max_tokens: 1000,
@@ -264,17 +291,40 @@ You're helping create visuals for Bearfeet, an indie folk band. Their music is o
                   border-bottom:1px solid var(--border);flex-shrink:0">
         <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:2px;
                      color:var(--accent);flex:1">VAEL ASSISTANT</span>
+        <button id="va-settings" style="background:none;border:none;color:var(--text-dim);
+                cursor:pointer;font-size:14px;padding:2px 6px" title="API key settings">⚙</button>
         <button id="va-clear" style="background:none;border:none;color:var(--text-dim);
                 cursor:pointer;font-family:var(--font-mono);font-size:8px;padding:2px 6px">clear</button>
         <button id="va-close" style="background:none;border:none;color:var(--text-dim);
                 cursor:pointer;font-size:16px">✕</button>
       </div>
+
+      <!-- API key settings panel (hidden by default) -->
+      <div id="va-key-panel" style="display:none;padding:12px 16px;
+           border-bottom:1px solid var(--border);background:rgba(0,0,0,0.3);flex-shrink:0">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-bottom:8px">
+          CLAUDE API KEY
+        </div>
+        <div style="display:flex;gap:8px">
+          <input type="password" id="va-key-input" placeholder="sk-ant-api03-…"
+            style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:4px;
+                   color:var(--text);font-family:var(--font-mono);font-size:10px;padding:6px 8px" />
+          <button id="va-key-save" class="btn accent" style="font-size:9px;flex-shrink:0">Save</button>
+        </div>
+        <p style="font-size:9px;color:var(--text-dim);margin-top:6px;line-height:1.5">
+          Get a key at <a href="https://console.anthropic.com" target="_blank"
+          style="color:var(--accent)">console.anthropic.com</a>.
+          Stored locally in your browser only.
+        </p>
+      </div>
+
       <div id="va-messages" style="flex:1;overflow-y:auto;padding:12px;
                                     scrollbar-width:thin;scrollbar-color:var(--border) var(--bg-mid)">
         <div class="va-msg assistant" style="background:rgba(0,212,170,0.06);border:1px solid rgba(0,212,170,0.15);
              border-radius:8px;padding:10px 12px;font-size:11px;color:var(--text);line-height:1.6;margin-bottom:8px">
           Hi! I'm the Vael assistant. I know how every layer, effect, and parameter works.<br><br>
-          Try: <em style="color:var(--accent)">"make something that looks like a campfire"</em><br>
+          <strong>First:</strong> click ⚙ above to add your Claude API key.<br><br>
+          Then try: <em style="color:var(--accent)">"make something that looks like a campfire"</em><br>
           Or: <em style="color:var(--accent)">"add glow to the math visualizer"</em><br>
           Or: <em style="color:var(--accent)">"make the particles react more to bass"</em>
         </div>
@@ -328,6 +378,30 @@ You're helping create visuals for Bearfeet, an indie folk band. Their music is o
       _messages = [];
       const msgs = _panel.querySelector('#va-messages');
       msgs.innerHTML = '';
+    });
+
+    // Settings toggle
+    _panel.querySelector('#va-settings').addEventListener('click', () => {
+      const kp = _panel.querySelector('#va-key-panel');
+      kp.style.display = kp.style.display === 'none' ? 'block' : 'none';
+      // Pre-fill with existing key (masked)
+      const existing = _getApiKey();
+      if (existing) _panel.querySelector('#va-key-input').placeholder = '••••••••' + existing.slice(-4);
+    });
+
+    _panel.querySelector('#va-key-save').addEventListener('click', () => {
+      const val = _panel.querySelector('#va-key-input').value.trim();
+      if (val) {
+        _setApiKey(val);
+        _panel.querySelector('#va-key-panel').style.display = 'none';
+        _panel.querySelector('#va-key-input').value = '';
+        Toast.success('API key saved');
+      }
+    });
+
+    // Enter to save key
+    _panel.querySelector('#va-key-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') _panel.querySelector('#va-key-save').click();
     });
 
     const input    = _panel.querySelector('#va-input');

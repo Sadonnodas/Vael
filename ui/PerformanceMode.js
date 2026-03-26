@@ -41,32 +41,57 @@ class PerformanceMode {
       bottom: 24px;
       left: 50%;
       transform: translateX(-50%);
-      background: rgba(0,0,0,0.55);
+      background: rgba(0,0,0,0.65);
       border: 1px solid rgba(255,255,255,0.1);
-      border-radius: 8px;
-      padding: 10px 20px;
+      border-radius: 10px;
+      padding: 12px 20px;
       font-family: 'JetBrains Mono', monospace;
-      font-size: 11px;
-      color: rgba(255,255,255,0.7);
-      backdrop-filter: blur(12px);
+      color: rgba(255,255,255,0.8);
+      backdrop-filter: blur(16px);
       z-index: 200;
-      display: none;
-      gap: 20px;
       align-items: center;
+      gap: 16px;
       white-space: nowrap;
       transition: opacity 0.4s;
       pointer-events: none;
     `;
 
     hud.innerHTML = `
-      <span id="phud-scene"   style="color:#00d4aa;font-weight:600">—</span>
-      <span id="phud-sep1"    style="opacity:0.3">·</span>
-      <span id="phud-next"    style="opacity:0.5">next: —</span>
-      <span id="phud-sep2"    style="opacity:0.3">·</span>
-      <span id="phud-bpm"     style="color:#a78bfa">— bpm</span>
-      <span id="phud-sep3"    style="opacity:0.3">·</span>
-      <span id="phud-beat"    style="opacity:0">●</span>
-      <span id="phud-keys"    style="opacity:0.3;font-size:9px">← → scene  ·  F exit  ·  S setlist</span>
+      <div style="display:flex;flex-direction:column;align-items:center;gap:4px">
+        <!-- Scene name large -->
+        <div id="phud-scene" style="color:#00d4aa;font-weight:700;font-size:16px;
+             letter-spacing:1px;text-align:center;max-width:400px;
+             white-space:nowrap;overflow:hidden;text-overflow:ellipsis">—</div>
+        <!-- Progress row -->
+        <div style="display:flex;align-items:center;gap:14px;font-size:10px">
+          <span id="phud-index" style="opacity:0.4">—</span>
+          <span style="opacity:0.2">·</span>
+          <span id="phud-bpm" style="color:#a78bfa">— bpm</span>
+          <span style="opacity:0.2">·</span>
+          <span id="phud-beat" style="opacity:0;font-size:14px">●</span>
+          <span style="opacity:0.2">·</span>
+          <span id="phud-time" style="opacity:0.4">0:00</span>
+        </div>
+      </div>
+
+      <!-- Next scene preview -->
+      <div id="phud-next-block" style="display:flex;align-items:center;gap:8px;
+           border-left:1px solid rgba(255,255,255,0.1);padding-left:14px">
+        <div style="font-size:8px;opacity:0.4;text-transform:uppercase;letter-spacing:1px;
+                    writing-mode:vertical-lr;transform:rotate(180deg)">next</div>
+        <div style="display:flex;flex-direction:column;gap:3px">
+          <img id="phud-next-thumb" src="" style="width:60px;height:34px;border-radius:3px;
+               object-fit:cover;background:rgba(255,255,255,0.05);display:block" />
+          <div id="phud-next-name" style="font-size:9px;opacity:0.5;
+               max-width:60px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">—</div>
+        </div>
+      </div>
+
+      <!-- Hint -->
+      <div style="font-size:8px;opacity:0.2;border-left:1px solid rgba(255,255,255,0.1);
+                  padding-left:14px;line-height:1.8">
+        ← → scene<br>S setlist<br>F exit
+      </div>
     `;
 
     document.body.appendChild(hud);
@@ -76,21 +101,41 @@ class PerformanceMode {
   _updateHUD() {
     const current = this._setlist.current;
     const next    = this._setlist.next_entry;
-    document.getElementById('phud-scene').textContent = current?.name ?? '—';
-    document.getElementById('phud-next').textContent  = `next: ${next?.name ?? '—'}`;
-    document.getElementById('phud-bpm').textContent   =
-      this._beat.bpm > 0 ? `${this._beat.bpm} bpm` : '— bpm';
+    const idx     = this._setlist.currentIndex;
+    const total   = this._setlist.count;
+
+    const sceneEl = document.getElementById('phud-scene');
+    const indexEl = document.getElementById('phud-index');
+    const nextName = document.getElementById('phud-next-name');
+    const nextThumb = document.getElementById('phud-next-thumb');
+    const nextBlock = document.getElementById('phud-next-block');
+
+    if (sceneEl) sceneEl.textContent = current?.name ?? '—';
+    if (indexEl) indexEl.textContent = total > 0 ? `${idx + 1} / ${total}` : '—';
+    if (nextName) nextName.textContent = next?.name ?? '—';
+    if (nextThumb) {
+      if (next?.thumbnail) {
+        nextThumb.src = next.thumbnail;
+        nextThumb.style.display = 'block';
+      } else {
+        nextThumb.src = '';
+        nextThumb.style.background = 'rgba(255,255,255,0.05)';
+      }
+    }
+    if (nextBlock) nextBlock.style.display = total > 1 ? 'flex' : 'none';
+    if (document.getElementById('phud-bpm')) {
+      document.getElementById('phud-bpm').textContent =
+        this._beat.bpm > 0 ? `${this._beat.bpm} bpm` : '— bpm';
+    }
   }
 
-  // Call this every animation frame from App.js
   tick(dt) {
     if (!this._active) return;
 
-    // Beat flash decay
     if (this._beat.isBeat) {
       this._beatFlash = 1;
-      document.getElementById('phud-bpm').textContent =
-        this._beat.bpm > 0 ? `${this._beat.bpm} bpm` : '— bpm';
+      const bpmEl = document.getElementById('phud-bpm');
+      if (bpmEl) bpmEl.textContent = this._beat.bpm > 0 ? `${this._beat.bpm} bpm` : '— bpm';
     }
     this._beatFlash = Math.max(0, this._beatFlash - dt * 5);
 
@@ -98,6 +143,16 @@ class PerformanceMode {
     if (beatEl) {
       beatEl.style.opacity = this._beatFlash.toFixed(2);
       beatEl.style.color   = `hsl(${160 + this._beatFlash * 30}, 80%, 65%)`;
+    }
+
+    // Audio time
+    const timeEl = document.getElementById('phud-time');
+    if (timeEl && this._audio) {
+      const pos = this._audio.currentTime || 0;
+      const dur = this._audio.duration    || 0;
+      timeEl.textContent = dur > 0
+        ? `${VaelMath.formatTime(pos)} / ${VaelMath.formatTime(dur)}`
+        : VaelMath.formatTime(pos);
     }
   }
 
@@ -154,6 +209,23 @@ class PerformanceMode {
           <button id="sl-load-file" style="flex:1;background:rgba(255,255,255,0.05);
             border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:#7878a0;
             font-family:inherit;font-size:9px;padding:5px;cursor:pointer">↑ Load setlist</button>
+        </div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:8px">
+          <span style="font-size:9px;color:#7878a0;min-width:70px">Duration</span>
+          <input id="sl-fade-dur" type="range" min="0" max="4" step="0.1" value="1.5"
+            style="flex:1;accent-color:#00d4aa" />
+          <span id="sl-fade-val" style="font-size:9px;color:#00d4aa;min-width:28px">1.5s</span>
+        </div>
+        <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
+          <span style="font-size:9px;color:#7878a0;min-width:70px">Transition</span>
+          <select id="sl-transition-type" style="flex:1;background:rgba(255,255,255,0.06);
+            border:1px solid rgba(255,255,255,0.1);border-radius:4px;color:#d4d4e0;
+            font-family:inherit;font-size:9px;padding:4px 6px">
+            <option value="crossfade">Crossfade</option>
+            <option value="flash">Flash</option>
+            <option value="blur">Blur</option>
+            <option value="cut">Cut (instant)</option>
+          </select>
         </div>
         <input type="file" id="sl-load-input" accept=".json" style="display:none" />
       </div>
@@ -298,6 +370,13 @@ class PerformanceMode {
       });
     }
 
+    const transitionSel = document.getElementById('sl-transition-type');
+    if (transitionSel) {
+      transitionSel.addEventListener('change', () => {
+        document.dispatchEvent(new CustomEvent('vael:transition-type', { detail: transitionSel.value }));
+      });
+    }
+
     document.getElementById('sl-load-input').addEventListener('change', async e => {
       const file = e.target.files[0];
       if (!file) return;
@@ -365,7 +444,8 @@ class PerformanceMode {
     document.addEventListener('mousemove', () => this._onMouseMove());
 
     document.addEventListener('keydown', e => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+      if (e.target.isContentEditable) return;
 
       switch (e.key) {
         case 'f':

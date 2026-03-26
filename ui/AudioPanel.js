@@ -57,13 +57,32 @@ const AudioPanel = (() => {
     document.getElementById('btn-audio-mic')?.addEventListener('click', async () => {
       try {
         await _audio.startMic();
-        transport.style.display  = 'none';
+        transport.style.display   = 'none';
         micActiveEl.style.display = 'block';
-        levelsEl.style.display   = 'block';
+        levelsEl.style.display    = 'block';
         _statusDot.classList.remove('inactive');
-        _statusLabel.textContent = 'Microphone';
+        _statusLabel.textContent  = 'Microphone';
         Toast.success('Microphone active');
       } catch { Toast.error('Microphone access denied'); }
+    });
+
+    // System audio (Spotify, Cubase, YouTube etc via getDisplayMedia)
+    document.getElementById('btn-audio-system')?.addEventListener('click', async () => {
+      try {
+        Toast.info('Select a tab or window — check "Share tab audio" in the browser prompt');
+        await _audio.startSystemAudio();
+        transport.style.display   = 'none';
+        micActiveEl.style.display = 'block';
+        levelsEl.style.display    = 'block';
+        _statusDot.classList.remove('inactive');
+        _statusLabel.textContent  = 'System audio';
+        document.getElementById('mic-active-label')?.textContent && (
+          document.getElementById('mic-active-label').textContent = '● System audio active'
+        );
+        Toast.success('System audio captured — Vael is now listening to your app');
+      } catch (e) {
+        Toast.error(e.message || 'System audio capture failed');
+      }
     });
 
     // Play/pause

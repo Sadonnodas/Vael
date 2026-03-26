@@ -512,10 +512,14 @@
 
       <!-- PARAMS TAB -->
       <div class="tab-panel" id="tab-params">
-        <div class="empty-state" id="params-empty">
-          Click a layer name<br>to edit its parameters.
+        <div id="params-empty" style="padding:8px 0">
+          <p style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);
+                    margin-bottom:16px;line-height:1.7">
+            Click any layer name to edit its parameters. Use the modulation section to route audio signals to params.
+          </p>
+          <div id="params-palette-container"></div>
         </div>
-        <div id="params-content"></div>
+        <div id="params-content" style="display:none"></div>
       </div>
 
       <!-- AUDIO TAB -->
@@ -527,6 +531,10 @@
             <button class="btn" id="btn-audio-file">Upload file</button>
             <button class="btn" id="btn-audio-mic">Microphone</button>
           </div>
+          <button class="btn" id="btn-audio-system" style="width:100%;margin-bottom:8px;font-size:9px;color:var(--text-muted)"
+            title="Capture audio from Spotify, Cubase, YouTube, or any app">
+            🖥 System audio (Spotify, Cubase…)
+          </button>
           <input type="file" id="input-audio-file" accept="audio/*" style="display:none" />
 
           <div id="audio-transport" style="display:none">
@@ -775,11 +783,38 @@
           </div>
         </div>
 
+        <div class="divider"></div>
+
+        <div class="section">
+          <div class="section-label">Concert prep</div>
+          <p style="font-size:10px;color:var(--text-muted);line-height:1.6;margin-bottom:10px">
+            Build your setlist, add audio to each scene, then use this checklist.
+          </p>
+          <div id="concert-checklist" style="font-family:var(--font-mono);font-size:9px;line-height:2">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="chk-scenes" style="accent-color:var(--accent)">
+              <span>Scenes saved to library</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="chk-setlist" style="accent-color:var(--accent)">
+              <span>Setlist built &amp; saved as .json</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="chk-recorded" style="accent-color:var(--accent)">
+              <span>All songs recorded to .webm</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="chk-vlc" style="accent-color:var(--accent)">
+              <span>Playback tested in VLC</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+              <input type="checkbox" id="chk-backup" style="accent-color:var(--accent)">
+              <span>Files backed up to USB</span>
+            </label>
+          </div>
+        </div>
+
       </div>
-
-
-
-</div><!-- /app -->
 
 <!-- Keyboard shortcut help overlay -->
 <div id="shortcut-overlay" style="
@@ -859,10 +894,13 @@
 <script src="layers/WebcamLayer.js"></script>
 <script src="layers/GroupLayer.js"></script>
 <script src="layers/ImageLayer.js"></script>
+<script src="layers/WaveformLayer.js"></script>
+<script src="layers/PatternLayer.js"></script>
 
 <!-- UI -->
 <script src="ui/Toast.js"></script>
 <script src="ui/PresetBrowser.js"></script>
+<script src="ui/LayerPanel.js"></script>
 <script src="ui/AudioPanel.js"></script>
 <script src="ui/VideoPanel.js"></script>
 <script src="ui/RecordPanel.js"></script>
@@ -876,6 +914,7 @@
 <script src="ui/MidiPanel.js"></script>
 <script src="ui/PostFXPanel.js"></script>
 <script src="ui/SequencerPanel.js"></script>
+<script src="ui/ScenePalette.js"></script>
 <script src="ui/VaelAssistant.js"></script>
 <script src="ui/App.js"></script>
 

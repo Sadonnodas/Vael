@@ -35,6 +35,8 @@
       case 'ShaderLayer':      return new ShaderLayer(uid);
       case 'LyricsLayer':      return new LyricsLayer(uid);
       case 'WebcamLayer':      return new WebcamLayer(uid);
+      case 'WaveformLayer':    { const l = new WaveformLayer(uid); l._audioEngine = audio; return l; }
+      case 'PatternLayer':     return new PatternLayer(uid);
       case 'ImageLayer':       return new ImageLayer(uid);
       case 'GroupLayer':       return new GroupLayer(uid);
       default: console.warn('Unknown layer type:', typeName); return null;
@@ -91,7 +93,7 @@
     // After loading, update the scene name input and re-render layer list
     const nameEl = document.getElementById('preset-name');
     if (nameEl && preset.name) nameEl.value = preset.name;
-    _selectedLayerId = null;
+    _selectedLayerId = null; LayerPanel.setSelectedId(null);
     document.getElementById('params-content').innerHTML = '';
     document.getElementById('params-empty').style.display = 'block';
   });
@@ -102,10 +104,20 @@
   const setlist  = new SetlistManager(layers, layerFactory);
   const perfMode = new PerformanceMode({ setlist, audio, beatDetector: beat, layerStack: layers });
 
-  // Sync fade duration slider from setlist panel → engine
-  document.addEventListener('vael:fade-duration', e => {
-    setlist.fadeDuration = e.detail;
+  // Sync fade duration and transition type from setlist panel → engine
+  document.addEventListener('vael:fade-duration', e => { setlist.fadeDuration = e.detail; });
+  document.addEventListener('vael:transition-type', e => {
+    setlist.transitionType = e.detail;
   });
+
+  // Flash overlay for flash transition
+  const flashOverlay = document.createElement('div');
+  flashOverlay.id = 'vael-transition-overlay';
+  flashOverlay.style.cssText = `
+    position:fixed;inset:0;background:white;opacity:0;pointer-events:none;z-index:99;
+    transition:opacity 0.05s;
+  `;
+  document.body.appendChild(flashOverlay);
 
   // ── MIDI ──────────────────────────────────────────────────────
   const midi = new MidiEngine(layers);
@@ -170,7 +182,14 @@
     { id: 'lyrics',      label: 'Lyrics / Text',        cls: () => new LyricsLayer(`lyrics-${Date.now()}`) },
     { id: 'video',       label: 'Video file',           cls: () => new VideoPlayerLayer(`video-${Date.now()}`, video.videoElement) },
     { id: 'webcam',      label: 'Webcam',               cls: () => new WebcamLayer(`webcam-${Date.now()}`) },
-    { id: 'image',       label: 'Image (PNG/JPG/SVG)',  cls: () => new ImageLayer(`image-${Date.now()}`) },
+    { id: 'waveform',    label: 'Waveform / Spectrum',   cls: () => {
+      const l = new WaveformLayer(`waveform-${Date.now()}`);
+      l._audioEngine = audio;
+      return l;
+    }},
+    { id: 'pattern',     label: 'Pattern (geometric)',   cls: () => new PatternLayer(`pattern-${Date.now()}`) },
+    { id: 'image',       label: 'Image (PNG/JPG/SVG)',   cls: () => new ImageLayer(`image-${Date.now()}`) },
+    { id: 'group',       label: 'Group (empty)',          cls: () => { const g = new GroupLayer(`group-${Date.now()}`); g.name = 'Group'; return g; } },
     { id: 'shader-plasma',   label: 'Shader — Plasma',    cls: () => ShaderLayer.fromBuiltin('plasma') },
     { id: 'shader-ripple',   label: 'Shader — Ripple',    cls: () => ShaderLayer.fromBuiltin('ripple') },
     { id: 'shader-distort',  label: 'Shader — Distort',   cls: () => ShaderLayer.fromBuiltin('distort') },
@@ -215,548 +234,27 @@
   // Restore last autosave if no scene was force-loaded
   setTimeout(() => _restoreAutoSave(), 100);
 
-  // ── Layer panel ──────────────────────────────────────────────
-  const layerList    = document.getElementById('layer-list');
-  const emptyState   = document.getElementById('layers-empty');
-  const paramsEmpty  = document.getElementById('params-empty');
+
+  // ── Layer panel (delegated to LayerPanel module) ──────────────
+  const paramsEmpty   = document.getElementById('params-empty');
   const paramsContent = document.getElementById('params-content');
 
-  layers.onChanged = () => renderLayerList();
-
-  function selectLayer(id) {
-    _selectedLayerId = id;
-
-    // Search both top-level layers and group children
-    let layer = layers.layers.find(l => l.id === id);
-    if (!layer) {
-      // Search inside groups
-      for (const l of layers.layers) {
-        if (l instanceof GroupLayer) {
-          const child = l.children.find(c => c.id === id);
-          if (child) { layer = child; break; }
-        }
-      }
-    }
-    if (!layer) return;
-
-    document.querySelectorAll('.layer-row').forEach(r => {
-      r.style.borderColor = r.dataset.id === id ? 'var(--accent)' : 'var(--border-dim)';
-    });
-
-    paramsEmpty.style.display   = 'none';
-    paramsContent.style.display = 'block';
-
-    if (layer instanceof LyricsLayer) {
-      LyricsPanel.render(layer, paramsContent);
-    } else if (layer instanceof ShaderLayer) {
-      ShaderPanel.render(layer, paramsContent);
-    } else if (layer instanceof ImageLayer) {
-      _renderImageLayerPanel(layer, paramsContent);
-    } else {
-      ParamPanel.render(layer, paramsContent, audio);
-    }
-
-    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    document.querySelector('[data-tab="params"]').classList.add('active');
-    document.getElementById('tab-params').classList.add('active');
-  }
-
-  // ── Multi-select state ───────────────────────────────────────
-  let _multiSelect = new Set();  // selected layer ids for grouping
-
-  function renderLayerList() {
-    layerList.innerHTML = '';
-    const hasLayers = layers.count > 0;
-    emptyState.style.display = hasLayers ? 'none' : 'block';
-
-    // Show group button only when 2+ layers selected
-    const groupBtn = document.getElementById('btn-group-selected');
-    if (groupBtn) {
-      groupBtn.style.display = _multiSelect.size >= 2 ? 'block' : 'none';
-      groupBtn.textContent = `⊞ Group ${_multiSelect.size} selected layers`;
-    }
-
-    // Render in reverse so top layer appears first in UI
-    [...layers.layers].reverse().forEach(layer => {
-      const isMultiSelected = _multiSelect.has(layer.id);
-      const row = document.createElement('div');
-      row.className    = 'layer-row';
-      row.dataset.id   = layer.id;
-      row.draggable    = true;
-      row.style.cssText = `
-        background: var(--bg-card);
-        border: 1px solid ${
-          isMultiSelected ? 'var(--accent2)' :
-          layer.id === _selectedLayerId ? 'var(--accent)' :
-          'var(--border-dim)'};
-        border-radius: 5px;
-        padding: 8px 10px;
-        margin-bottom: 6px;
-        cursor: pointer;
-        transition: border-color 0.15s;
-        ${isMultiSelected ? 'background: color-mix(in srgb, var(--accent2) 8%, var(--bg-card))' : ''}
-      `;
-
-      // Drag-to-reorder
-      row.addEventListener('dragstart', e => {
-        e.dataTransfer.setData('text/plain', layer.id);
-        setTimeout(() => { row.style.opacity = '0.4'; }, 0);
-      });
-      row.addEventListener('dragend', () => { row.style.opacity = '1'; });
-      row.addEventListener('dragover', e => {
-        e.preventDefault();
-        row.style.outline = '2px solid var(--accent)';
-      });
-      row.addEventListener('dragleave', () => { row.style.outline = 'none'; });
-      row.addEventListener('drop', e => {
-        e.preventDefault();
-        row.style.outline = 'none';
-        const fromId = e.dataTransfer.getData('text/plain');
-        if (fromId === layer.id) return;
-        const fromIdx = layers.layers.findIndex(l => l.id === fromId);
-        const toIdx   = layers.layers.findIndex(l => l.id === layer.id);
-        if (fromIdx === -1 || toIdx === -1) return;
-        const [moved] = layers.layers.splice(fromIdx, 1);
-        layers.layers.splice(toIdx, 0, moved);
-        layers._notify();
-      });
-
-      row.innerHTML = `
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-          <input type="checkbox" class="layer-select-cb"
-            ${isMultiSelected ? 'checked' : ''}
-            style="accent-color:var(--accent2);cursor:pointer;flex-shrink:0"
-            title="Select for grouping" />
-          <button class="vis-toggle" data-id="${layer.id}" title="Toggle visibility"
-            style="background:none;border:none;cursor:pointer;font-size:13px;
-                   color:${layer.visible ? 'var(--accent)' : 'var(--text-dim)'}">
-            ${layer.visible ? '◉' : '○'}
-          </button>
-          <span class="layer-name-btn" style="flex:1;font-family:var(--font-mono);
-                font-size:10px;color:var(--text);cursor:pointer">
-            ${layer instanceof GroupLayer ? '⊞ ' : ''}${layer.name}
-          </span>
-          ${layer instanceof GroupLayer ? `
-            <button class="group-collapse" data-id="${layer.id}"
-              style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:10px">
-              ${layer.collapsed ? '▸' : '▾'}
-            </button>
-            <button class="group-ungroup" data-id="${layer.id}"
-              style="background:none;border:1px solid var(--border-dim);border-radius:3px;
-                     cursor:pointer;color:var(--text-dim);font-family:var(--font-mono);
-                     font-size:8px;padding:1px 5px">ungroup</button>
-          ` : `
-            <button class="layer-up"   data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px" title="Move up">↑</button>
-            <button class="layer-down" data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px" title="Move down">↓</button>
-          `}
-          <button class="layer-del"  data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:#ff4444;font-size:11px" title="Remove">✕</button>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);width:30px">opac</span>
-          <input type="range" class="opacity-sl" data-id="${layer.id}"
-            min="0" max="1" step="0.01" value="${layer.opacity}"
-            style="flex:1;accent-color:var(--accent)">
-          <span class="opacity-val" style="font-family:var(--font-mono);font-size:9px;
-                color:var(--accent);width:28px;text-align:right">
-            ${Math.round(layer.opacity * 100)}%
-          </span>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:5px">
-          <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);width:30px">blend</span>
-          <select class="blend-sel" data-id="${layer.id}"
-            style="flex:1;background:var(--bg);border:1px solid var(--border);
-                   color:var(--text);font-family:var(--font-mono);font-size:9px;
-                   padding:3px;border-radius:3px">
-            ${BLEND_MODES.map(m =>
-              `<option value="${m}" ${layer.blendMode === m ? 'selected' : ''}>${m}</option>`
-            ).join('')}
-          </select>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:5px">
-          <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);width:30px">mask</span>
-          <select class="mask-sel" data-id="${layer.id}"
-            style="flex:1;background:var(--bg);border:1px solid ${layer.maskLayerId ? 'var(--accent2)' : 'var(--border)'};
-                   color:${layer.maskLayerId ? 'var(--accent2)' : 'var(--text-dim)'};
-                   font-family:var(--font-mono);font-size:9px;padding:3px;border-radius:3px">
-            <option value="">— none —</option>
-            ${layers.layers
-              .filter(l => l.id !== layer.id)
-              .map(l => `<option value="${l.id}" ${layer.maskLayerId === l.id ? 'selected' : ''}>${l.name}</option>`)
-              .join('')}
-          </select>
-        </div>
-
-        <!-- Transform controls (collapsible) -->
-        <div style="margin-top:6px">
-          <button class="transform-toggle" data-id="${layer.id}"
-            style="background:none;border:none;cursor:pointer;
-                   font-family:var(--font-mono);font-size:8px;color:var(--text-dim);
-                   padding:2px 0;width:100%;text-align:left">
-            ▸ Transform ${(layer.transform?.x || layer.transform?.y || layer.transform?.rotation || (layer.transform?.scaleX !== 1) || (layer.transform?.scaleY !== 1)) ? '●' : ''}
-          </button>
-          <div class="transform-panel" data-id="${layer.id}" style="display:none;padding-top:6px">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:5px">
-              <div>
-                <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:2px">X offset</div>
-                <input type="number" class="tr-x" data-id="${layer.id}" value="${layer.transform?.x || 0}" step="5"
-                  style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:3px;
-                         color:var(--text);font-family:var(--font-mono);font-size:9px;padding:3px 5px" />
-              </div>
-              <div>
-                <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:2px">Y offset</div>
-                <input type="number" class="tr-y" data-id="${layer.id}" value="${layer.transform?.y || 0}" step="5"
-                  style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:3px;
-                         color:var(--text);font-family:var(--font-mono);font-size:9px;padding:3px 5px" />
-              </div>
-            <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:5px;margin-bottom:5px;align-items:end">
-              <div>
-                <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:2px">Scale X</div>
-                <input type="number" class="tr-sx" data-id="${layer.id}" value="${layer.transform?.scaleX ?? 1}" step="0.1" min="0.1" max="10"
-                  style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:3px;
-                         color:var(--text);font-family:var(--font-mono);font-size:9px;padding:3px 5px" />
-              </div>
-              <div style="display:flex;align-items:center;padding-bottom:2px">
-                <button class="tr-link-scale" title="Link X and Y scale"
-                  style="background:none;border:1px solid var(--border-dim);border-radius:3px;
-                         color:var(--text-dim);font-size:10px;padding:3px 4px;cursor:pointer;
-                         line-height:1">🔓</button>
-              </div>
-              <div>
-                <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:2px">Scale Y</div>
-                <input type="number" class="tr-sy" data-id="${layer.id}" value="${layer.transform?.scaleY ?? 1}" step="0.1" min="0.1" max="10"
-                  style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:3px;
-                         color:var(--text);font-family:var(--font-mono);font-size:9px;padding:3px 5px" />
-              </div>
-            </div>
-            </div>
-            <div style="margin-bottom:5px">
-              <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:2px">Rotation (°)</div>
-              <input type="range" class="tr-rot" data-id="${layer.id}" value="${layer.transform?.rotation || 0}" min="-180" max="180" step="1"
-                style="width:100%;accent-color:var(--accent)" />
-            </div>
-            <div style="display:flex;gap:5px">
-              <button class="tr-reset btn" data-id="${layer.id}" style="flex:1;font-size:8px;padding:4px">Reset</button>
-              <button class="tr-dupe btn accent" data-id="${layer.id}" style="flex:1;font-size:8px;padding:4px">⧉ Duplicate</button>
-            </div>
-          </div>
-        </div>
-      `;
-
-      // Multi-select checkbox
-      row.querySelector('.layer-select-cb').addEventListener('change', e => {
-        if (e.target.checked) _multiSelect.add(layer.id);
-        else                  _multiSelect.delete(layer.id);
-        renderLayerList();
-      });
-
-      // Click layer name → open params (also deselects multi-select if clicking a different layer)
-      row.querySelector('.layer-name-btn').addEventListener('click', e => {
-        e.stopPropagation();
-        selectLayer(layer.id);
-      });
-
-      row.querySelector('.vis-toggle').addEventListener('click', e => {
-        e.stopPropagation();
-        layers.setVisible(layer.id, !layer.visible);
-      });
-
-      // Up/down only on non-group layers
-      row.querySelector('.layer-up')?.addEventListener('click', e => {
-        e.stopPropagation();
-        layers.moveUp(layer.id);
-      });
-      row.querySelector('.layer-down')?.addEventListener('click', e => {
-        e.stopPropagation();
-        layers.moveDown(layer.id);
-      });
-
-      // Group-specific controls
-      row.querySelector('.group-collapse')?.addEventListener('click', e => {
-        e.stopPropagation();
-        layer.collapsed = !layer.collapsed;
-        renderLayerList();
-      });
-
-      row.querySelector('.group-ungroup')?.addEventListener('click', e => {
-        e.stopPropagation();
-        if (!(layer instanceof GroupLayer)) return;
-        // Insert children back into the main stack at the group's position
-        const groupIdx = layers.layers.indexOf(layer);
-        const children = [...layer.children];
-        layers.remove(layer.id);
-        children.forEach((child, i) => {
-          layers.layers.splice(groupIdx + i, 0, child);
-        });
-        layers._notify();
-        Toast.success(`Ungrouped — ${children.length} layers restored`);
-      });
-      row.querySelector('.layer-del').addEventListener('click', e => {
-        e.stopPropagation();
-        // Remove immediately — show undo toast instead of confirm dialog
-        if (_selectedLayerId === layer.id) {
-          _selectedLayerId = null;
-          paramsContent.innerHTML = '';
-          paramsEmpty.style.display = 'block';
-        }
-        // Snapshot the layer data before removing for undo
-        const snapshot = typeof layer.toJSON === 'function' ? layer.toJSON() : null;
-        const removedName = layer.name;
-        const removedIndex = layers.layers.indexOf(layer);
-        layers.remove(layer.id);
-
-        // Undo toast — stays for 4 seconds
-        const undoToast = Toast.warn(`Removed "${removedName}" — `, 4000);
-        if (undoToast) {
-          const undoBtn = document.createElement('button');
-          undoBtn.textContent = 'Undo';
-          undoBtn.style.cssText = 'background:none;border:1px solid currentColor;border-radius:3px;padding:1px 6px;cursor:pointer;font-family:inherit;font-size:inherit;color:inherit;margin-left:4px';
-          undoBtn.addEventListener('click', () => {
-            if (snapshot) {
-              const restored = layerFactory(snapshot.type, snapshot.id);
-              if (restored) {
-                restored.name      = snapshot.name;
-                restored.visible   = snapshot.visible ?? true;
-                restored.opacity   = snapshot.opacity ?? 1;
-                restored.blendMode = snapshot.blendMode ?? 'normal';
-                if (snapshot.params && restored.params) Object.assign(restored.params, snapshot.params);
-                if (snapshot.transform && restored.transform) Object.assign(restored.transform, snapshot.transform);
-                if (typeof restored.init === 'function') restored.init(restored.params || {});
-                layers.add(restored);
-                Toast.success(`Restored "${removedName}"`);
-              }
-            }
-            undoToast.click(); // dismiss toast
-          });
-          undoToast.appendChild(undoBtn);
-        }
-      });
-      row.querySelector('.opacity-sl').addEventListener('input', e => {
-        const v = parseFloat(e.target.value);
-        layers.setOpacity(layer.id, v);
-        row.querySelector('.opacity-val').textContent = Math.round(v * 100) + '%';
-      });
-      row.querySelector('.blend-sel').addEventListener('change', e => {
-        layers.setBlendMode(layer.id, e.target.value);
-      });
-      row.querySelector('.mask-sel').addEventListener('change', e => {
-        layer.maskLayerId = e.target.value || null;
-        if (layer.maskLayerId) Toast.info(`Mask set: ${layer.name} → ${layers.layers.find(l=>l.id===layer.maskLayerId)?.name}`);
-        else Toast.info('Mask removed');
-        renderLayerList();
-      });
-
-      // Transform toggle
-      row.querySelector('.transform-toggle').addEventListener('click', () => {
-        const panel = row.querySelector('.transform-panel');
-        const btn   = row.querySelector('.transform-toggle');
-        const open  = panel.style.display === 'none';
-        panel.style.display = open ? 'block' : 'none';
-        btn.textContent = (open ? '▾' : '▸') + ' Transform';
-      });
-
-      // Linked scale lock
-      let _scaleLocked = false;
-      const linkBtn = row.querySelector('.tr-link-scale');
-      if (linkBtn) {
-        linkBtn.addEventListener('click', () => {
-          _scaleLocked = !_scaleLocked;
-          linkBtn.textContent = _scaleLocked ? '🔒' : '🔓';
-          linkBtn.style.color = _scaleLocked ? 'var(--accent)' : 'var(--text-dim)';
-          linkBtn.style.borderColor = _scaleLocked ? 'var(--accent)' : 'var(--border-dim)';
-        });
-      }
-
-      // Transform inputs
-      const setTransform = (changedId) => {
-        const newSx = parseFloat(row.querySelector('.tr-sx').value) || 1;
-        const newSy = parseFloat(row.querySelector('.tr-sy').value) || 1;
-
-        // If scale locked, sync the other axis
-        if (_scaleLocked && changedId === 'sx') {
-          row.querySelector('.tr-sy').value = newSx;
-          layer.transform.scaleY = newSx;
-        } else if (_scaleLocked && changedId === 'sy') {
-          row.querySelector('.tr-sx').value = newSy;
-          layer.transform.scaleX = newSy;
-        }
-
-        layer.transform.x        = parseFloat(row.querySelector('.tr-x').value)  || 0;
-        layer.transform.y        = parseFloat(row.querySelector('.tr-y').value)  || 0;
-        layer.transform.scaleX   = parseFloat(row.querySelector('.tr-sx').value) || 1;
-        layer.transform.scaleY   = parseFloat(row.querySelector('.tr-sy').value) || 1;
-        layer.transform.rotation = parseFloat(row.querySelector('.tr-rot').value) || 0;
-      };
-
-      row.querySelector('.tr-sx')?.addEventListener('input', () => setTransform('sx'));
-      row.querySelector('.tr-sy')?.addEventListener('input', () => setTransform('sy'));
-      row.querySelectorAll('.tr-x,.tr-y,.tr-rot').forEach(el => {
-        el.addEventListener('input', () => setTransform(null));
-        el.addEventListener('change', () => setTransform(null));
-      });
-
-      // Reset transform
-      row.querySelector('.tr-reset').addEventListener('click', () => {
-        layer.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
-        renderLayerList();
-        Toast.info('Transform reset');
-      });
-
-      // Duplicate layer
-      row.querySelector('.tr-dupe').addEventListener('click', () => {
-        const newLayer = layerFactory(layer.constructor.name);
-        if (!newLayer) return;
-        newLayer.name      = layer.name + ' copy';
-        newLayer.opacity   = layer.opacity;
-        newLayer.blendMode = layer.blendMode;
-        newLayer.transform = { ...layer.transform };
-        if (layer.params)  newLayer.params = { ...layer.params };
-        if (typeof newLayer.init === 'function') newLayer.init(newLayer.params || {});
-        layers.add(newLayer);
-        Toast.success(`Duplicated: ${layer.name}`);
-      });
-
-      layerList.appendChild(row);
-
-      // If this is a group and not collapsed, show children indented
-      if (layer instanceof GroupLayer && !layer.collapsed && layer.children.length > 0) {
-        layer.children.slice().reverse().forEach(child => {
-          const childRow = document.createElement('div');
-          childRow.style.cssText = `
-            background: var(--bg);
-            border: 1px solid var(--border-dim);
-            border-left: 2px solid var(--accent2);
-            border-radius: 4px;
-            padding: 5px 8px 5px 20px;
-            margin-bottom: 3px;
-            margin-left: 12px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-          `;
-          childRow.innerHTML = `
-            <button class="child-vis" style="background:none;border:none;cursor:pointer;
-                    font-size:11px;color:${child.visible ? 'var(--accent2)' : 'var(--text-dim)'}">
-              ${child.visible ? '◉' : '○'}
-            </button>
-            <span style="flex:1;font-family:var(--font-mono);font-size:9px;
-                         color:var(--text-muted);cursor:pointer" class="child-name">
-              ${child.name}
-            </span>
-            <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
-              ${Math.round((child.opacity ?? 1) * 100)}%
-            </span>
-            <button class="child-eject" title="Move out of group"
-              style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:9px">
-              ↑
-            </button>
-          `;
-
-          childRow.querySelector('.child-vis').addEventListener('click', e => {
-            e.stopPropagation();
-            child.visible = !child.visible;
-            e.target.style.color   = child.visible ? 'var(--accent2)' : 'var(--text-dim)';
-            e.target.textContent   = child.visible ? '◉' : '○';
-          });
-
-          childRow.querySelector('.child-name').addEventListener('click', () => {
-            selectLayer(child.id);
-            // Temporarily add child to layers so selectLayer can find it
-            if (!layers.layers.find(l => l.id === child.id)) {
-              layers.layers.push(child);
-              selectLayer(child.id);
-              layers.layers.pop();
-            }
-          });
-
-          childRow.querySelector('.child-eject').addEventListener('click', e => {
-            e.stopPropagation();
-            layer.removeChild(child.id);
-            const groupIdx = layers.layers.indexOf(layer);
-            layers.layers.splice(groupIdx + 1, 0, child);
-            layers._notify();
-            Toast.info(`${child.name} moved out of group`);
-          });
-
-          layerList.appendChild(childRow);
-        });
-      }
-    });
-  }
-
-  // Add layer button → simple picker
-  document.getElementById('btn-add-layer').addEventListener('click', () => {
-    showLayerPicker();
+  LayerPanel.init({
+    layers,
+    layerFactory,
+    audio,
+    canvas,
+    blendModes:  ['normal','multiply','screen','overlay','add','softlight','difference','luminosity','subtract','exclusion'],
+    layerTypes:  LAYER_TYPES,
+    renderImageLayerPanel: _renderImageLayerPanel,
+    onSelectLayer: (id) => {
+      _selectedLayerId = id;
+      LayerPanel.setSelectedId(id);
+      // LayerPanel.selectLayer handles params panel rendering and tab switching
+    },
   });
 
-  // Group selected button — injected into DOM by renderLayerList
-  // Wire via delegation since the button is created dynamically
-  document.addEventListener('click', e => {
-    if (e.target.id !== 'btn-group-selected') return;
-    const selectedLayers = [..._multiSelect]
-      .map(id => layers.layers.find(l => l.id === id))
-      .filter(Boolean);
-    if (selectedLayers.length < 2) { Toast.warn('Select 2+ layers to group'); return; }
-
-    const group = new GroupLayer(`group-${Date.now()}`);
-    group.name = 'Group';
-
-    // Insert at the position of the topmost selected layer
-    const indices = selectedLayers.map(l => layers.layers.indexOf(l));
-    const insertAt = Math.min(...indices);
-
-    selectedLayers.forEach(l => {
-      layers.layers.splice(layers.layers.indexOf(l), 1);
-      group.addChild(l);
-    });
-
-    layers.layers.splice(insertAt, 0, group);
-    _multiSelect.clear();
-    layers._notify();
-    Toast.success(`Grouped ${selectedLayers.length} layers`);
-  });
-
-  function showLayerPicker() {
-    document.getElementById('layer-picker')?.remove();
-    const picker = document.createElement('div');
-    picker.id = 'layer-picker';
-    picker.style.cssText = `
-      position:fixed;inset:0;background:rgba(0,0,0,0.7);
-      display:flex;align-items:center;justify-content:center;
-      z-index:1000;backdrop-filter:blur(4px);
-    `;
-    picker.innerHTML = `
-      <div style="background:var(--bg-mid);border:1px solid var(--border);
-                  border-radius:8px;padding:20px;min-width:260px;max-width:320px">
-        <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:2px;
-                    color:var(--accent);margin-bottom:16px">ADD LAYER</div>
-        ${LAYER_TYPES.map(t => `
-          <button class="btn" data-type="${t.id}"
-            style="width:100%;margin-bottom:8px;justify-content:flex-start;font-size:11px">
-            ${t.label}
-          </button>
-        `).join('')}
-        <button id="picker-cancel" class="btn"
-          style="width:100%;margin-top:4px;color:var(--text-dim)">Cancel</button>
-      </div>
-    `;
-    picker.addEventListener('click', e => {
-      const typeId = e.target.closest('[data-type]')?.dataset.type;
-      if (typeId) {
-        const def = LAYER_TYPES.find(t => t.id === typeId);
-        if (def) {
-          const layer = def.cls();
-          if (typeof layer.init === 'function') layer.init({});
-          layers.add(layer);
-          // Auto-select and show params
-          setTimeout(() => selectLayer(layer.id), 50);
-        }
-        picker.remove();
-      }
-      if (e.target.id === 'picker-cancel' || e.target === picker) picker.remove();
-    });
-    document.body.appendChild(picker);
-  }
+  function renderLayerList() { LayerPanel.renderLayerList(); }
 
   // ── Preset save / load ────────────────────────────────────────
   document.getElementById('btn-preset-save').addEventListener('click', () => {
@@ -787,7 +285,7 @@
   document.getElementById('btn-scene-new')?.addEventListener('click', () => {
     _autoSave();
     [...layers.layers].forEach(l => layers.remove(l.id));
-    _selectedLayerId = null;
+    _selectedLayerId = null; LayerPanel.setSelectedId(null);
     _multiSelect.clear();
     document.getElementById('params-content').innerHTML = '';
     document.getElementById('params-empty').style.display = 'block';
@@ -805,7 +303,7 @@
     try {
       const preset = await PresetManager.load(file, layers, layerFactory);
       if (preset.name) document.getElementById('preset-name').value = preset.name;
-      _selectedLayerId = null;
+      _selectedLayerId = null; LayerPanel.setSelectedId(null);
       paramsContent.innerHTML = '';
       paramsEmpty.style.display = 'block';
       Toast.success(`Scene "${preset.name || file.name}" loaded`);
@@ -873,7 +371,9 @@
     dotAudio.classList.toggle('inactive', !audio.smoothed.isActive);
   };
 
-  // ── AI Assistant ──────────────────────────────────────────────
+  // ── Scene Palette — shown in PARAMS tab when no layer selected ─
+  const paletteContainer = document.getElementById('params-palette-container');
+  if (paletteContainer) ScenePalette.renderPanel(layers, paletteContainer);
   VaelAssistant.init(layers, layerFactory, renderer);
   // Save the current scene to localStorage every 5 minutes
   // Also save on page unload so you never lose work
