@@ -116,7 +116,33 @@ class Renderer {
     // Sync quad pool with current layer stack
     this._syncQuads(layers, W, H);
 
-    // Clear scene, re-add visible quads in order
+    // ── Pass 1: render ALL layers to their offscreen canvases ───
+    layers.forEach(layer => {
+      if (!layer.visible) return;
+      const quad = this._quads.get(layer.id);
+      if (!quad) return;
+
+      const { offscreen, offCtx } = quad;
+      offCtx.clearRect(0, 0, W, H);
+      offCtx.save();
+
+      // Apply transform: translate to centre, then apply layer transform, then render
+      const t = layer.transform || {};
+      const cx = W / 2 + (t.x || 0);
+      const cy = H / 2 + (t.y || 0);
+      offCtx.translate(cx, cy);
+      if (t.rotation) offCtx.rotate(t.rotation * Math.PI / 180);
+      if (t.scaleX !== undefined || t.scaleY !== undefined) {
+        offCtx.scale(t.scaleX ?? 1, t.scaleY ?? 1);
+      }
+
+      if (typeof layer.render === 'function') {
+        layer.render(offCtx, W, H);
+      }
+      offCtx.restore();
+    });
+
+    // ── Pass 2: apply masks, upload textures, add to scene ──────
     while (this._scene.children.length) this._scene.remove(this._scene.children[0]);
 
     layers.forEach((layer, i) => {
@@ -124,28 +150,30 @@ class Renderer {
       const quad = this._quads.get(layer.id);
       if (!quad) return;
 
-      // Draw layer to its offscreen canvas
-      const { offscreen, offCtx } = quad;
-      offCtx.clearRect(0, 0, W, H);
-      offCtx.save();
-      offCtx.translate(W / 2, H / 2);
-      if (typeof layer.render === 'function') {
-        layer.render(offCtx, W, H);
+      // Apply mask if set — uses the already-rendered mask layer canvas
+      if (layer.maskLayerId) {
+        const maskQuad = this._quads.get(layer.maskLayerId);
+        if (maskQuad) {
+          const { offCtx } = quad;
+          offCtx.save();
+          offCtx.globalCompositeOperation = 'destination-in';
+          offCtx.drawImage(maskQuad.offscreen, 0, 0);
+          offCtx.restore();
+        }
       }
-      offCtx.restore();
 
-      // Update the GPU texture
+      // Upload to GPU
       quad.texture.needsUpdate = true;
 
-      // Set blend mode and opacity on the material
+      // Set blend mode and opacity
       this._applyBlend(quad.mesh.material, layer.blendMode, layer.opacity ?? 1);
 
-      // Z-order — higher index = rendered on top
+      // Z-order
       quad.mesh.position.z = i * 0.01;
       this._scene.add(quad.mesh);
     });
 
-    // Render to screen (or to post target if post-processing enabled)
+    // Render to screen or post pipeline
     if (this._postEnabled && this._postPasses.length > 0) {
       this._renderWithPost();
     } else {

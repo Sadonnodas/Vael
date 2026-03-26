@@ -73,7 +73,7 @@ class LayerStack {
     this._beatPulse = Math.max(0, this._beatPulse - dt * 5);
     if (audioData?.bpm) this._bpm = audioData.bpm;
 
-    // Push global uniforms to every layer
+    // Push global uniforms to every layer and apply modulation
     this.layers.forEach(layer => {
       if (!layer.visible) return;
 
@@ -83,8 +83,21 @@ class LayerStack {
       layer.uniforms.iMouseX = this._mouseX;
       layer.uniforms.iMouseY = this._mouseY;
 
+      // Apply modulation matrix — routes signals to params
+      if (layer.modMatrix && layer.modMatrix.routes.length > 0) {
+        // Build merged signal object: audio + video + uniforms
+        const signals = Object.assign({}, audioData, {
+          iTime:   iTime,
+          iBeat:   this._beatPulse,
+          iBpm:    this._bpm,
+          iMouseX: this._mouseX,
+          iMouseY: this._mouseY,
+        });
+        layer.modMatrix.apply(layer, signals);
+      }
+
       if (typeof layer.update === 'function') {
-        layer.update(audioData, videoData, dt);
+        layer.update(audioData, audioData, dt);
       }
     });
   }

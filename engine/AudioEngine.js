@@ -26,6 +26,7 @@ class AudioEngine {
     // Playback state
     this.sourceType   = 'none';   // 'none' | 'file' | 'mic'
     this.isPlaying    = false;
+    this.loop         = false;    // loop the current file
     this.fileName     = '';
     this._startTime   = 0;        // AudioContext time when playback started
     this._offset      = 0;        // seconds into the track
@@ -122,15 +123,16 @@ class AudioEngine {
   play() {
     if (!this._buffer || this.isPlaying) return;
 
-    const ctx     = this._getCtx();
+    const ctx      = this._getCtx();
     const analyser = this._buildAnalyser(ctx);
-    const src     = ctx.createBufferSource();
-    src.buffer    = this._buffer;
+    const src      = ctx.createBufferSource();
+    src.buffer     = this._buffer;
+    src.loop       = this.loop;   // ← honour loop flag
     src.connect(analyser);
     src.start(0, this._offset);
-    src.onended   = () => {
-      if (this.isPlaying) {
-        this._offset = 0;
+    src.onended = () => {
+      if (this.isPlaying && !this.loop) {
+        this._offset   = 0;
         this.isPlaying = false;
         this._stopFFT();
         this._notifyStateChange();

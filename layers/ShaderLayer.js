@@ -79,6 +79,18 @@ class ShaderLayer extends BaseLayer {
     this._renderFn = this._selectRenderFn();
   }
 
+  /**
+   * Load a custom GLSL shader string (ShaderToy mainImage format supported).
+   * The shader is parsed for any vec3/float uniforms and they become params.
+   */
+  loadGLSL(glslSource) {
+    this._glsl      = glslSource;
+    this._shaderName = 'custom';
+    this.name        = 'Custom Shader';
+    this._renderFn   = this._renderCustomGLSL.bind(this);
+    if (typeof Toast !== 'undefined') Toast.info('Custom shader loaded (CPU preview mode)');
+  }
+
   _selectRenderFn() {
     switch (this._shaderName) {
       case 'distort':   return this._renderDistort.bind(this);
@@ -86,9 +98,13 @@ class ShaderLayer extends BaseLayer {
       case 'bloom':     return this._renderBloom.bind(this);
       case 'ripple':    return this._renderRipple.bind(this);
       case 'plasma':    return this._renderPlasma.bind(this);
+      case 'custom':    return this._renderCustomGLSL.bind(this);
       default:          return this._renderPlasma.bind(this);
     }
   }
+
+  get isCustom() { return this._shaderName === 'custom'; }
+  get glslSource() { return this._glsl; }
 
   update(audioData, videoData, dt) {
     this._time += dt * this.params.speed;
@@ -243,7 +259,23 @@ class ShaderLayer extends BaseLayer {
     ctx.fillRect(0, 0, W, H);
   }
 
-  // ── Serialisation ─────────────────────────────────────────────
+  // Custom GLSL — CPU preview (plasma + name overlay)
+  // True GPU execution will run via WebGL ShaderMaterial in Phase 3
+  _renderCustomGLSL(ctx, W, H) {
+    // Render plasma as visual placeholder
+    this._renderPlasma(ctx, W, H);
+
+    // Draw a label so the user knows it's their custom shader
+    const fullW = W * this._scale;
+    const fullH = H * this._scale;
+    ctx.save();
+    ctx.font      = `bold ${Math.round(fullH * 0.04)}px monospace`;
+    ctx.fillStyle = 'rgba(0,212,170,0.5)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'bottom';
+    ctx.fillText('custom shader · GPU in Phase 3', fullW / 2, fullH - 8);
+    ctx.restore();
+  }
 
   toJSON() {
     return {

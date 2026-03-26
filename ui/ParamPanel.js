@@ -7,7 +7,7 @@
 
 const ParamPanel = (() => {
 
-  const BANDS = ['bass', 'mid', 'treble', 'volume', 'brightness', 'motion'];
+  const BANDS = ['bass', 'mid', 'treble', 'volume', 'brightness', 'motion', 'hue', 'edgeDensity'];
 
   // ── Public API ───────────────────────────────────────────────
 
@@ -49,6 +49,11 @@ const ParamPanel = (() => {
       const el = buildControl(param, current, layer);
       container.appendChild(el);
     });
+
+    // Modulation matrix — always appended after params
+    if (layer.modMatrix) {
+      ModMatrixPanel.render(layer, container);
+    }
   }
 
   // ── Control builders ─────────────────────────────────────────

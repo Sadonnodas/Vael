@@ -27,12 +27,14 @@ const PresetManager = (() => {
       saved:   new Date().toISOString(),
       layers:  layerStack.layers.map(layer => {
         const base = {
-          type:      layer.constructor.name,
-          id:        layer.id,
-          name:      layer.name,
-          visible:   layer.visible,
-          opacity:   layer.opacity,
-          blendMode: layer.blendMode,
+          type:        layer.constructor.name,
+          id:          layer.id,
+          name:        layer.name,
+          visible:     layer.visible,
+          opacity:     layer.opacity,
+          blendMode:   layer.blendMode,
+          maskLayerId: layer.maskLayerId || null,
+          transform:   { ...layer.transform },
         };
         if (layer.params) base.params = { ...layer.params };
         return base;
@@ -86,10 +88,13 @@ const PresetManager = (() => {
         const layer = layerFactory(def.type, def.id);
         if (!layer) { errors.push(`Unknown layer type: ${def.type}`); return; }
 
-        layer.name      = def.name      ?? layer.name;
-        layer.visible   = def.visible   ?? true;
-        layer.opacity   = def.opacity   ?? 1;
-        layer.blendMode = def.blendMode ?? 'normal';
+        layer.name        = def.name        ?? layer.name;
+        layer.visible     = def.visible      ?? true;
+        layer.opacity     = def.opacity      ?? 1;
+        layer.blendMode   = def.blendMode    ?? 'normal';
+        layer.maskLayerId = def.maskLayerId  || null;
+        if (def.transform)  Object.assign(layer.transform, def.transform);
+        if (def.modMatrix)  layer.modMatrix?.fromJSON(def.modMatrix);
 
         if (def.params && layer.params) {
           Object.assign(layer.params, def.params);

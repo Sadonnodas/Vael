@@ -13,11 +13,18 @@
  */
 class BaseLayer {
   constructor(id, name) {
-    this.id        = id   || `layer-${Date.now()}`;
-    this.name      = name || 'Layer';
-    this.visible   = true;
-    this.opacity   = 1.0;
-    this.blendMode = 'normal';
+    this.id          = id   || `layer-${Date.now()}`;
+    this.name        = name || 'Layer';
+    this.visible     = true;
+    this.opacity     = 1.0;
+    this.blendMode   = 'normal';
+    this.maskLayerId = null;
+
+    // Per-layer transform
+    this.transform = { x: 0, y: 0, scaleX: 1.0, scaleY: 1.0, rotation: 0 };
+
+    // Modulation matrix — routes signal sources to layer params
+    this.modMatrix = new ModMatrix();
 
     // Global uniforms — read-only for layers, written by LayerStack
     this.uniforms = {
@@ -33,16 +40,24 @@ class BaseLayer {
   update(audioData, videoData, dt)      {}
   render(ctx, width, height)            {}
   dispose()                             {}
-  setParam(id, value)                   { if (this.params) this.params[id] = value; }
+  setParam(id, value)                   {
+    if (this.params) {
+      this.params[id] = value;
+      this.modMatrix?.setBase(id, value);
+    }
+  }
 
   toJSON() {
     return {
-      id:        this.id,
-      type:      this.constructor.name,
-      name:      this.name,
-      visible:   this.visible,
-      opacity:   this.opacity,
-      blendMode: this.blendMode,
+      id:          this.id,
+      type:        this.constructor.name,
+      name:        this.name,
+      visible:     this.visible,
+      opacity:     this.opacity,
+      blendMode:   this.blendMode,
+      maskLayerId: this.maskLayerId || null,
+      transform:   { ...this.transform },
+      modMatrix:   this.modMatrix?.toJSON() || [],
     };
   }
 }

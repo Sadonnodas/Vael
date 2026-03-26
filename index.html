@@ -19,7 +19,7 @@
       --text:       #d4d4e0;
       --text-muted: #7878a0;
       --text-dim:   #454560;
-      --sidebar-w:  300px;
+      --sidebar-w:  320px;
       --font-mono:  'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
       --font-ui:    system-ui, -apple-system, sans-serif;
     }
@@ -113,30 +113,45 @@
       margin-top: 2px;
     }
 
-    /* Sidebar tabs */
+    /* Sidebar tabs — two-row grid */
     #sidebar-tabs {
-      display: flex;
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
       background: var(--bg);
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }
 
     .tab-btn {
-      flex: 1;
-      padding: 9px 0;
+      padding: 8px 4px;
       background: none;
       border: none;
       border-bottom: 2px solid transparent;
       color: var(--text-dim);
       font-family: var(--font-mono);
-      font-size: 9px;
-      letter-spacing: 1.5px;
+      font-size: 8.5px;
+      letter-spacing: 1px;
       cursor: pointer;
-      transition: color 0.15s, border-color 0.15s;
+      transition: color 0.15s, border-color 0.15s, background 0.15s;
+      text-align: center;
+      white-space: nowrap;
     }
 
-    .tab-btn:hover  { color: var(--text-muted); }
-    .tab-btn.active { color: var(--text); border-bottom-color: var(--accent); }
+    /* Row separator — tabs 5-8 get a top border */
+    .tab-btn:nth-child(n+5) {
+      border-top: 1px solid var(--border-dim);
+    }
+
+    .tab-btn:hover  {
+      color: var(--text-muted);
+      background: rgba(255,255,255,0.03);
+    }
+
+    .tab-btn.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 6%, transparent);
+    }
 
     /* Sidebar content */
     #sidebar-content {
@@ -452,12 +467,14 @@
     </div>
 
     <div id="sidebar-tabs">
+      <!-- Row 1: visual/content tabs -->
       <button class="tab-btn active" data-tab="layers">LAYERS</button>
       <button class="tab-btn" data-tab="params">PARAMS</button>
+      <button class="tab-btn" data-tab="fx">FX</button>
+      <button class="tab-btn" data-tab="beat">BEAT</button>
+      <!-- Row 2: input/output tabs -->
       <button class="tab-btn" data-tab="audio">AUDIO</button>
       <button class="tab-btn" data-tab="video">VIDEO</button>
-      <button class="tab-btn" data-tab="beat">BEAT</button>
-      <button class="tab-btn" data-tab="fx">FX</button>
       <button class="tab-btn" data-tab="midi">MIDI</button>
       <button class="tab-btn" data-tab="record">REC</button>
     </div>
@@ -510,16 +527,29 @@
 
           <div id="audio-transport" style="display:none">
             <div class="file-name" id="audio-filename"></div>
-            <div class="scrubber" style="margin-bottom:8px;">
+            <div class="scrubber" style="margin-bottom:8px;position:relative">
               <button class="play-btn" id="btn-audio-play">▶</button>
               <span class="scrubber-time" id="audio-pos">0:00</span>
               <div class="scrubber-track" id="audio-scrubber">
                 <div class="scrubber-bg"></div>
+                <!-- Loop region indicator -->
+                <div id="audio-loop-region" style="position:absolute;top:0;height:3px;
+                     background:rgba(0,212,170,0.35);pointer-events:none;left:0%;width:100%"></div>
                 <div class="scrubber-fill" id="audio-fill" style="width:0%"></div>
                 <div class="scrubber-head" id="audio-head" style="left:0%"></div>
                 <input type="range" class="scrubber-input" id="audio-seek" min="0" max="1" step="0.01" value="0" />
               </div>
               <span class="scrubber-time right" id="audio-duration">0:00</span>
+            </div>
+            <div style="display:flex;gap:4px;margin-bottom:6px">
+              <button id="btn-audio-loop" class="btn" style="flex:1;font-size:9px">⟳ Loop: Off</button>
+              <button id="btn-audio-set-in" class="btn" style="flex:1;font-size:9px" title="Set loop in point">[ In</button>
+              <button id="btn-audio-set-out" class="btn" style="flex:1;font-size:9px" title="Set loop out point">Out ]</button>
+              <button id="btn-audio-clear-loop" class="btn" style="flex:1;font-size:9px" title="Clear loop points">✕</button>
+            </div>
+            <div style="display:flex;justify-content:space-between;margin-bottom:6px;font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
+              <span>In: <span id="audio-loop-in">0:00</span></span>
+              <span>Out: <span id="audio-loop-out">—</span></span>
             </div>
             <button class="btn danger" id="btn-audio-stop" style="width:100%">Stop</button>
           </div>
@@ -605,7 +635,16 @@
               </div>
               <span class="scrubber-time right" id="video-duration">0:00</span>
             </div>
-            <button class="btn danger" id="btn-video-stop" style="width:100%">Stop</button>
+            <button class="btn danger" id="btn-video-stop" style="width:100%;margin-bottom:6px">Stop</button>
+            <div style="display:flex;gap:4px;margin-bottom:4px">
+              <button id="btn-video-set-in" class="btn" style="flex:1;font-size:9px">[ In</button>
+              <button id="btn-video-set-out" class="btn" style="flex:1;font-size:9px">Out ]</button>
+              <button id="btn-video-clear-loop" class="btn" style="flex:1;font-size:9px">✕</button>
+            </div>
+            <div style="display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
+              <span>In: <span id="video-loop-in">0:00</span></span>
+              <span>Out: <span id="video-loop-out">—</span></span>
+            </div>
           </div>
 
           <div id="webcam-active" style="display:none">
@@ -659,10 +698,20 @@
       <div class="tab-panel" id="tab-record">
 
         <div class="section">
-          <div class="section-label">Canvas recording</div>
-          <p style="font-size:10px;color:var(--text-muted);line-height:1.6;margin-bottom:12px;">
-            Capture the visualizer as a video file. The recording includes all active layers at full quality.
+          <div class="section-label">Quick record</div>
+          <p style="font-size:10px;color:var(--text-muted);line-height:1.6;margin-bottom:10px">
+            Loads audio, hits record, and stops automatically when the song ends.
           </p>
+          <button class="btn accent" id="btn-rec-quick" style="width:100%;margin-bottom:8px;height:40px;font-size:11px">
+            ⚡ Record this song
+          </button>
+          <div id="rec-quick-status" style="display:none;font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-bottom:8px;text-align:center"></div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="section">
+          <div class="section-label">Manual recording</div>
 
           <div id="rec-idle">
             <button class="btn" id="btn-rec-start" style="width:100%;margin-bottom:6px;">
@@ -699,17 +748,66 @@
             </div>
             <input type="range" id="sl-fps" min="24" max="60" step="6" value="60" />
           </div>
+          <div class="slider-field">
+            <div class="slider-header">
+              <span class="slider-label">Resolution</span>
+              <span class="slider-value" id="val-res">Native</span>
+            </div>
+            <select id="sl-res" style="width:100%;background:var(--bg);border:1px solid var(--border);
+              border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:10px;padding:5px 8px">
+              <option value="native">Native (canvas size)</option>
+              <option value="1920x1080">1920 × 1080 (1080p)</option>
+              <option value="1280x720">1280 × 720 (720p)</option>
+              <option value="854x480">854 × 480 (480p)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="section">
+          <div class="section-label">LFO modulators</div>
+          <div id="lfo-panel-content"></div>
         </div>
 
       </div>
 
-    </div><!-- /sidebar-content -->
-  </div><!-- /sidebar -->
+
 
 </div><!-- /app -->
 
-<!-- Performance mode HUD -->
-<div id="perf-hud" class="hidden">
+<!-- Keyboard shortcut help overlay -->
+<div id="shortcut-overlay" style="
+  display:none;position:fixed;inset:0;
+  background:rgba(0,0,0,0.75);
+  z-index:500;backdrop-filter:blur(8px);
+  align-items:center;justify-content:center">
+  <div style="background:var(--bg-mid);border:1px solid var(--border);border-radius:10px;
+              padding:28px 32px;max-width:460px;width:90%;font-family:var(--font-mono)">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px">
+      <span style="font-size:12px;letter-spacing:2px;color:var(--accent)">KEYBOARD SHORTCUTS</span>
+      <button id="shortcut-close" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px">✕</button>
+    </div>
+    <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 20px;font-size:10px">
+      <span style="color:var(--accent)">Space</span><span style="color:var(--text-muted)">Play / pause audio</span>
+      <span style="color:var(--accent)">F</span><span style="color:var(--text-muted)">Enter / exit performance mode</span>
+      <span style="color:var(--accent)">→ / ←</span><span style="color:var(--text-muted)">Next / previous scene (crossfade)</span>
+      <span style="color:var(--accent)">1 – 9</span><span style="color:var(--text-muted)">Jump to setlist scene by number</span>
+      <span style="color:var(--accent)">S</span><span style="color:var(--text-muted)">Open setlist panel (performance mode)</span>
+      <span style="color:var(--accent)">T</span><span style="color:var(--text-muted)">Tap tempo</span>
+      <span style="color:var(--accent)">PageDown</span><span style="color:var(--text-muted)">Next lyrics line</span>
+      <span style="color:var(--accent)">PageUp</span><span style="color:var(--text-muted)">Previous lyrics line</span>
+      <span style="color:var(--accent)">Escape</span><span style="color:var(--text-muted)">Close panel / exit performance mode</span>
+      <span style="color:var(--accent)">?</span><span style="color:var(--text-muted)">Show / hide this help</span>
+    </div>
+    <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border-dim);
+                font-size:9px;color:var(--text-dim)">
+      Press any key or click outside to close
+    </div>
+  </div>
+</div>
+
+
   <span id="hud-scene">Vael</span>
   &nbsp;·&nbsp;
   <span id="hud-fps">60 fps</span>
@@ -738,6 +836,8 @@
 <script src="engine/OscBridge.js"></script>
 <script src="engine/PostFX.js"></script>
 <script src="engine/Sequencer.js"></script>
+<script src="engine/LFO.js"></script>
+<script src="engine/ModMatrix.js"></script>
 
 <!-- Layer base class -->
 <script src="layers/_BaseLayer.js"></script>
@@ -750,10 +850,18 @@
 <script src="layers/VideoPlayerLayer.js"></script>
 <script src="layers/ShaderLayer.js"></script>
 <script src="layers/LyricsLayer.js"></script>
+<script src="layers/WebcamLayer.js"></script>
 
 <!-- UI -->
+<script src="ui/Toast.js"></script>
+<script src="ui/AudioPanel.js"></script>
+<script src="ui/VideoPanel.js"></script>
+<script src="ui/RecordPanel.js"></script>
 <script src="ui/ParamPanel.js"></script>
+<script src="ui/ModMatrixPanel.js"></script>
 <script src="ui/LyricsPanel.js"></script>
+<script src="ui/ShaderPanel.js"></script>
+<script src="ui/LFOPanel.js"></script>
 <script src="ui/PerformanceMode.js"></script>
 <script src="ui/MidiPanel.js"></script>
 <script src="ui/PostFXPanel.js"></script>
