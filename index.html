@@ -456,6 +456,7 @@
       <button class="tab-btn" data-tab="params">PARAMS</button>
       <button class="tab-btn" data-tab="audio">AUDIO</button>
       <button class="tab-btn" data-tab="video">VIDEO</button>
+      <button class="tab-btn" data-tab="midi">MIDI</button>
       <button class="tab-btn" data-tab="record">REC</button>
     </div>
 
@@ -637,6 +638,11 @@
 
       </div>
 
+      <!-- MIDI TAB -->
+      <div class="tab-panel" id="tab-midi">
+        <div id="midi-panel-content"></div>
+      </div>
+
       <!-- RECORD TAB -->
       <div class="tab-panel" id="tab-record">
 
@@ -714,6 +720,10 @@
 <script src="engine/LayerStack.js"></script>
 <script src="engine/Renderer.js"></script>
 <script src="engine/PresetManager.js"></script>
+<script src="engine/BeatDetector.js"></script>
+<script src="engine/SetlistManager.js"></script>
+<script src="engine/MidiEngine.js"></script>
+<script src="engine/OscBridge.js"></script>
 
 <!-- Layer base class -->
 <script src="layers/_BaseLayer.js"></script>
@@ -724,9 +734,12 @@
 <script src="layers/ParticleLayer.js"></script>
 <script src="layers/NoiseFieldLayer.js"></script>
 <script src="layers/VideoPlayerLayer.js"></script>
+<script src="layers/ShaderLayer.js"></script>
 
 <!-- UI -->
 <script src="ui/ParamPanel.js"></script>
+<script src="ui/PerformanceMode.js"></script>
+<script src="ui/MidiPanel.js"></script>
 <script src="ui/App.js"></script>
 
 <style>

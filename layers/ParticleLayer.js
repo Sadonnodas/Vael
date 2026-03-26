@@ -84,6 +84,10 @@ class ParticleLayer extends BaseLayer {
     this._time += dt;
     const audioVal = audioData?.isActive ? (audioData[this.params.audioTarget] ?? 0) : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, audioVal, 0.1);
+
+    // Beat pulse — sharp brightness spike on each beat
+    if (audioData?.isBeat) this._beatPulse = 1.0;
+    this._beatPulse = Math.max(0, (this._beatPulse ?? 0) - dt * 6);
   }
 
   render(ctx, width, height) {
@@ -139,12 +143,13 @@ class ParticleLayer extends BaseLayer {
       }
 
       // Draw
+      const beat  = this._beatPulse ?? 0;
       const alpha = mode === 'fountain' ? p.life / p.maxLife : 0.7 + audio * 0.3;
-      const size  = this.params.size * p.size * (1 + audio * 0.5);
+      const size  = this.params.size * p.size * (1 + audio * 0.5 + beat * 0.8);
       ctx.beginPath();
       ctx.arc(p.x, p.y, Math.max(0.3, size), 0, Math.PI * 2);
       ctx.fillStyle = this._getColor(p);
-      ctx.globalAlpha = VaelMath.clamp(alpha, 0, 1);
+      ctx.globalAlpha = VaelMath.clamp(alpha + beat * 0.3, 0, 1);
       ctx.fill();
     });
 

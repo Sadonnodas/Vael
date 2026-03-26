@@ -64,6 +64,10 @@ class MathVisualizer extends BaseLayer {
 
     const targetZoom = this.params.zoom + audioVal * 0.3;
     this._zoomSmooth = VaelMath.lerp(this._zoomSmooth, targetZoom, 0.04);
+
+    // Beat pulse — zoom spike on beat
+    if (audioData?.isBeat) this._beatPulse = 1.0;
+    this._beatPulse = Math.max(0, (this._beatPulse ?? 0) - dt * 5);
   }
 
   render(ctx, width, height) {
@@ -73,7 +77,8 @@ class MathVisualizer extends BaseLayer {
     ctx.save();
     // Note: Renderer already translates to (width/2, height/2) before calling render.
     // So (0,0) here IS the centre of the canvas. No additional translate needed.
-    ctx.scale(this._zoomSmooth, this._zoomSmooth);
+    const beatScale = 1 + (this._beatPulse ?? 0) * 0.06;
+    ctx.scale(this._zoomSmooth * beatScale, this._zoomSmooth * beatScale);
 
     switch (mode) {
       case 'path':   this._drawPath(ctx, digits, width, height);   break;

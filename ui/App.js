@@ -14,6 +14,7 @@
   const video    = new VideoEngine();
   const recorder = new Recorder();
   const layers   = new LayerStack();
+  const beat     = new BeatDetector();
 
   renderer.layerStack = layers;
   renderer.audioData  = audio.smoothed;
@@ -31,20 +32,63 @@
       case 'ParticleLayer':    return new ParticleLayer(uid);
       case 'NoiseFieldLayer':  return new NoiseFieldLayer(uid);
       case 'VideoPlayerLayer': return new VideoPlayerLayer(uid, video.videoElement);
+      case 'ShaderLayer':      return new ShaderLayer(uid);
       default: console.warn('Unknown layer type:', typeName); return null;
     }
   }
 
+  // ── Setlist + Performance mode ────────────────────────────────
+  const setlist  = new SetlistManager(layers, layerFactory);
+  const perfMode = new PerformanceMode({ setlist, audio, beatDetector: beat, layerStack: layers });
+
+  // Sync fade duration slider from setlist panel → engine
+  document.addEventListener('vael:fade-duration', e => {
+    setlist.fadeDuration = e.detail;
+  });
+
+  // ── MIDI ──────────────────────────────────────────────────────
+  const midi = new MidiEngine(layers);
+  midi.init().then(() => {
+    MidiPanel.init(midi, layers, document.getElementById('midi-panel-content'));
+  });
+
+  // ── OSC Bridge ───────────────────────────────────────────────
+  // Connects to a local WebSocket bridge (see OscBridge.js for setup).
+  // Silently fails if the bridge isn't running — no effect on normal use.
+  const osc = new OscBridge({ layerStack: layers, setlist, recorder });
+  osc.connect('ws://localhost:8080');
+
+  // MIDI learn — triggered from MidiPanel when learn button clicked
+  window.addEventListener('vael:midi-learn-requested', () => {
+    if (!_selectedLayerId) {
+      alert('Select a layer first (click a layer name in the Layers tab), then go to the MIDI tab and click Learn.');
+      return;
+    }
+    // Default: learn to the first float param of the selected layer
+    const layer = layers.layers.find(l => l.id === _selectedLayerId);
+    if (!layer) return;
+    const manifest = layer.constructor.manifest;
+    const param    = manifest?.params?.find(p => p.type === 'float' || p.type === 'int');
+    if (!param) { alert('No learnable parameters on this layer.'); return; }
+    midi.startLearn(_selectedLayerId, param.id, param.min ?? 0, param.max ?? 1);
+    MidiPanel.refresh();
+  });
+
   // ── Layer picker config ──────────────────────────────────────
   const LAYER_TYPES = [
-    { id: 'gradient',  label: 'Gradient',      cls: () => new GradientLayer(`gradient-${Date.now()}`) },
-    { id: 'math',      label: 'Math Visualizer',cls: () => new MathVisualizer(`math-${Date.now()}`) },
-    { id: 'particles', label: 'Particles',      cls: () => new ParticleLayer(`particles-${Date.now()}`) },
-    { id: 'noise',     label: 'Noise Field',    cls: () => new NoiseFieldLayer(`noise-${Date.now()}`) },
-    { id: 'video',     label: 'Video',          cls: () => {
+    { id: 'gradient',  label: 'Gradient',        cls: () => new GradientLayer(`gradient-${Date.now()}`) },
+    { id: 'math',      label: 'Math Visualizer',  cls: () => new MathVisualizer(`math-${Date.now()}`) },
+    { id: 'particles', label: 'Particles',        cls: () => new ParticleLayer(`particles-${Date.now()}`) },
+    { id: 'noise',     label: 'Noise Field',      cls: () => new NoiseFieldLayer(`noise-${Date.now()}`) },
+    { id: 'video',     label: 'Video',            cls: () => {
       const l = new VideoPlayerLayer(`video-${Date.now()}`, video.videoElement);
       return l;
     }},
+    { id: 'shader-plasma',   label: 'Shader — Plasma',    cls: () => ShaderLayer.fromBuiltin('plasma') },
+    { id: 'shader-ripple',   label: 'Shader — Ripple',    cls: () => ShaderLayer.fromBuiltin('ripple') },
+    { id: 'shader-distort',  label: 'Shader — Distort',   cls: () => ShaderLayer.fromBuiltin('distort') },
+    { id: 'shader-bloom',    label: 'Shader — Bloom',     cls: () => ShaderLayer.fromBuiltin('bloom') },
+    { id: 'shader-chromatic',label: 'Shader — Chromatic', cls: () => ShaderLayer.fromBuiltin('chromatic') },
   ];
 
   const BLEND_MODES = ['normal','multiply','screen','overlay','add','softlight','difference','luminosity'];
@@ -289,6 +333,19 @@
     renderer.audioData = audio.smoothed;
     renderer.videoData = video.smoothed;
 
+    // Beat detection — update every frame
+    beat.update(audio.smoothed, audio._dataArray);
+
+    // Expose isBeat on the shared audio data so layers can read it
+    audio.smoothed.isBeat = beat.isBeat;
+    audio.smoothed.bpm    = beat.bpm;
+
+    // Crossfade tick
+    setlist.tick(dt);
+
+    // Performance mode tick (beat flash, HUD updates)
+    perfMode.tick(dt);
+
     // Audio status
     const audioActive = audio.smoothed.isActive;
     dotAudio.classList.toggle('inactive', !audioActive);
@@ -456,13 +513,22 @@
     dotVideo.classList.remove('inactive');
     labelVideo.textContent = file.name.replace(/\.[^.]+$/, '');
     btnVideoPlay.textContent = '⏸';
+
+    // Update any VideoPlayerLayer instances
+    layers.layers.forEach(layer => {
+      if (layer instanceof VideoPlayerLayer) {
+        layer.setVideoElement(video.videoElement);
+      }
+    });
+
     e.target.value = '';
   });
 
   document.getElementById('btn-video-webcam').addEventListener('click', async () => {
     try {
       await video.startWebcam();
-      const stream = video.videoElement.srcObject;
+      // Show the webcam feed in the sidebar monitor
+      const stream = video.videoElement?.srcObject;
       if (stream) { videoEl.srcObject = stream; videoEl.play(); }
       videoMonitorEl.style.display = 'block';
       videoTransport.style.display = 'none';
@@ -470,6 +536,13 @@
       videoLevels.style.display    = 'block';
       dotVideo.classList.remove('inactive');
       labelVideo.textContent = 'Webcam';
+
+      // Update any VideoPlayerLayer instances with the live element
+      layers.layers.forEach(layer => {
+        if (layer instanceof VideoPlayerLayer) {
+          layer.setVideoElement(video.videoElement);
+        }
+      });
     } catch { alert('Camera access denied.'); }
   });
 
@@ -550,32 +623,17 @@
   });
 
   // ── Keyboard shortcuts ────────────────────────────────────────
+  // F, arrows, Escape, S, 1-9 are handled by PerformanceMode.
+  // Space (play/pause) stays here.
   document.addEventListener('keydown', e => {
     if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
-    switch (e.key) {
-      case ' ':
-        e.preventDefault();
-        if (audio.sourceType === 'file') {
-          if (audio.isPlaying) { audio.pause(); btnAudioPlay.textContent = '▶'; }
-          else                 { audio.play();  btnAudioPlay.textContent = '⏸'; }
-        }
-        break;
-      case 'f': case 'F':
-        document.body.classList.toggle('performance');
-        if (!document.fullscreenElement) document.documentElement.requestFullscreen?.();
-        else document.exitFullscreen?.();
-        break;
+    if (e.key === ' ') {
+      e.preventDefault();
+      if (audio.sourceType === 'file') {
+        if (audio.isPlaying) { audio.pause(); btnAudioPlay.textContent = '▶'; }
+        else                 { audio.play();  btnAudioPlay.textContent = '⏸'; }
+      }
     }
-  });
-
-  // ── Performance HUD ──────────────────────────────────────────
-  const hud = document.getElementById('perf-hud');
-  let hudTimeout;
-  document.addEventListener('mousemove', () => {
-    if (!document.body.classList.contains('performance')) return;
-    hud.classList.remove('hidden');
-    clearTimeout(hudTimeout);
-    hudTimeout = setTimeout(() => hud.classList.add('hidden'), 2500);
   });
 
   console.log(
