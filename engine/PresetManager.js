@@ -95,9 +95,30 @@ const PresetManager = (() => {
         layer.maskLayerId = def.maskLayerId  || null;
         if (def.transform)  Object.assign(layer.transform, def.transform);
         if (def.modMatrix)  layer.modMatrix?.fromJSON(def.modMatrix);
+        if (def.fx)         layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
 
         if (def.params && layer.params) {
           Object.assign(layer.params, def.params);
+        }
+
+        // Restore group children
+        if (layer instanceof GroupLayer && Array.isArray(def.children)) {
+          def.children.forEach(childDef => {
+            try {
+              const child = layerFactory(childDef.type, childDef.id);
+              if (!child) return;
+              child.name        = childDef.name      ?? child.name;
+              child.visible     = childDef.visible   ?? true;
+              child.opacity     = childDef.opacity   ?? 1;
+              child.blendMode   = childDef.blendMode ?? 'normal';
+              if (childDef.transform) Object.assign(child.transform, childDef.transform);
+              if (childDef.modMatrix) child.modMatrix?.fromJSON(childDef.modMatrix);
+              if (childDef.params && child.params) Object.assign(child.params, childDef.params);
+              if (typeof child.init === 'function') child.init(child.params || {});
+              layer.addChild(child);
+            } catch (e) { errors.push(`Error loading group child: ${e.message}`); }
+          });
+          layer.collapsed = def.collapsed ?? false;
         }
 
         if (typeof layer.init === 'function') layer.init(layer.params || {});
@@ -176,6 +197,45 @@ const PresetManager = (() => {
     };
   }
 
-  return { save, load, storeRecent, getRecent, template };
+  // ── Apply a preset object directly (no file) ─────────────────
+
+  function _applyRaw(preset, layerStack, layerFactory) {
+    if (!preset?.layers) return;
+    [...layerStack.layers].forEach(l => layerStack.remove(l.id));
+    preset.layers.forEach(def => {
+      try {
+        const layer = layerFactory(def.type, def.id);
+        if (!layer) return;
+        layer.name        = def.name      ?? layer.name;
+        layer.visible     = def.visible   ?? true;
+        layer.opacity     = def.opacity   ?? 1;
+        layer.blendMode   = def.blendMode ?? 'normal';
+        layer.maskLayerId = def.maskLayerId || null;
+        if (def.transform) Object.assign(layer.transform, def.transform);
+        if (def.modMatrix) layer.modMatrix?.fromJSON(def.modMatrix);
+        if (def.params && layer.params) Object.assign(layer.params, def.params);
+        if (layer instanceof GroupLayer && Array.isArray(def.children)) {
+          def.children.forEach(cd => {
+            const child = layerFactory(cd.type, cd.id);
+            if (!child) return;
+            child.name = cd.name ?? child.name;
+            child.visible = cd.visible ?? true;
+            child.opacity = cd.opacity ?? 1;
+            child.blendMode = cd.blendMode ?? 'normal';
+            if (cd.transform) Object.assign(child.transform, cd.transform);
+            if (cd.modMatrix) child.modMatrix?.fromJSON(cd.modMatrix);
+            if (cd.params && child.params) Object.assign(child.params, cd.params);
+            if (typeof child.init === 'function') child.init(child.params || {});
+            layer.addChild(child);
+          });
+          layer.collapsed = def.collapsed ?? false;
+        }
+        if (typeof layer.init === 'function') layer.init(layer.params || {});
+        layerStack.add(layer);
+      } catch {}
+    });
+  }
+
+  return { save, load, storeRecent, getRecent, template, _applyRaw };
 
 })();

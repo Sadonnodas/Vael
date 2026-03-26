@@ -162,6 +162,11 @@ class Renderer {
         }
       }
 
+      // Apply per-layer FX (blur, glow, chromatic, etc.)
+      if (layer.fx && layer.fx.length > 0) {
+        LayerFX.apply(layer, quad.offscreen, quad.offCtx, W, H, this.audioData);
+      }
+
       // Upload to GPU
       quad.texture.needsUpdate = true;
 

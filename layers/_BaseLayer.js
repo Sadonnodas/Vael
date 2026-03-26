@@ -23,6 +23,9 @@ class BaseLayer {
     // Per-layer transform
     this.transform = { x: 0, y: 0, scaleX: 1.0, scaleY: 1.0, rotation: 0 };
 
+    // Per-layer FX chain
+    this.fx = [];
+
     // Modulation matrix — routes signal sources to layer params
     this.modMatrix = new ModMatrix();
 
@@ -57,6 +60,7 @@ class BaseLayer {
       blendMode:   this.blendMode,
       maskLayerId: this.maskLayerId || null,
       transform:   { ...this.transform },
+      fx:          this.fx ? this.fx.map(f => ({ ...f, params: { ...f.params } })) : [],
       modMatrix:   this.modMatrix?.toJSON() || [],
     };
   }

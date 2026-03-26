@@ -58,7 +58,7 @@ const ShaderPanel = (() => {
 
     const hint = document.createElement('p');
     hint.style.cssText = 'font-size:9px;color:var(--text-dim);line-height:1.6;margin-bottom:8px';
-    hint.textContent   = 'Paste a ShaderToy shader below. Available: iTime, iResolution, iBass, iMid, iTreble, iVolume, iBeat, iBpm. CPU preview — GPU when WebGL renderer is added.';
+    hint.textContent   = 'Paste any ShaderToy mainImage shader — runs on GPU via WebGL. Uniforms: iTime, iResolution, iBass, iMid, iTreble, iVolume, iBeat, iBpm, iMouseX, iMouseY, iSpeed, iIntensity, iScale.';
     container.appendChild(hint);
 
     const textarea = document.createElement('textarea');

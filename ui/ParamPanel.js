@@ -54,6 +54,11 @@ const ParamPanel = (() => {
     if (layer.modMatrix) {
       ModMatrixPanel.render(layer, container);
     }
+
+    // Per-layer FX chain
+    if (typeof LayerFXPanel !== 'undefined') {
+      LayerFXPanel.render(layer, container);
+    }
   }
 
   // ── Control builders ─────────────────────────────────────────

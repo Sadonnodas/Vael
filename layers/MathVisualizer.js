@@ -11,7 +11,7 @@ class MathVisualizer extends BaseLayer {
     version: '1.0',
     params: [
       { id: 'constant',    label: 'Constant',    type: 'enum',  default: 'pi',    options: ['pi','e','phi','sqrt2','ln2','apery','euler-mascheroni','catalan'] },
-      { id: 'mode',        label: 'Mode',        type: 'enum',  default: 'path',  options: ['path','tree','circle','chaos','spiral','walk','polar','lsystem'] },
+      { id: 'mode',        label: 'Mode',        type: 'enum',  default: 'path',  options: ['path','tree','circle','chaos','spiral','walk','polar','lsystem','wave','constellation'] },
       { id: 'colorMode',   label: 'Color mode',  type: 'enum',  default: 'rainbow', options: ['rainbow','digit','mono'] },
       { id: 'digitCount',  label: 'Digits',      type: 'int',   default: 800,  min: 50,  max: 2000 },
       { id: 'angle',       label: 'Angle',       type: 'float', default: 36,   min: 1,   max: 180  },
@@ -81,14 +81,16 @@ class MathVisualizer extends BaseLayer {
     ctx.scale(this._zoomSmooth * beatScale, this._zoomSmooth * beatScale);
 
     switch (mode) {
-      case 'path':   this._drawPath(ctx, digits, width, height);   break;
-      case 'tree':   this._drawTree(ctx, digits, width, height);   break;
-      case 'circle': this._drawCircle(ctx, digits, width, height); break;
-      case 'chaos':  this._drawChaos(ctx, digits, width, height);  break;
-      case 'spiral': this._drawSpiral(ctx, digits, width, height); break;
-      case 'walk':   this._drawWalk(ctx, digits, width, height);   break;
-      case 'polar':  this._drawPolar(ctx, digits, width, height);  break;
-      case 'lsystem':this._drawLSystem(ctx, digits, width, height);break;
+      case 'path':          this._drawPath(ctx, digits, width, height);          break;
+      case 'tree':          this._drawTree(ctx, digits, width, height);          break;
+      case 'circle':        this._drawCircle(ctx, digits, width, height);        break;
+      case 'chaos':         this._drawChaos(ctx, digits, width, height);         break;
+      case 'spiral':        this._drawSpiral(ctx, digits, width, height);        break;
+      case 'walk':          this._drawWalk(ctx, digits, width, height);          break;
+      case 'polar':         this._drawPolar(ctx, digits, width, height);         break;
+      case 'lsystem':       this._drawLSystem(ctx, digits, width, height);       break;
+      case 'wave':          this._drawWave(ctx, digits, width, height);          break;
+      case 'constellation': this._drawConstellation(ctx, digits, width, height); break;
     }
     ctx.restore();
   }
@@ -360,6 +362,97 @@ class MathVisualizer extends BaseLayer {
         dir -= angleStep * 0.5;
       }
     }
+  }
+
+  // ── Wave mode ─────────────────────────────────────────────────
+  // Multiple overlapping sine waves, each shaped by a digit.
+  // Reacts strongly to bass — amplitude swells with the music.
+  _drawWave(ctx, digits, width, height) {
+    const count   = Math.min(digits.length, 200);
+    const layers  = 8;
+    const audio   = this._audioSmooth;
+    const t       = this._time;
+    const lw      = this.params.lineWidth;
+
+    for (let l = 0; l < layers; l++) {
+      const yBase   = (l / (layers - 1) - 0.5) * height * 0.7;
+      const amp     = (60 + audio * 120) * (1 + (digits[l] ?? 3) * 0.08);
+      const freq    = 0.008 + (digits[(l * 3) % count] ?? 1) * 0.001;
+      const phase   = t * (0.3 + l * 0.05) + l * Math.PI / layers;
+
+      ctx.beginPath();
+      ctx.lineWidth   = lw * (0.5 + (layers - l) / layers);
+      ctx.strokeStyle = this._getColor(digits[l] ?? l, l, layers);
+      ctx.globalAlpha = 0.6 + audio * 0.3;
+
+      for (let px = -width / 2; px <= width / 2; px += 3) {
+        const dy = Math.sin(px * freq + phase) * amp;
+        const y  = yBase + dy;
+        if (px === -width / 2) ctx.moveTo(px, y);
+        else                   ctx.lineTo(px, y);
+      }
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Constellation mode ────────────────────────────────────────
+  // Dots placed by digit pairs as coordinates, connected when close.
+  // Looks like a star map — meditative and beautiful for folk.
+  _drawConstellation(ctx, digits, width, height) {
+    const count = Math.min(digits.length, this.params.digitCount);
+    const audio = this._audioSmooth;
+    const t     = this._time;
+    const W     = width * 0.45, H = height * 0.45;
+    const lw    = this.params.lineWidth;
+
+    // Build points from digit pairs
+    const pts = [];
+    for (let i = 0; i + 1 < count; i += 2) {
+      const d1 = parseInt(digits[i])   / 9;
+      const d2 = parseInt(digits[i+1]) / 9;
+      pts.push({
+        x:  (d1 - 0.5) * W * 2,
+        y:  (d2 - 0.5) * H * 2,
+        hue: (i / count) * 360 + this.params.hueShift,
+        r:  1.5 + parseInt(digits[i]) * 0.4,
+      });
+    }
+
+    // Connection threshold — expands with audio
+    const threshold = 60 + audio * 80 + (this._beatPulse ?? 0) * 40;
+
+    // Draw connections
+    ctx.globalAlpha = 0.25 + audio * 0.2;
+    ctx.lineWidth   = lw * 0.5;
+    for (let i = 0; i < pts.length; i++) {
+      for (let j = i + 1; j < Math.min(i + 12, pts.length); j++) {
+        const dx   = pts[j].x - pts[i].x;
+        const dy   = pts[j].y - pts[i].y;
+        const dist = Math.sqrt(dx*dx + dy*dy);
+        if (dist < threshold) {
+          ctx.beginPath();
+          ctx.strokeStyle = this._getColor(digits[i], i, count);
+          ctx.globalAlpha = (1 - dist / threshold) * (0.3 + audio * 0.3);
+          ctx.moveTo(pts[i].x, pts[i].y);
+          ctx.lineTo(pts[j].x, pts[j].y);
+          ctx.stroke();
+        }
+      }
+    }
+
+    // Draw dots
+    pts.forEach((p, i) => {
+      const pulse = (Math.sin(t * 0.8 + i * 0.3) + 1) * 0.5;
+      const r     = p.r * (1 + audio * 0.5 + pulse * 0.3);
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(0.5, r), 0, Math.PI * 2);
+      ctx.fillStyle   = this._getColor(digits[i], i, count);
+      ctx.globalAlpha = 0.7 + pulse * 0.3;
+      ctx.fill();
+    });
+
+    ctx.globalAlpha = 1;
   }
 
   toJSON() {

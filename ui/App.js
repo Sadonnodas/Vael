@@ -35,11 +35,70 @@
       case 'ShaderLayer':      return new ShaderLayer(uid);
       case 'LyricsLayer':      return new LyricsLayer(uid);
       case 'WebcamLayer':      return new WebcamLayer(uid);
+      case 'ImageLayer':       return new ImageLayer(uid);
+      case 'GroupLayer':       return new GroupLayer(uid);
       default: console.warn('Unknown layer type:', typeName); return null;
     }
   }
 
-  // ── Setlist + Performance mode ────────────────────────────────
+  function _renderImageLayerPanel(layer, container) {
+    container.innerHTML = '';
+
+    // Header
+    const header = document.createElement('div');
+    header.style.cssText = 'font-family:var(--font-mono);font-size:10px;letter-spacing:1.5px;color:var(--accent);margin-bottom:14px;text-transform:uppercase';
+    header.textContent = 'Image Layer';
+    container.appendChild(header);
+
+    // Load button + status
+    const statusEl = document.createElement('div');
+    statusEl.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-bottom:10px';
+    statusEl.textContent = layer._loaded ? `Loaded: ${layer._fileName}` : 'No image loaded';
+    container.appendChild(statusEl);
+
+    const loadBtn = document.createElement('button');
+    loadBtn.className   = 'btn accent';
+    loadBtn.style.width = '100%';
+    loadBtn.style.marginBottom = '14px';
+    loadBtn.textContent = '↑ Load image file…';
+    container.appendChild(loadBtn);
+
+    const fileInput = document.createElement('input');
+    fileInput.type   = 'file';
+    fileInput.accept = 'image/*';
+    fileInput.style.display = 'none';
+    container.appendChild(fileInput);
+
+    loadBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      await layer.loadFile(file);
+      statusEl.textContent = `Loaded: ${layer._fileName}`;
+      e.target.value = '';
+    });
+
+    // Tip
+    const tip = document.createElement('p');
+    tip.style.cssText = 'font-size:9px;color:var(--text-dim);line-height:1.6;margin-bottom:14px';
+    tip.innerHTML = 'Use a PNG with transparency. Set this layer as the <strong style="color:var(--accent2)">mask</strong> on another layer (e.g. Particles) so those layers only appear inside the image shape.';
+    container.appendChild(tip);
+
+    // Standard params
+    ParamPanel.render(layer, container, audio);
+  }
+  PresetBrowser.init(layers, layerFactory, (preset) => {
+    // After loading, update the scene name input and re-render layer list
+    const nameEl = document.getElementById('preset-name');
+    if (nameEl && preset.name) nameEl.value = preset.name;
+    _selectedLayerId = null;
+    document.getElementById('params-content').innerHTML = '';
+    document.getElementById('params-empty').style.display = 'block';
+  });
+
+  document.getElementById('btn-preset-library')?.addEventListener('click', () => {
+    PresetBrowser.toggle();
+  });
   const setlist  = new SetlistManager(layers, layerFactory);
   const perfMode = new PerformanceMode({ setlist, audio, beatDetector: beat, layerStack: layers });
 
@@ -111,6 +170,7 @@
     { id: 'lyrics',      label: 'Lyrics / Text',        cls: () => new LyricsLayer(`lyrics-${Date.now()}`) },
     { id: 'video',       label: 'Video file',           cls: () => new VideoPlayerLayer(`video-${Date.now()}`, video.videoElement) },
     { id: 'webcam',      label: 'Webcam',               cls: () => new WebcamLayer(`webcam-${Date.now()}`) },
+    { id: 'image',       label: 'Image (PNG/JPG/SVG)',  cls: () => new ImageLayer(`image-${Date.now()}`) },
     { id: 'shader-plasma',   label: 'Shader — Plasma',    cls: () => ShaderLayer.fromBuiltin('plasma') },
     { id: 'shader-ripple',   label: 'Shader — Ripple',    cls: () => ShaderLayer.fromBuiltin('ripple') },
     { id: 'shader-distort',  label: 'Shader — Distort',   cls: () => ShaderLayer.fromBuiltin('distort') },
@@ -152,6 +212,9 @@
 
   renderer.start();
 
+  // Restore last autosave if no scene was force-loaded
+  setTimeout(() => _restoreAutoSave(), 100);
+
   // ── Layer panel ──────────────────────────────────────────────
   const layerList    = document.getElementById('layer-list');
   const emptyState   = document.getElementById('layers-empty');
@@ -162,7 +225,18 @@
 
   function selectLayer(id) {
     _selectedLayerId = id;
-    const layer = layers.layers.find(l => l.id === id);
+
+    // Search both top-level layers and group children
+    let layer = layers.layers.find(l => l.id === id);
+    if (!layer) {
+      // Search inside groups
+      for (const l of layers.layers) {
+        if (l instanceof GroupLayer) {
+          const child = l.children.find(c => c.id === id);
+          if (child) { layer = child; break; }
+        }
+      }
+    }
     if (!layer) return;
 
     document.querySelectorAll('.layer-row').forEach(r => {
@@ -176,6 +250,8 @@
       LyricsPanel.render(layer, paramsContent);
     } else if (layer instanceof ShaderLayer) {
       ShaderPanel.render(layer, paramsContent);
+    } else if (layer instanceof ImageLayer) {
+      _renderImageLayerPanel(layer, paramsContent);
     } else {
       ParamPanel.render(layer, paramsContent, audio);
     }
@@ -186,25 +262,40 @@
     document.getElementById('tab-params').classList.add('active');
   }
 
+  // ── Multi-select state ───────────────────────────────────────
+  let _multiSelect = new Set();  // selected layer ids for grouping
+
   function renderLayerList() {
     layerList.innerHTML = '';
     const hasLayers = layers.count > 0;
     emptyState.style.display = hasLayers ? 'none' : 'block';
 
+    // Show group button only when 2+ layers selected
+    const groupBtn = document.getElementById('btn-group-selected');
+    if (groupBtn) {
+      groupBtn.style.display = _multiSelect.size >= 2 ? 'block' : 'none';
+      groupBtn.textContent = `⊞ Group ${_multiSelect.size} selected layers`;
+    }
+
     // Render in reverse so top layer appears first in UI
     [...layers.layers].reverse().forEach(layer => {
+      const isMultiSelected = _multiSelect.has(layer.id);
       const row = document.createElement('div');
       row.className    = 'layer-row';
       row.dataset.id   = layer.id;
       row.draggable    = true;
       row.style.cssText = `
         background: var(--bg-card);
-        border: 1px solid ${layer.id === _selectedLayerId ? 'var(--accent)' : 'var(--border-dim)'};
+        border: 1px solid ${
+          isMultiSelected ? 'var(--accent2)' :
+          layer.id === _selectedLayerId ? 'var(--accent)' :
+          'var(--border-dim)'};
         border-radius: 5px;
         padding: 8px 10px;
         margin-bottom: 6px;
         cursor: pointer;
         transition: border-color 0.15s;
+        ${isMultiSelected ? 'background: color-mix(in srgb, var(--accent2) 8%, var(--bg-card))' : ''}
       `;
 
       // Drag-to-reorder
@@ -233,6 +324,10 @@
 
       row.innerHTML = `
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <input type="checkbox" class="layer-select-cb"
+            ${isMultiSelected ? 'checked' : ''}
+            style="accent-color:var(--accent2);cursor:pointer;flex-shrink:0"
+            title="Select for grouping" />
           <button class="vis-toggle" data-id="${layer.id}" title="Toggle visibility"
             style="background:none;border:none;cursor:pointer;font-size:13px;
                    color:${layer.visible ? 'var(--accent)' : 'var(--text-dim)'}">
@@ -240,10 +335,21 @@
           </button>
           <span class="layer-name-btn" style="flex:1;font-family:var(--font-mono);
                 font-size:10px;color:var(--text);cursor:pointer">
-            ${layer.name}
+            ${layer instanceof GroupLayer ? '⊞ ' : ''}${layer.name}
           </span>
-          <button class="layer-up"   data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px" title="Move up">↑</button>
-          <button class="layer-down" data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px" title="Move down">↓</button>
+          ${layer instanceof GroupLayer ? `
+            <button class="group-collapse" data-id="${layer.id}"
+              style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:10px">
+              ${layer.collapsed ? '▸' : '▾'}
+            </button>
+            <button class="group-ungroup" data-id="${layer.id}"
+              style="background:none;border:1px solid var(--border-dim);border-radius:3px;
+                     cursor:pointer;color:var(--text-dim);font-family:var(--font-mono);
+                     font-size:8px;padding:1px 5px">ungroup</button>
+          ` : `
+            <button class="layer-up"   data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px" title="Move up">↑</button>
+            <button class="layer-down" data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px" title="Move down">↓</button>
+          `}
           <button class="layer-del"  data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:#ff4444;font-size:11px" title="Remove">✕</button>
         </div>
         <div style="display:flex;align-items:center;gap:8px">
@@ -337,7 +443,14 @@
         </div>
       `;
 
-      // Click layer name → open params
+      // Multi-select checkbox
+      row.querySelector('.layer-select-cb').addEventListener('change', e => {
+        if (e.target.checked) _multiSelect.add(layer.id);
+        else                  _multiSelect.delete(layer.id);
+        renderLayerList();
+      });
+
+      // Click layer name → open params (also deselects multi-select if clicking a different layer)
       row.querySelector('.layer-name-btn').addEventListener('click', e => {
         e.stopPropagation();
         selectLayer(layer.id);
@@ -347,13 +460,36 @@
         e.stopPropagation();
         layers.setVisible(layer.id, !layer.visible);
       });
-      row.querySelector('.layer-up').addEventListener('click', e => {
+
+      // Up/down only on non-group layers
+      row.querySelector('.layer-up')?.addEventListener('click', e => {
         e.stopPropagation();
         layers.moveUp(layer.id);
       });
-      row.querySelector('.layer-down').addEventListener('click', e => {
+      row.querySelector('.layer-down')?.addEventListener('click', e => {
         e.stopPropagation();
         layers.moveDown(layer.id);
+      });
+
+      // Group-specific controls
+      row.querySelector('.group-collapse')?.addEventListener('click', e => {
+        e.stopPropagation();
+        layer.collapsed = !layer.collapsed;
+        renderLayerList();
+      });
+
+      row.querySelector('.group-ungroup')?.addEventListener('click', e => {
+        e.stopPropagation();
+        if (!(layer instanceof GroupLayer)) return;
+        // Insert children back into the main stack at the group's position
+        const groupIdx = layers.layers.indexOf(layer);
+        const children = [...layer.children];
+        layers.remove(layer.id);
+        children.forEach((child, i) => {
+          layers.layers.splice(groupIdx + i, 0, child);
+        });
+        layers._notify();
+        Toast.success(`Ungrouped — ${children.length} layers restored`);
       });
       row.querySelector('.layer-del').addEventListener('click', e => {
         e.stopPropagation();
@@ -481,12 +617,103 @@
       });
 
       layerList.appendChild(row);
+
+      // If this is a group and not collapsed, show children indented
+      if (layer instanceof GroupLayer && !layer.collapsed && layer.children.length > 0) {
+        layer.children.slice().reverse().forEach(child => {
+          const childRow = document.createElement('div');
+          childRow.style.cssText = `
+            background: var(--bg);
+            border: 1px solid var(--border-dim);
+            border-left: 2px solid var(--accent2);
+            border-radius: 4px;
+            padding: 5px 8px 5px 20px;
+            margin-bottom: 3px;
+            margin-left: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+          `;
+          childRow.innerHTML = `
+            <button class="child-vis" style="background:none;border:none;cursor:pointer;
+                    font-size:11px;color:${child.visible ? 'var(--accent2)' : 'var(--text-dim)'}">
+              ${child.visible ? '◉' : '○'}
+            </button>
+            <span style="flex:1;font-family:var(--font-mono);font-size:9px;
+                         color:var(--text-muted);cursor:pointer" class="child-name">
+              ${child.name}
+            </span>
+            <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
+              ${Math.round((child.opacity ?? 1) * 100)}%
+            </span>
+            <button class="child-eject" title="Move out of group"
+              style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:9px">
+              ↑
+            </button>
+          `;
+
+          childRow.querySelector('.child-vis').addEventListener('click', e => {
+            e.stopPropagation();
+            child.visible = !child.visible;
+            e.target.style.color   = child.visible ? 'var(--accent2)' : 'var(--text-dim)';
+            e.target.textContent   = child.visible ? '◉' : '○';
+          });
+
+          childRow.querySelector('.child-name').addEventListener('click', () => {
+            selectLayer(child.id);
+            // Temporarily add child to layers so selectLayer can find it
+            if (!layers.layers.find(l => l.id === child.id)) {
+              layers.layers.push(child);
+              selectLayer(child.id);
+              layers.layers.pop();
+            }
+          });
+
+          childRow.querySelector('.child-eject').addEventListener('click', e => {
+            e.stopPropagation();
+            layer.removeChild(child.id);
+            const groupIdx = layers.layers.indexOf(layer);
+            layers.layers.splice(groupIdx + 1, 0, child);
+            layers._notify();
+            Toast.info(`${child.name} moved out of group`);
+          });
+
+          layerList.appendChild(childRow);
+        });
+      }
     });
   }
 
   // Add layer button → simple picker
   document.getElementById('btn-add-layer').addEventListener('click', () => {
     showLayerPicker();
+  });
+
+  // Group selected button — injected into DOM by renderLayerList
+  // Wire via delegation since the button is created dynamically
+  document.addEventListener('click', e => {
+    if (e.target.id !== 'btn-group-selected') return;
+    const selectedLayers = [..._multiSelect]
+      .map(id => layers.layers.find(l => l.id === id))
+      .filter(Boolean);
+    if (selectedLayers.length < 2) { Toast.warn('Select 2+ layers to group'); return; }
+
+    const group = new GroupLayer(`group-${Date.now()}`);
+    group.name = 'Group';
+
+    // Insert at the position of the topmost selected layer
+    const indices = selectedLayers.map(l => layers.layers.indexOf(l));
+    const insertAt = Math.min(...indices);
+
+    selectedLayers.forEach(l => {
+      layers.layers.splice(layers.layers.indexOf(l), 1);
+      group.addChild(l);
+    });
+
+    layers.layers.splice(insertAt, 0, group);
+    _multiSelect.clear();
+    layers._notify();
+    Toast.success(`Grouped ${selectedLayers.length} layers`);
   });
 
   function showLayerPicker() {
@@ -534,9 +761,38 @@
   // ── Preset save / load ────────────────────────────────────────
   document.getElementById('btn-preset-save').addEventListener('click', () => {
     const name = document.getElementById('preset-name').value.trim() || 'scene';
+
+    // Capture thumbnail
+    let thumb = null;
+    try {
+      const t = document.createElement('canvas');
+      t.width = 120; t.height = 68;
+      t.getContext('2d').drawImage(canvas, 0, 0, 120, 68);
+      thumb = t.toDataURL('image/jpeg', 0.6);
+    } catch {}
+
+    // Save to in-app library
+    PresetBrowser.save(layers, name, thumb);
+
+    // Also download .json file
     const preset = PresetManager.save(layers, name);
     PresetManager.storeRecent(preset);
-    Toast.success(`Scene "${name}" saved`);
+    Toast.success(`Scene "${name}" saved to library`);
+  });
+
+  document.getElementById('btn-preset-library')?.addEventListener('click', () => {
+    PresetBrowser.toggle();
+  });
+
+  document.getElementById('btn-scene-new')?.addEventListener('click', () => {
+    _autoSave();
+    [...layers.layers].forEach(l => layers.remove(l.id));
+    _selectedLayerId = null;
+    _multiSelect.clear();
+    document.getElementById('params-content').innerHTML = '';
+    document.getElementById('params-empty').style.display = 'block';
+    document.getElementById('preset-name').value = 'my-scene';
+    Toast.info('New scene — previous work auto-saved');
   });
 
   document.getElementById('btn-preset-load').addEventListener('click', () => {
@@ -617,7 +873,64 @@
     dotAudio.classList.toggle('inactive', !audio.smoothed.isActive);
   };
 
-  // ── Panel modules ─────────────────────────────────────────────
+  // ── AI Assistant ──────────────────────────────────────────────
+  VaelAssistant.init(layers, layerFactory, renderer);
+  // Save the current scene to localStorage every 5 minutes
+  // Also save on page unload so you never lose work
+  const AUTOSAVE_KEY = 'vael-autosave';
+
+  function _autoSave() {
+    try {
+      const preset = {
+        vael:   '1.0',
+        name:   document.getElementById('preset-name')?.value || 'autosave',
+        saved:  new Date().toISOString(),
+        layers: layers.layers.map(layer => {
+          const base = {
+            type:        layer.constructor.name,
+            id:          layer.id,
+            name:        layer.name,
+            visible:     layer.visible,
+            opacity:     layer.opacity,
+            blendMode:   layer.blendMode,
+            maskLayerId: layer.maskLayerId || null,
+            transform:   { ...layer.transform },
+            modMatrix:   layer.modMatrix?.toJSON() || [],
+          };
+          if (layer.params) base.params = { ...layer.params };
+          if (layer instanceof GroupLayer) {
+            base.collapsed = layer.collapsed;
+            base.children  = layer.children.map(c => {
+              const cb = { type: c.constructor.name, id: c.id, name: c.name,
+                           visible: c.visible, opacity: c.opacity, blendMode: c.blendMode,
+                           transform: { ...c.transform }, modMatrix: c.modMatrix?.toJSON() || [] };
+              if (c.params) cb.params = { ...c.params };
+              return cb;
+            });
+          }
+          return base;
+        }),
+      };
+      localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(preset));
+    } catch (e) { console.warn('Auto-save failed:', e); }
+  }
+
+  // Restore autosave if no scene loaded yet
+  function _restoreAutoSave() {
+    try {
+      const saved = localStorage.getItem(AUTOSAVE_KEY);
+      if (!saved) return;
+      const preset = JSON.parse(saved);
+      if (!preset.layers?.length) return;
+      // Only restore if no layers currently (fresh open)
+      if (layers.count > 0) return;
+      PresetManager._applyRaw(preset, layers, layerFactory);
+      Toast.info(`Restored autosave: "${preset.name}"`);
+    } catch {}
+  }
+
+  setInterval(_autoSave, 5 * 60 * 1000);   // every 5 minutes
+  window.addEventListener('beforeunload', _autoSave);  // on page close
   AudioPanel.init(audio, dotAudio, labelAudio);
   VideoPanel.init(video, audio, layers, dotVideo, labelVideo);
   RecordPanel.init(recorder, audio, canvas, renderer);

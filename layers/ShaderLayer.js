@@ -1,110 +1,179 @@
 /**
  * layers/ShaderLayer.js
- * Runs a GLSL fragment shader as a full-screen layer.
- * Compatible with ShaderToy shaders (uses mainImage convention).
- * Provides standard uniforms: iTime, iResolution, iBass, iMid,
- * iTreble, iVolume, iBeat, iBpm.
+ * Runs GLSL fragment shaders on the GPU via Three.js WebGLRenderer.
+ * ShaderToy mainImage convention supported.
  *
- * Usage — load from file:
- *   const layer = new ShaderLayer('shader-1');
- *   layer.init({ glsl: shaderSourceString, name: 'Liquid' });
- *   layers.add(layer);
+ * Uniforms available in every shader:
+ *   uniform float iTime;         // seconds since start
+ *   uniform vec2  iResolution;   // canvas size in pixels
+ *   uniform float iBass;         // 0–1
+ *   uniform float iMid;
+ *   uniform float iTreble;
+ *   uniform float iVolume;
+ *   uniform float iBeat;         // 1 on beat frame, 0 otherwise
+ *   uniform float iBpm;
+ *   uniform float iMouseX;       // 0–1
+ *   uniform float iMouseY;       // 0–1
+ *   uniform float iSpeed;        // user param
+ *   uniform float iIntensity;    // user param
+ *   uniform float iScale;        // user param
  *
- * Usage — load from built-in:
- *   const layer = ShaderLayer.fromBuiltin('bloom');
+ * Write shaders in ShaderToy mainImage style:
+ *   void mainImage(out vec4 fragColor, in vec2 fragCoord) { ... }
+ *
+ * Or standard GLSL main():
+ *   void main() { gl_FragColor = ...; }
  */
 
 class ShaderLayer extends BaseLayer {
 
   static manifest = {
     name: 'Shader',
-    version: '1.0',
+    version: '2.0',
     params: [
-      { id: 'speed',     label: 'Speed',     type: 'float', default: 1.0, min: 0, max: 4   },
-      { id: 'intensity', label: 'Intensity', type: 'float', default: 1.0, min: 0, max: 2   },
-      { id: 'scale',     label: 'Scale',     type: 'float', default: 1.0, min: 0.1, max: 5 },
-      { id: 'audioTarget', label: 'Audio band', type: 'band', default: 'bass' },
+      { id: 'speed',       label: 'Speed',       type: 'float', default: 1.0, min: 0, max: 4   },
+      { id: 'intensity',   label: 'Intensity',   type: 'float', default: 1.0, min: 0, max: 2   },
+      { id: 'scale',       label: 'Scale',       type: 'float', default: 1.0, min: 0.1, max: 5 },
+      { id: 'audioTarget', label: 'Audio band',  type: 'band',  default: 'bass' },
     ],
   };
 
-  // ── Static factory for built-in shaders ──────────────────────
+  // ── Static factory ────────────────────────────────────────────
 
   static fromBuiltin(name, id) {
     const glsl = ShaderLayer.BUILTINS[name];
-    if (!glsl) { console.warn(`ShaderLayer: no builtin named "${name}"`); return null; }
+    if (!glsl) { console.warn(`ShaderLayer: no builtin "${name}"`); return null; }
     const layer = new ShaderLayer(id || `shader-${name}-${Date.now()}`);
-    layer.init({ glsl, shaderName: name });
+    layer.init({ shaderName: name });
     return layer;
   }
 
-  // ── Instance ─────────────────────────────────────────────────
+  // ── Instance ──────────────────────────────────────────────────
 
   constructor(id) {
     super(id, 'Shader');
-    this.params = {
-      speed:       1.0,
-      intensity:   1.0,
-      scale:       1.0,
-      audioTarget: 'bass',
-    };
+    this.params = { speed: 1.0, intensity: 1.0, scale: 1.0, audioTarget: 'bass' };
 
-    this._glsl        = '';
-    this._shaderName  = 'custom';
+    this._shaderName  = 'plasma';
+    this._customGLSL  = null;
     this._time        = 0;
     this._audioSmooth = 0;
     this._beatPulse   = 0;
 
-    // Canvas 2D fallback renderer (WebGL is Phase 3)
-    // For now we render via an offscreen canvas using pixel shader simulation
-    this._off    = null;
-    this._offCtx = null;
-    this._w      = 0;
-    this._h      = 0;
-    this._scale  = 6;   // render at 1/6 resolution for performance
+    // Three.js GPU renderer
+    this._threeRenderer = null;
+    this._threeScene    = null;
+    this._threeCamera   = null;
+    this._threeMesh     = null;
+    this._offCanvas     = null;
+    this._W = 0; this._H = 0;
   }
 
   init(params = {}) {
-    if (params.glsl)       this._glsl       = params.glsl;
     if (params.shaderName) this._shaderName = params.shaderName;
-    this.name = params.name || this._shaderName || 'Shader';
-    Object.keys(this.params).forEach(k => {
-      if (params[k] !== undefined) this.params[k] = params[k];
-    });
-
-    // Set up offscreen canvas
-    this._off    = document.createElement('canvas');
-    this._offCtx = this._off.getContext('2d', { willReadFrequently: false });
-
-    // Select render function based on shader name
-    this._renderFn = this._selectRenderFn();
+    if (params.glsl)       { this._customGLSL = params.glsl; this._shaderName = 'custom'; }
+    this.name = params.name || `Shader — ${this._shaderName}`;
+    Object.keys(this.params).forEach(k => { if (params[k] !== undefined) this.params[k] = params[k]; });
+    this._gpuDirty = true;
   }
 
-  /**
-   * Load a custom GLSL shader string (ShaderToy mainImage format supported).
-   * The shader is parsed for any vec3/float uniforms and they become params.
-   */
-  loadGLSL(glslSource) {
-    this._glsl      = glslSource;
+  loadGLSL(src) {
+    this._customGLSL = src;
     this._shaderName = 'custom';
     this.name        = 'Custom Shader';
-    this._renderFn   = this._renderCustomGLSL.bind(this);
-    if (typeof Toast !== 'undefined') Toast.info('Custom shader loaded (CPU preview mode)');
+    this._gpuDirty   = true;
+    if (typeof Toast !== 'undefined') Toast.success('Shader loaded on GPU');
   }
 
-  _selectRenderFn() {
-    switch (this._shaderName) {
-      case 'distort':   return this._renderDistort.bind(this);
-      case 'chromatic': return this._renderChromatic.bind(this);
-      case 'bloom':     return this._renderBloom.bind(this);
-      case 'ripple':    return this._renderRipple.bind(this);
-      case 'plasma':    return this._renderPlasma.bind(this);
-      case 'custom':    return this._renderCustomGLSL.bind(this);
-      default:          return this._renderPlasma.bind(this);
+  get glslSource() { return this._customGLSL || ShaderLayer.BUILTINS[this._shaderName] || ''; }
+  get isCustom()   { return this._shaderName === 'custom'; }
+
+  // ── GPU setup ─────────────────────────────────────────────────
+
+  _ensureGPU(W, H) {
+    const resized = W !== this._W || H !== this._H;
+
+    if (!this._offCanvas) {
+      this._offCanvas      = document.createElement('canvas');
+      this._offCanvas.width  = W;
+      this._offCanvas.height = H;
+
+      this._threeRenderer = new THREE.WebGLRenderer({
+        canvas:    this._offCanvas,
+        antialias: false,
+        alpha:     true,
+        premultipliedAlpha: false,
+      });
+      this._threeRenderer.setPixelRatio(1);
+      this._threeScene  = new THREE.Scene();
+      this._threeCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+      this._gpuDirty    = true;
+    }
+
+    if (resized) {
+      this._offCanvas.width  = W;
+      this._offCanvas.height = H;
+      this._threeRenderer.setSize(W, H, false);
+      this._W = W; this._H = H;
+      if (this._threeMesh?.material) {
+        this._threeMesh.material.uniforms.iResolution.value.set(W, H);
+      }
+    }
+
+    if (this._gpuDirty) {
+      this._buildMaterial(W, H);
+      this._gpuDirty = false;
     }
   }
 
-  get isCustom() { return this._shaderName === 'custom'; }
-  get glslSource() { return this._glsl; }
+  _buildMaterial(W, H) {
+    // Dispose old mesh
+    if (this._threeMesh) {
+      this._threeScene.remove(this._threeMesh);
+      this._threeMesh.material.dispose();
+      this._threeMesh.geometry.dispose();
+    }
+
+    const glsl = this.glslSource;
+    // Detect ShaderToy mainImage style and wrap if needed
+    const fragSrc = glsl.includes('mainImage')
+      ? _wrapShaderToy(glsl)
+      : (glsl.includes('void main') ? glsl : _fallbackGLSL());
+
+    let material;
+    try {
+      material = new THREE.ShaderMaterial({
+        uniforms: {
+          iTime:       { value: 0 },
+          iResolution: { value: new THREE.Vector2(W, H) },
+          iBass:       { value: 0 },
+          iMid:        { value: 0 },
+          iTreble:     { value: 0 },
+          iVolume:     { value: 0 },
+          iBeat:       { value: 0 },
+          iBpm:        { value: 0 },
+          iMouseX:     { value: 0.5 },
+          iMouseY:     { value: 0.5 },
+          iSpeed:      { value: 1 },
+          iIntensity:  { value: 1 },
+          iScale:      { value: 1 },
+        },
+        vertexShader:   'varying vec2 vUv; void main(){vUv=uv;gl_Position=vec4(position,1.);}',
+        fragmentShader: fragSrc,
+        depthWrite:     false,
+        depthTest:      false,
+      });
+    } catch (e) {
+      console.warn('ShaderLayer: material build error', e);
+      material = new THREE.MeshBasicMaterial({ color: 0x000000 });
+    }
+
+    const geo  = new THREE.PlaneGeometry(2, 2);
+    this._threeMesh = new THREE.Mesh(geo, material);
+    this._threeScene.add(this._threeMesh);
+  }
+
+  // ── Update / render ───────────────────────────────────────────
 
   update(audioData, videoData, dt) {
     this._time += dt * this.params.speed;
@@ -115,185 +184,171 @@ class ShaderLayer extends BaseLayer {
   }
 
   render(ctx, width, height) {
-    if (!this._off) return;
+    this._ensureGPU(width, height);
+    if (!this._threeMesh?.material?.uniforms) return;
 
-    const s  = this._scale;
-    const W  = Math.ceil(width  / s);
-    const H  = Math.ceil(height / s);
+    // Update uniforms
+    const u = this._threeMesh.material.uniforms;
+    u.iTime.value       = this._time;
+    u.iResolution.value.set(width, height);
+    u.iBass.value       = this._audioSmooth;
+    u.iMid.value        = 0;
+    u.iTreble.value     = 0;
+    u.iVolume.value     = this._audioSmooth;
+    u.iBeat.value       = this._beatPulse;
+    u.iBpm.value        = this.uniforms.iBpm;
+    u.iMouseX.value     = this.uniforms.iMouseX;
+    u.iMouseY.value     = this.uniforms.iMouseY;
+    u.iSpeed.value      = this.params.speed;
+    u.iIntensity.value  = this.params.intensity;
+    u.iScale.value      = this.params.scale;
 
-    if (this._off.width !== W || this._off.height !== H) {
-      this._off.width  = W;
-      this._off.height = H;
-    }
+    // Render to offscreen canvas
+    this._threeRenderer.render(this._threeScene, this._threeCamera);
 
-    if (typeof this._renderFn === 'function') {
-      this._renderFn(this._offCtx, W, H);
-    }
-
+    // Draw offscreen canvas onto layer ctx (already translated to centre)
     ctx.save();
-    ctx.imageSmoothingEnabled = true;
-    ctx.imageSmoothingQuality = 'low';
+    ctx.globalAlpha = this.params.intensity > 0 ? 1 : 0;
     ctx.translate(-width / 2, -height / 2);
-    ctx.drawImage(this._off, 0, 0, width, height);
+    ctx.drawImage(this._offCanvas, 0, 0, width, height);
     ctx.restore();
   }
 
-  // ── Built-in shader renderers (CPU pixel shaders) ────────────
-  // These simulate common GLSL effects on the CPU at low resolution.
-  // True GPU shaders arrive in Phase 3 when we migrate to WebGL.
-
-  _renderPlasma(ctx, W, H) {
-    const img  = ctx.createImageData(W, H);
-    const data = img.data;
-    const t    = this._time;
-    const a    = this._audioSmooth * this.params.intensity;
-    const sc   = this.params.scale * 0.05;
-
-    for (let py = 0; py < H; py++) {
-      for (let px = 0; px < W; px++) {
-        const x = px * sc, y = py * sc;
-        const v = Math.sin(x + t)
-                + Math.sin(y + t * 0.7)
-                + Math.sin((x + y) * 0.5 + t * 1.3)
-                + Math.sin(Math.sqrt(x*x + y*y) * 0.8 + t + a * 3);
-
-        const hue = (v * 0.25 + 0.5 + a * 0.3) * 360;
-        const [r, g, b] = VaelColor.hslToRgb(hue, 0.8, 0.45 + a * 0.2);
-        const i = (py * W + px) * 4;
-        data[i]   = r * 255;
-        data[i+1] = g * 255;
-        data[i+2] = b * 255;
-        data[i+3] = Math.round(200 * this.params.intensity);
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-  }
-
-  _renderRipple(ctx, W, H) {
-    const img  = ctx.createImageData(W, H);
-    const data = img.data;
-    const t    = this._time;
-    const a    = this._audioSmooth;
-    const bp   = this._beatPulse;
-
-    for (let py = 0; py < H; py++) {
-      for (let px = 0; px < W; px++) {
-        const dx = px / W - 0.5, dy = py / H - 0.5;
-        const dist = Math.sqrt(dx*dx + dy*dy);
-        const wave = Math.sin(dist * 20 * this.params.scale - t * 3 + a * 8 + bp * 4);
-        const v    = (wave + 1) * 0.5;
-        const hue  = 180 + v * 80 + a * 60;
-        const lit  = 0.1 + v * 0.25 * this.params.intensity;
-        const [r, g, b] = VaelColor.hslToRgb(hue, 0.7, lit);
-        const i = (py * W + px) * 4;
-        data[i]   = r * 255;
-        data[i+1] = g * 255;
-        data[i+2] = b * 255;
-        data[i+3] = 220;
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-  }
-
-  _renderDistort(ctx, W, H) {
-    // Warp effect — offset UVs by noise
-    ctx.clearRect(0, 0, W, H);
-    const a  = this._audioSmooth * this.params.intensity;
-    const t  = this._time;
-    const sc = this.params.scale;
-
-    const img  = ctx.createImageData(W, H);
-    const d    = img.data;
-
-    for (let py = 0; py < H; py++) {
-      for (let px = 0; px < W; px++) {
-        const nx   = px / W * sc, ny = py / H * sc;
-        const ox   = VaelMath.noise2D(nx + t * 0.3, ny) * a * 0.15;
-        const oy   = VaelMath.noise2D(nx, ny + t * 0.3 + 10) * a * 0.15;
-        const hue  = (VaelMath.noise2D(nx + ox, ny + oy + t * 0.1) + 1) * 180;
-        const [r, g, b] = VaelColor.hslToRgb(hue + 200, 0.6, 0.15 + a * 0.2);
-        const i = (py * W + px) * 4;
-        d[i] = r*255; d[i+1] = g*255; d[i+2] = b*255; d[i+3] = 200;
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-  }
-
-  _renderChromatic(ctx, W, H) {
-    // Chromatic aberration — colour channel offset
-    ctx.clearRect(0, 0, W, H);
-    const a  = this._audioSmooth * this.params.intensity * 12;
-    const bp = this._beatPulse * 8;
-    const offset = a + bp;
-
-    // Draw three offset coloured rectangles — simulates channel split
-    const drawChannel = (color, dx, dy) => {
-      ctx.save();
-      ctx.globalCompositeOperation = 'screen';
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.5;
-      ctx.fillRect(dx, dy, W, H);
-      ctx.restore();
-    };
-
-    ctx.clearRect(0, 0, W, H);
-    drawChannel(`rgba(255,0,0,0.4)`,   offset, 0);
-    drawChannel(`rgba(0,255,0,0.4)`,   0, 0);
-    drawChannel(`rgba(0,0,255,0.4)`,  -offset, 0);
-  }
-
-  _renderBloom(ctx, W, H) {
-    // Soft glow — radial gradient driven by audio
-    ctx.clearRect(0, 0, W, H);
-    const a  = this._audioSmooth * this.params.intensity;
-    const bp = this._beatPulse;
-    const r  = (0.2 + a * 0.4 + bp * 0.2) * Math.max(W, H);
-    const hue = 160 + a * 40 + this._time * 10;
-
-    const grad = ctx.createRadialGradient(W/2, H/2, 0, W/2, H/2, r);
-    grad.addColorStop(0,   VaelColor.hsla(hue, 0.8, 0.6, 0.4 + a * 0.3 + bp * 0.2));
-    grad.addColorStop(0.5, VaelColor.hsla(hue + 20, 0.7, 0.4, 0.15 + a * 0.15));
-    grad.addColorStop(1,   VaelColor.hsla(hue + 40, 0.6, 0.2, 0));
-
-    ctx.fillStyle = grad;
-    ctx.fillRect(0, 0, W, H);
-  }
-
-  // Custom GLSL — CPU preview (plasma + name overlay)
-  // True GPU execution will run via WebGL ShaderMaterial in Phase 3
-  _renderCustomGLSL(ctx, W, H) {
-    // Render plasma as visual placeholder
-    this._renderPlasma(ctx, W, H);
-
-    // Draw a label so the user knows it's their custom shader
-    const fullW = W * this._scale;
-    const fullH = H * this._scale;
-    ctx.save();
-    ctx.font      = `bold ${Math.round(fullH * 0.04)}px monospace`;
-    ctx.fillStyle = 'rgba(0,212,170,0.5)';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'bottom';
-    ctx.fillText('custom shader · GPU in Phase 3', fullW / 2, fullH - 8);
-    ctx.restore();
+  dispose() {
+    this._threeMesh?.material?.dispose();
+    this._threeMesh?.geometry?.dispose();
+    this._threeRenderer?.dispose();
+    this._offCanvas = null;
   }
 
   toJSON() {
     return {
       ...super.toJSON(),
       shaderName: this._shaderName,
+      glsl:       this._customGLSL || null,
       params:     { ...this.params },
     };
   }
 }
 
-// ── Built-in shader source strings ───────────────────────────────
-// These are reference GLSL strings stored for future WebGL use.
-// The CPU renderers above are used now; these will power true GPU shaders in Phase 3.
+// ── GLSL helpers ──────────────────────────────────────────────────
+
+function _wrapShaderToy(src) {
+  return `
+    uniform float iTime;
+    uniform vec2  iResolution;
+    uniform float iBass, iMid, iTreble, iVolume, iBeat, iBpm;
+    uniform float iMouseX, iMouseY;
+    uniform float iSpeed, iIntensity, iScale;
+    varying vec2 vUv;
+
+    ${src}
+
+    void main() {
+      vec2 fragCoord = vUv * iResolution;
+      vec4 col = vec4(0.);
+      mainImage(col, fragCoord);
+      gl_FragColor = col;
+    }
+  `;
+}
+
+function _fallbackGLSL() {
+  return `
+    uniform float iTime;
+    uniform vec2  iResolution;
+    uniform float iBass;
+    varying vec2 vUv;
+    void main() {
+      vec2 uv = vUv;
+      float v = sin(uv.x * 10. + iTime) * sin(uv.y * 10. + iTime * .7) + iBass;
+      gl_FragColor = vec4(v*.5+.5, v*.2+.3, v*.8+.2, 1.);
+    }
+  `;
+}
+
+// ── Built-in GLSL shaders (run on GPU) ───────────────────────────
 
 ShaderLayer.BUILTINS = {
-  plasma:   '/* plasma — built-in CPU renderer */',
-  ripple:   '/* ripple — built-in CPU renderer */',
-  distort:  '/* distort — built-in CPU renderer */',
-  chromatic:'/* chromatic — built-in CPU renderer */',
-  bloom:    '/* bloom — built-in CPU renderer */',
+
+  plasma: `
+    uniform float iTime, iBass, iScale, iIntensity;
+    uniform vec2 iResolution;
+    varying vec2 vUv;
+    void main() {
+      vec2 uv = vUv * iScale;
+      float t = iTime;
+      float v = sin(uv.x*6.+t) + sin(uv.y*6.+t*.7)
+              + sin((uv.x+uv.y)*4.+t*1.3)
+              + sin(length(uv-.5)*8.+t+iBass*4.);
+      float h = v*.25+.5+iBass*.2;
+      float r = abs(sin(h*3.14159));
+      float g = abs(sin(h*3.14159+2.094));
+      float b = abs(sin(h*3.14159+4.189));
+      gl_FragColor = vec4(r,g,b,iIntensity);
+    }`,
+
+  ripple: `
+    uniform float iTime, iBass, iBeat, iScale;
+    uniform vec2 iResolution;
+    varying vec2 vUv;
+    void main() {
+      vec2 uv  = vUv - .5;
+      float d  = length(uv);
+      float bp = iBeat * 4. + iBass * 8.;
+      float w  = sin(d * 20. * iScale - iTime * 3. + bp);
+      float v  = (w + 1.) * .5;
+      float h  = .55 + v * .2;
+      gl_FragColor = vec4(0., h*.8, h, .9);
+    }`,
+
+  distort: `
+    uniform float iTime, iBass, iBeat, iScale, iIntensity;
+    uniform vec2 iResolution;
+    varying vec2 vUv;
+    float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5);}
+    float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
+      return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);}
+    void main() {
+      float t  = iTime * .4;
+      float e  = iIntensity * .15 * (1. + iBass * 1.5 + iBeat * 2.);
+      vec2 d   = vec2(noise(vUv*3.*iScale+vec2(t,0))-.5, noise(vUv*3.*iScale+vec2(0,t+1.7))-.5)*e;
+      vec2 uv  = vUv + d;
+      float h  = noise(uv * 2.) * .5 + iBass * .3;
+      gl_FragColor = vec4(h*.2, h*.4+.1, h*.8+.2, .9);
+    }`,
+
+  bloom: `
+    uniform float iTime, iBass, iBeat, iIntensity;
+    uniform vec2 iResolution;
+    varying vec2 vUv;
+    void main() {
+      vec2 uv  = vUv - .5;
+      float bp = iBeat * .2 + iBass * .4;
+      float r  = (.2 + bp) * max(iResolution.x, iResolution.y) / iResolution.x;
+      float d  = length(uv);
+      float h  = .45 + iTime * .03;
+      float glow = exp(-d * d / (r * r * .1)) * iIntensity * (1. + iBass * .5);
+      float hue  = h + iBass * .1;
+      float rv   = abs(sin(hue * 6.28));
+      float gv   = abs(sin(hue * 6.28 + 2.09));
+      float bv   = abs(sin(hue * 6.28 + 4.19));
+      gl_FragColor = vec4(rv * glow, gv * glow, bv * glow, glow);
+    }`,
+
+  chromatic: `
+    uniform float iTime, iBass, iBeat, iScale;
+    uniform vec2 iResolution;
+    varying vec2 vUv;
+    void main() {
+      vec2 uv = vUv;
+      float off = (.003 + iBeat * .008 + iBass * .003) * iScale;
+      vec2 dir  = normalize(uv - .5) * length(uv - .5);
+      // Chromatic split on a moving plasma background
+      float t = iTime * .5;
+      float r = sin((uv.x + off) * 8. + t) * sin((uv.y + off) * 6. + t * .8);
+      float g = sin(uv.x * 8. + t) * sin(uv.y * 6. + t * .8);
+      float b = sin((uv.x - off) * 8. + t) * sin((uv.y - off) * 6. + t * .8);
+      gl_FragColor = vec4(r*.5+.5, g*.5+.5, b*.5+.5, .9);
+    }`,
 };

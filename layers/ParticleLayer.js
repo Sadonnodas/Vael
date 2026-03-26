@@ -10,11 +10,11 @@ class ParticleLayer extends BaseLayer {
     name: 'Particles',
     version: '1.0',
     params: [
-      { id: 'mode',        label: 'Mode',         type: 'enum',  default: 'drift',   options: ['drift','fountain','orbit','pulse'] },
+      { id: 'mode',        label: 'Mode',         type: 'enum',  default: 'drift',   options: ['drift','fountain','orbit','pulse','fireflies'] },
       { id: 'count',       label: 'Count',         type: 'int',   default: 600,  min: 50,   max: 3000 },
       { id: 'size',        label: 'Size',          type: 'float', default: 2.0,  min: 0.5,  max: 10   },
       { id: 'speed',       label: 'Speed',         type: 'float', default: 0.4,  min: 0.05, max: 3    },
-      { id: 'colorMode',   label: 'Color',         type: 'enum',  default: 'rainbow', options: ['rainbow','mono','white','accent'] },
+      { id: 'colorMode',   label: 'Color',         type: 'enum',  default: 'rainbow', options: ['rainbow','mono','white','accent','warm','cool','ember'] },
       { id: 'audioTarget', label: 'Audio target',  type: 'band',  default: 'bass' },
       { id: 'hueShift',    label: 'Hue shift',     type: 'float', default: 0,    min: 0,    max: 360  },
     ],
@@ -76,6 +76,16 @@ class ParticleLayer extends BaseLayer {
     } else if (mode === 'pulse') {
       p.angle  = r(0, Math.PI * 2);
       p.radius = r(0, Math.min(w, h) * 0.4);
+    } else if (mode === 'fireflies') {
+      // Slow organic drift with individual pulsing brightness
+      p.x       = r(-w/2, w/2);
+      p.y       = r(-h/2, h/2);
+      p.vx      = r(-0.15, 0.15);
+      p.vy      = r(-0.15, 0.15);
+      p.phase   = r(0, Math.PI * 2);  // individual blink phase
+      p.blinkSpeed = r(0.5, 2.0);
+      p.size    = r(0.8, 2.2);
+      p.hue     = r(35, 65);  // warm yellow-green
     }
     return p;
   }
@@ -140,15 +150,49 @@ class ParticleLayer extends BaseLayer {
         p.angle  += 0.005 * speed;
         p.x = Math.cos(p.angle) * p.radius;
         p.y = Math.sin(p.angle) * p.radius;
+
+      } else if (mode === 'fireflies') {
+        // Very slow organic drift with Perlin noise steering
+        p.phase += dt * p.blinkSpeed * (1 + audio * 0.5);
+        p.vx += (VaelMath.noise2D(p.x * 0.003, this._time * 0.1 + p.phase) - 0.5) * 0.06;
+        p.vy += (VaelMath.noise2D(p.y * 0.003 + 200, this._time * 0.1) - 0.5) * 0.06;
+        p.vx *= 0.98; p.vy *= 0.98;
+        p.x  += p.vx * speed * 0.3;
+        p.y  += p.vy * speed * 0.3;
+        // Soft wrap
+        const hw2 = width/2, hh2 = height/2;
+        if (p.x >  hw2 + 20) p.x = -hw2;
+        if (p.x < -hw2 - 20) p.x =  hw2;
+        if (p.y >  hh2 + 20) p.y = -hh2;
+        if (p.y < -hh2 - 20) p.y =  hh2;
       }
 
       // Draw
       const beat  = this._beatPulse ?? 0;
-      const alpha = mode === 'fountain' ? p.life / p.maxLife : 0.7 + audio * 0.3;
-      const size  = this.params.size * p.size * (1 + audio * 0.5 + beat * 0.8);
+      let alpha, size, color;
+
+      if (mode === 'fireflies') {
+        // Individual blink via sine wave on each particle's phase
+        const blink = (Math.sin(p.phase) + 1) / 2;
+        alpha  = blink * (0.4 + audio * 0.4);
+        size   = this.params.size * p.size * (0.6 + blink * 0.8 + audio * 0.4);
+        color  = this._getColor(p);
+
+        // Soft glow — draw a larger, dimmer circle first
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, Math.max(0.5, size * 3), 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.globalAlpha = alpha * 0.15;
+        ctx.fill();
+      } else {
+        alpha  = mode === 'fountain' ? p.life / p.maxLife : 0.7 + audio * 0.3;
+        size   = this.params.size * p.size * (1 + audio * 0.5 + beat * 0.8);
+        color  = this._getColor(p);
+      }
+
       ctx.beginPath();
       ctx.arc(p.x, p.y, Math.max(0.3, size), 0, Math.PI * 2);
-      ctx.fillStyle = this._getColor(p);
+      ctx.fillStyle = color;
       ctx.globalAlpha = VaelMath.clamp(alpha + beat * 0.3, 0, 1);
       ctx.fill();
     });
@@ -158,10 +202,14 @@ class ParticleLayer extends BaseLayer {
 
   _getColor(p) {
     const shift = this.params.hueShift + this._time * 10;
+    const a     = this._audioSmooth;
     switch (this.params.colorMode) {
       case 'white':   return 'rgba(255,255,255,0.9)';
       case 'accent':  return VaelColor.hsl(170 + shift % 40, 0.9, 0.6);
       case 'mono':    return VaelColor.mono(p.life ?? 0.5);
+      case 'warm':    return VaelColor.hsl(((p.hue % 80) + 10 + shift * 0.5) % 360, 0.85, 0.55 + a * 0.1);
+      case 'cool':    return VaelColor.hsl(((p.hue % 80) + 180 + shift * 0.5) % 360, 0.75, 0.55 + a * 0.1);
+      case 'ember':   return VaelColor.hsl(((p.hue % 40) + 5) % 360, 0.95, 0.4 + a * 0.2);
       default:        return VaelColor.hsl((p.hue + shift) % 360, 0.8, 0.6);
     }
   }
