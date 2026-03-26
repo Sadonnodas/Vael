@@ -2,17 +2,17 @@
  * ui/App.js
  * Top-level application controller.
  *
- * CHANGES:
- * - Uses LibraryPanel (unified video+image) instead of VideoLibraryPanel.
- * - videoLibrary.onChanged no longer overwrites the panel's internal handler.
- *   Instead App.js calls LibraryPanel.refresh() and updates the param panel
- *   if a VideoPlayerLayer is selected.
- * - VideoPanel now also adds uploaded videos to the VideoLibrary so they
- *   appear in the LIBRARY tab.
- * - _renderImageLayerPanel replaced by a fully working version. File input
- *   lives in document.body and is scoped to the current layer via closure.
- * - MathVisualizer param panel gets a Restart button when buildMode is on.
- * - _autoSave uses layer.toJSON() so modMatrix + fx survive autosave.
+ * CHANGES vs previous version:
+ * - Removed the extra 'input-video-file' change listener that was adding
+ *   videos to the library a second time (causing the doubling bug).
+ *   LibraryPanel._createFileInputs() handles all library uploads internally.
+ * - ImageLayer flow: when an ImageLayer is added via the picker,
+ *   LibraryPanel.showAddImagePrompt(layer) is called immediately.
+ * - 'vael:image-single-added' event loads the file into window._pendingImageLayer.
+ * - 'vael:image-layer-upload' event triggers the single-file picker.
+ * - 'vael:refresh-params' event re-renders the params panel for the current layer.
+ * - _renderImageLayerPanel now uses LibraryPanel.promptImageForLayer() for
+ *   the thumbnail grid + upload button.
  */
 
 (function () {
@@ -27,7 +27,6 @@
   const layers   = new LayerStack();
   const beat     = new BeatDetector();
 
-  // ── Video Library ─────────────────────────────────────────────
   const videoLibrary  = new VideoLibrary();
   window.videoLibrary = videoLibrary;
 
@@ -58,83 +57,69 @@
   }
 
   // ── Image layer panel ─────────────────────────────────────────
-  // File input is created per-render and scoped to the current layer
-  // via closure so there's no stale reference problem.
+  // Uses LibraryPanel.promptImageForLayer() which shows the thumbnail grid
+  // and an upload button — no more hunting for a separate file picker.
   function _renderImageLayerPanel(layer, container) {
     container.innerHTML = '';
 
-    // Editable name header
     if (typeof ParamPanel !== 'undefined' && ParamPanel._buildNameHeader) {
       container.appendChild(ParamPanel._buildNameHeader(layer, 'Image'));
     }
 
-    const statusEl = document.createElement('div');
-    statusEl.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-bottom:10px';
-    statusEl.textContent   = layer._loaded ? `Loaded: ${layer._fileName}` : 'No image loaded';
-    container.appendChild(statusEl);
-
-    const loadBtn = document.createElement('button');
-    loadBtn.className        = 'btn accent';
-    loadBtn.style.width      = '100%';
-    loadBtn.style.marginBottom = '8px';
-    loadBtn.textContent      = '↑ Load image file…';
-    container.appendChild(loadBtn);
-
-    const libHint = document.createElement('p');
-    libHint.style.cssText = 'font-size:9px;color:var(--text-dim);line-height:1.5;margin-bottom:14px';
-    libHint.innerHTML = 'Or go to the <strong style="color:var(--accent2)">LIBRARY tab → Images</strong> to manage multiple images and load them into any Image layer.';
-    container.appendChild(libHint);
-
-    // Create a fresh file input for this layer, appended to body
-    // Remove any stale one first
-    const OLD_ID = '_image-layer-file-input';
-    document.getElementById(OLD_ID)?.remove();
-
-    const fileInput    = document.createElement('input');
-    fileInput.id       = OLD_ID;
-    fileInput.type     = 'file';
-    fileInput.accept   = 'image/*';
-    fileInput.style.cssText = 'position:fixed;opacity:0;pointer-events:none;top:-999px';
-    document.body.appendChild(fileInput);
-
-    loadBtn.addEventListener('click', () => {
-      fileInput.value = '';
-      fileInput.click();
-    });
-
-    // Closure over `layer` — always refers to the layer this panel was built for
-    fileInput.addEventListener('change', async e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      loadBtn.textContent = 'Loading…';
-      loadBtn.disabled    = true;
-      try {
-        await layer.loadFile(file);
-        statusEl.textContent = `Loaded: ${layer._fileName}`;
-        Toast.success(`Image loaded: ${layer._fileName}`);
-      } catch {
-        Toast.error('Could not load image file');
-      }
-      loadBtn.textContent = '↑ Load image file…';
-      loadBtn.disabled    = false;
-    });
+    // Image picker section (thumbnails + upload button from LibraryPanel)
+    LibraryPanel.promptImageForLayer(layer, container);
 
     const tip = document.createElement('p');
-    tip.style.cssText = 'font-size:9px;color:var(--text-dim);line-height:1.6;margin-bottom:14px';
-    tip.innerHTML = 'Use a PNG with transparency as a <strong style="color:var(--accent2)">mask</strong> on another layer, or use any image as a visual layer with blend modes.';
+    tip.style.cssText = 'font-size:9px;color:var(--text-dim);line-height:1.6;margin-bottom:14px;margin-top:4px';
+    tip.innerHTML = 'Use a PNG with transparency as a <strong style="color:var(--accent2)">mask</strong> on another layer, or any image as a visual with blend modes.';
     container.appendChild(tip);
 
     // Standard params + ModMatrix + FX
     ParamPanel.render(layer, container, audio);
   }
 
-  // ── MathVisualizer panel — adds Restart button ───────────────
-  function _renderMathPanel(layer, container) {
-    // Use standard ParamPanel for all controls
-    ParamPanel.render(layer, container, audio);
+  // ── Image upload events ───────────────────────────────────────
+  // LibraryPanel fires 'vael:image-single-added' when the single-file picker
+  // is used from inside showAddImagePrompt or promptImageForLayer.
+  window.addEventListener('vael:image-single-added', async e => {
+    const pendingLayer = window._pendingImageLayer;
+    if (!pendingLayer) return;
+    window._pendingImageLayer = null;
+    try {
+      await pendingLayer.loadFile(e.detail.file);
+      // Refresh the params panel if this layer is selected
+      if (_selectedLayerId === pendingLayer.id) {
+        _renderImageLayerPanel(pendingLayer, paramsContent);
+      }
+      Toast.success(`Image loaded: ${e.detail.name}`);
+    } catch { Toast.error('Could not load image'); }
+  });
 
-    // Inject a Restart button after the buildMode controls
-    // (only useful when buildMode is on, but show it always for discoverability)
+  // 'vael:image-layer-upload' triggers the single-file picker
+  window.addEventListener('vael:image-layer-upload', e => {
+    window._pendingImageLayer = e.detail.layer;
+    document.getElementById('_lib-image-single-input').value = '';
+    document.getElementById('_lib-image-single-input').click();
+  });
+
+  // 'vael:refresh-params' re-renders the params panel for the selected layer
+  window.addEventListener('vael:refresh-params', () => {
+    if (!_selectedLayerId) return;
+    const layer = layers.layers.find(l => l.id === _selectedLayerId);
+    if (!layer) return;
+    if (layer instanceof ImageLayer) {
+      _renderImageLayerPanel(layer, paramsContent);
+    } else if (layer instanceof ShaderLayer) {
+      ShaderPanel.render(layer, paramsContent);
+    } else if (layer instanceof LyricsLayer) {
+      LyricsPanel.render(layer, paramsContent);
+    } else {
+      ParamPanel.render(layer, paramsContent, audio);
+    }
+  });
+
+  // ── MathVisualizer panel ──────────────────────────────────────
+  function _injectMathRestartBtn(layer, container) {
     const restartBtn = document.createElement('button');
     restartBtn.className   = 'btn';
     restartBtn.style.cssText = 'width:100%;margin-top:4px;margin-bottom:14px;font-size:9px';
@@ -143,11 +128,8 @@
       if (typeof layer.restartBuild === 'function') layer.restartBuild();
       Toast.info('Animation restarted');
     });
-
-    // Insert before the ModMatrix divider (first child that is a divider)
-    // Fallback: just append
     const modDivider = [...container.children].find(el =>
-      el.style.height === '1px' && el.style.background?.includes('border-dim')
+      el.style?.height === '1px'
     );
     if (modDivider) container.insertBefore(restartBtn, modDivider);
     else            container.appendChild(restartBtn);
@@ -176,10 +158,7 @@
 
   const flashOverlay = document.createElement('div');
   flashOverlay.id = 'vael-transition-overlay';
-  flashOverlay.style.cssText = `
-    position:fixed;inset:0;background:white;opacity:0;pointer-events:none;z-index:99;
-    transition:opacity 0.05s;
-  `;
+  flashOverlay.style.cssText = 'position:fixed;inset:0;background:white;opacity:0;pointer-events:none;z-index:99;transition:opacity 0.05s';
   document.body.appendChild(flashOverlay);
 
   // ── MIDI ──────────────────────────────────────────────────────
@@ -192,38 +171,30 @@
   const osc = new OscBridge({ layerStack: layers, setlist, recorder });
   osc.connect('ws://localhost:8080');
 
-  // ── LFO Modulator ─────────────────────────────────────────────
+  // ── LFO ──────────────────────────────────────────────────────
   const lfoManager = new LFOManager();
   LFOPanel.init(lfoManager, layers, document.getElementById('lfo-panel-content'));
 
-  layers.onChanged = () => {
-    renderLayerList();
-    LFOPanel.refresh();
-  };
+  layers.onChanged = () => { renderLayerList(); LFOPanel.refresh(); };
 
-  // ── Post-processing FX ────────────────────────────────────────
+  // ── Post FX ──────────────────────────────────────────────────
   PostFXPanel.init(renderer, document.getElementById('fx-panel-content'));
 
   // ── Library panel ─────────────────────────────────────────────
-  // FIX: We pass a getSelectedLayer callback so LibraryPanel can load
-  // images into the currently selected ImageLayer.
-  // We do NOT set videoLibrary.onChanged here — LibraryPanel owns that.
   LibraryPanel.init({
     videoLibrary,
+    audioEngine:       audio,
     layerStack:        layers,
     getSelectedLayer:  () => layers.layers.find(l => l.id === _selectedLayerId) || null,
     container:         document.getElementById('library-panel-content'),
   });
 
-  // When video library changes, refresh the library panel and update
-  // the param panel if a VideoPlayerLayer is currently open.
+  // When video library changes, refresh library panel + param panel if needed
   videoLibrary.onChanged = () => {
     LibraryPanel.refresh();
     if (_selectedLayerId) {
       const layer = layers.layers.find(l => l.id === _selectedLayerId);
-      if (layer instanceof VideoPlayerLayer) {
-        ParamPanel.render(layer, paramsContent, audio);
-      }
+      if (layer instanceof VideoPlayerLayer) ParamPanel.render(layer, paramsContent, audio);
     }
   };
 
@@ -245,10 +216,7 @@
 
   // ── MIDI learn ───────────────────────────────────────────────
   window.addEventListener('vael:midi-learn-requested', () => {
-    if (!_selectedLayerId) {
-      alert('Select a layer first, then go to the MIDI tab and click Learn.');
-      return;
-    }
+    if (!_selectedLayerId) { alert('Select a layer first.'); return; }
     const layer = layers.layers.find(l => l.id === _selectedLayerId);
     if (!layer) return;
     const manifest = layer.constructor.manifest;
@@ -258,7 +226,7 @@
     MidiPanel.refresh();
   });
 
-  // ── Layer picker config ──────────────────────────────────────
+  // ── Layer types ───────────────────────────────────────────────
   const LAYER_TYPES = [
     { id: 'gradient',         label: 'Gradient',              cls: () => new GradientLayer(`gradient-${Date.now()}`) },
     { id: 'noise',            label: 'Noise Field',            cls: () => new NoiseFieldLayer(`noise-${Date.now()}`) },
@@ -299,15 +267,23 @@
     },
   });
 
-  // Override selectLayer to inject MathVisualizer restart button
+  // Hook selectLayer to inject Restart button for MathVisualizer
   const _origSelectLayer = LayerPanel.selectLayer.bind(LayerPanel);
   LayerPanel.selectLayer = (id) => {
     _origSelectLayer(id);
-    // After ParamPanel renders for MathVisualizer, inject the restart button
     const layer = layers.layers.find(l => l.id === id);
     if (layer instanceof MathVisualizer) {
-      // Small delay to let ParamPanel finish rendering
-      setTimeout(() => _renderMathPanel(layer, paramsContent), 10);
+      setTimeout(() => _injectMathRestartBtn(layer, paramsContent), 15);
+    }
+  };
+
+  // When an ImageLayer is added, show the library/upload prompt immediately
+  const _origLayersAdd = layers.add.bind(layers);
+  layers.add = (layer) => {
+    _origLayersAdd(layer);
+    if (layer instanceof ImageLayer) {
+      // Small delay so the layer list renders first
+      setTimeout(() => LibraryPanel.showAddImagePrompt(layer), 100);
     }
   };
 
@@ -320,11 +296,8 @@
   noiseLayer.blendMode = 'normal';
 
   const mathLayer = new MathVisualizer('math-default');
-  mathLayer.init({
-    mode: 'path', constant: 'pi', colorMode: 'rainbow',
-    digitCount: 1200, angle: 36, lineWidth: 1.4, zoom: 0.9,
-    buildMode: true, buildSpeed: 10,
-  });
+  mathLayer.init({ mode: 'path', constant: 'pi', colorMode: 'rainbow',
+    digitCount: 1200, angle: 36, lineWidth: 1.4, zoom: 0.9, buildMode: true, buildSpeed: 10 });
   mathLayer.opacity   = 0.9;
   mathLayer.blendMode = 'screen';
 
@@ -333,9 +306,10 @@
   particleLayer.opacity   = 0.35;
   particleLayer.blendMode = 'add';
 
-  layers.add(noiseLayer);
-  layers.add(mathLayer);
-  layers.add(particleLayer);
+  // Use _origLayersAdd for default layers so the image prompt doesn't fire
+  _origLayersAdd(noiseLayer);
+  _origLayersAdd(mathLayer);
+  _origLayersAdd(particleLayer);
 
   renderer.start();
   setTimeout(() => _restoreAutoSave(), 100);
@@ -343,7 +317,6 @@
   // ── Preset save / load ────────────────────────────────────────
   document.getElementById('btn-preset-save').addEventListener('click', () => {
     const name = document.getElementById('preset-name').value.trim() || 'scene';
-
     let thumb = null;
     try {
       const t = document.createElement('canvas');
@@ -351,16 +324,13 @@
       t.getContext('2d').drawImage(canvas, 0, 0, 120, 68);
       thumb = t.toDataURL('image/jpeg', 0.6);
     } catch {}
-
     PresetBrowser.save(layers, name, thumb);
     const preset = PresetManager.save(layers, name);
     PresetManager.storeRecent(preset);
     Toast.success(`Scene "${name}" saved`);
   });
 
-  document.getElementById('btn-preset-library')?.addEventListener('click', () => {
-    PresetBrowser.toggle();
-  });
+  document.getElementById('btn-preset-library')?.addEventListener('click', () => PresetBrowser.toggle());
 
   document.getElementById('btn-scene-new')?.addEventListener('click', () => {
     _autoSave();
@@ -388,9 +358,7 @@
       paramsContent.innerHTML   = '';
       paramsEmpty.style.display = 'block';
       Toast.success(`Scene "${preset.name || file.name}" loaded`);
-    } catch (err) {
-      Toast.error(`Could not load preset: ${err.message}`);
-    }
+    } catch (err) { Toast.error(`Could not load preset: ${err.message}`); }
     e.target.value = '';
   });
 
@@ -457,9 +425,9 @@
   function _autoSave() {
     try {
       const preset = {
-        vael:   '1.0',
-        name:   document.getElementById('preset-name')?.value || 'autosave',
-        saved:  new Date().toISOString(),
+        vael: '1.0',
+        name: document.getElementById('preset-name')?.value || 'autosave',
+        saved: new Date().toISOString(),
         layers: layers.layers.map(layer =>
           typeof layer.toJSON === 'function' ? layer.toJSON() : {
             type: layer.constructor.name, id: layer.id, name: layer.name,
@@ -490,25 +458,7 @@
 
   // ── Panel init ────────────────────────────────────────────────
   AudioPanel.init(audio, dotAudio, labelAudio);
-
-  // VideoPanel — wire upload to also add to the library
   VideoPanel.init(video, audio, layers, dotVideo, labelVideo);
-
-  // Intercept VideoPanel file changes to also add to VideoLibrary.
-  // We do this by hooking the input-video-file change event after VideoPanel.init().
-  const videoFileInput = document.getElementById('input-video-file');
-  if (videoFileInput) {
-    videoFileInput.addEventListener('change', async e => {
-      const file = e.target.files[0];
-      if (!file) return;
-      // VideoPanel already handles this file — we just also add it to the library
-      try {
-        await videoLibrary.add(file);
-        // Don't show a second toast — VideoPanel already did
-      } catch {}
-    });
-  }
-
   RecordPanel.init(recorder, audio, canvas, renderer);
 
   // ── Tab switching ─────────────────────────────────────────────

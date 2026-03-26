@@ -1,45 +1,135 @@
 /**
  * ui/LibraryPanel.js
- * Unified asset library: Videos, Images, (Audio coming later).
- * Replaces VideoLibraryPanel.js.
+ * Unified asset library: Videos, Images, Audio.
  *
- * FIXES:
- * - Does not set videoLibrary.onChanged — App.js owns that callback.
- *   Instead, App.js calls LibraryPanel.refresh() when the library changes.
- * - Image upload directly loads into an ImageLayer if one is selected,
- *   or stores the file for later assignment.
- * - Video upload adds to VideoLibrary and shows immediately.
- * - Each section is a collapsible tab inside the panel.
+ * FIX — doubling bug: All addEventListener('change') calls on file inputs
+ * happen ONCE inside _createFileInputs() which runs at init time.
+ * _render() only builds the visible UI — it never re-attaches listeners.
  *
- * Usage:
- *   LibraryPanel.init({ videoLibrary, layerStack, getSelectedLayer });
- *   LibraryPanel.refresh();  // call whenever library changes
- *   LibraryPanel.buildVideoPicker(currentId, layer, paramId); // for ParamPanel
+ * Image workflow:
+ * - showAddImagePrompt(layer) — modal shown right after adding an ImageLayer,
+ *   offering: pick from library thumbnails, upload now, or leave blank.
+ * - promptImageForLayer(layer, container) — renders a thumbnail grid inside
+ *   the params panel so you can swap images without leaving params.
+ *
+ * Audio/Video source:
+ * - "Set as audio source" loads a library file into AudioEngine (paused).
+ * - "Set as video source" dispatches 'vael:library-set-video-source' which
+ *   VideoPanel listens for.
+ * - "+ Add Video/Image layer" creates and adds a layer pre-loaded with the asset.
  */
 
 const LibraryPanel = (() => {
 
-  let _videoLibrary    = null;
-  let _layerStack      = null;
+  let _videoLibrary     = null;
+  let _layerStack       = null;
   let _getSelectedLayer = null;
-  let _container       = null;
-  let _activeSection   = 'video';
+  let _container        = null;
+  let _audioEngine      = null;
+  let _activeSection    = 'video';
 
-  // Stored image files: { id, name, url, file }
-  const _images = new Map();
+  const _images     = new Map();
   let   _imgCounter = 0;
 
-  function init({ videoLibrary, layerStack, getSelectedLayer, container }) {
+  const _audioFiles = new Map();
+  let   _audioCounter = 0;
+
+  // ── Init ─────────────────────────────────────────────────────
+
+  function init({ videoLibrary, audioEngine, layerStack,
+                  getSelectedLayer, container }) {
     _videoLibrary     = videoLibrary;
+    _audioEngine      = audioEngine;
     _layerStack       = layerStack;
     _getSelectedLayer = getSelectedLayer;
     _container        = container;
+
+    // Wire file inputs ONCE — this is the only place addEventListener is called
+    _createFileInputs();
     _render();
   }
 
-  function refresh() {
-    if (_container) _render();
+  function _createFileInputs() {
+    // Video
+    const vi = _makeInput('_lib-video-input', 'video/*', true);
+    vi.addEventListener('change', async e => {
+      const files = Array.from(e.target.files);
+      for (const file of files) {
+        try {
+          await _videoLibrary.add(file);
+          Toast.success(`Video added: ${file.name}`);
+        } catch { Toast.error(`Could not load: ${file.name}`); }
+      }
+      e.target.value = '';
+      _render();
+    });
+
+    // Image
+    const ii = _makeInput('_lib-image-input', 'image/*', true);
+    ii.addEventListener('change', e => {
+      Array.from(e.target.files).forEach(file => {
+        const id  = `img-${++_imgCounter}-${Date.now()}`;
+        const url = URL.createObjectURL(file);
+        _images.set(id, { id, name: file.name, url, file });
+        Toast.success(`Image added: ${file.name}`);
+      });
+      e.target.value = '';
+      _render();
+    });
+
+    // Audio
+    const ai = _makeInput('_lib-audio-input', 'audio/*,video/*', true);
+    ai.addEventListener('change', async e => {
+      for (const file of Array.from(e.target.files)) {
+        const id       = `aud-${++_audioCounter}-${Date.now()}`;
+        const url      = URL.createObjectURL(file);
+        const duration = await _getAudioDuration(url);
+        _audioFiles.set(id, { id, name: file.name, url, file, duration });
+        Toast.success(`Audio added: ${file.name}`);
+      }
+      e.target.value = '';
+      _render();
+    });
+
+    // Single-file image input used by the "upload now" flow in showAddImagePrompt
+    const si = _makeInput('_lib-image-single-input', 'image/*', false);
+    si.addEventListener('change', e => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const id  = `img-${++_imgCounter}-${Date.now()}`;
+      const url = URL.createObjectURL(file);
+      _images.set(id, { id, name: file.name, url, file });
+      e.target.value = '';
+      _render();
+      // Dispatch so App.js can load it into the pending ImageLayer
+      window.dispatchEvent(new CustomEvent('vael:image-single-added', {
+        detail: { id, name: file.name, url, file }
+      }));
+    });
   }
+
+  function _makeInput(id, accept, multiple) {
+    const el       = document.createElement('input');
+    el.id          = id;
+    el.type        = 'file';
+    el.accept      = accept;
+    el.multiple    = !!multiple;
+    el.style.cssText = 'position:fixed;opacity:0;pointer-events:none;top:-999px';
+    document.body.appendChild(el);
+    return el;
+  }
+
+  async function _getAudioDuration(url) {
+    return new Promise(resolve => {
+      const tmp = document.createElement('audio');
+      tmp.src   = url;
+      tmp.addEventListener('loadedmetadata', () => resolve(tmp.duration || 0));
+      setTimeout(() => resolve(0), 5000);
+      tmp.load();
+    });
+  }
+
+  function refresh() { if (_container) _render(); }
 
   // ── Main render ───────────────────────────────────────────────
 
@@ -47,278 +137,386 @@ const LibraryPanel = (() => {
     if (!_container) return;
     _container.innerHTML = '';
 
-    // Section tabs
     const tabRow = document.createElement('div');
-    tabRow.style.cssText = `
-      display: flex;
-      gap: 0;
-      margin-bottom: 14px;
-      border: 1px solid var(--border-dim);
-      border-radius: 5px;
-      overflow: hidden;
-    `;
+    tabRow.style.cssText = 'display:flex;gap:0;margin-bottom:14px;border:1px solid var(--border-dim);border-radius:5px;overflow:hidden';
 
-    ['video', 'image'].forEach(section => {
+    const tabs = [
+      { id: 'video', label: `▶ Videos (${_videoLibrary?.count ?? 0})` },
+      { id: 'image', label: `🖼 Images (${_images.size})` },
+      { id: 'audio', label: `♪ Audio (${_audioFiles.size})` },
+    ];
+
+    tabs.forEach((tab, i) => {
       const btn = document.createElement('button');
-      btn.style.cssText = `
-        flex: 1;
-        padding: 7px 4px;
-        background: ${_activeSection === section ? 'color-mix(in srgb,var(--accent) 12%,var(--bg-card))' : 'var(--bg-card)'};
-        border: none;
-        border-right: 1px solid var(--border-dim);
-        color: ${_activeSection === section ? 'var(--accent)' : 'var(--text-dim)'};
-        font-family: var(--font-mono);
-        font-size: 9px;
-        letter-spacing: 1px;
-        cursor: pointer;
-        text-transform: uppercase;
-      `;
-      btn.textContent = section === 'video' ? `▶ Videos (${_videoLibrary?.count ?? 0})`
-                                             : `🖼 Images (${_images.size})`;
-      btn.addEventListener('click', () => { _activeSection = section; _render(); });
+      const active = _activeSection === tab.id;
+      btn.style.cssText = `flex:1;padding:7px 4px;background:${active
+        ? 'color-mix(in srgb,var(--accent) 12%,var(--bg-card))' : 'var(--bg-card)'};
+        border:none;${i < tabs.length - 1 ? 'border-right:1px solid var(--border-dim);' : ''}
+        color:${active ? 'var(--accent)' : 'var(--text-dim)'};
+        font-family:var(--font-mono);font-size:9px;letter-spacing:1px;cursor:pointer;text-transform:uppercase`;
+      btn.textContent = tab.label;
+      btn.addEventListener('click', () => { _activeSection = tab.id; _render(); });
       tabRow.appendChild(btn);
     });
-    // Remove last border-right
-    tabRow.lastChild.style.borderRight = 'none';
+
     _container.appendChild(tabRow);
 
-    if (_activeSection === 'video') _renderVideoSection();
-    else                             _renderImageSection();
+    if      (_activeSection === 'video') _renderVideoSection();
+    else if (_activeSection === 'image') _renderImageSection();
+    else                                  _renderAudioSection();
   }
 
   // ── Video section ─────────────────────────────────────────────
 
   function _renderVideoSection() {
-    const intro = document.createElement('p');
-    intro.style.cssText = 'font-size:10px;color:var(--text-muted);line-height:1.6;margin-bottom:12px';
-    intro.textContent   = 'Upload video files here. Assign them to Video layers via the PARAMS tab.';
-    _container.appendChild(intro);
+    _addIntro('Upload videos here. Use "Set as video source" to send to the VIDEO tab, or "+ Add layer" to create a Video layer pre-loaded with this file.');
 
-    // Upload button
-    const uploadBtn = document.createElement('button');
-    uploadBtn.className        = 'btn accent';
-    uploadBtn.style.width      = '100%';
-    uploadBtn.style.marginBottom = '14px';
-    uploadBtn.textContent      = '+ Add video files…';
-    _container.appendChild(uploadBtn);
-
-    // Hidden file input — in body so dialog opens reliably
-    let fileInput = document.getElementById('_lib-video-input');
-    if (!fileInput) {
-      fileInput          = document.createElement('input');
-      fileInput.id       = '_lib-video-input';
-      fileInput.type     = 'file';
-      fileInput.accept   = 'video/*';
-      fileInput.multiple = true;
-      fileInput.style.cssText = 'position:fixed;opacity:0;pointer-events:none;top:-999px';
-      document.body.appendChild(fileInput);
-    }
-
-    uploadBtn.addEventListener('click', () => { fileInput.value = ''; fileInput.click(); });
-
-    fileInput.addEventListener('change', async e => {
-      const files = Array.from(e.target.files);
-      if (!files.length) return;
-      uploadBtn.textContent = `Loading ${files.length} file${files.length > 1 ? 's' : ''}…`;
-      uploadBtn.disabled    = true;
-      for (const file of files) {
-        try {
-          await _videoLibrary.add(file);
-          Toast.success(`Video added: ${file.name}`);
-        } catch (err) {
-          Toast.error(`Could not load: ${file.name}`);
-          console.error(err);
-        }
-      }
-      uploadBtn.textContent = '+ Add video files…';
-      uploadBtn.disabled    = false;
-      _render();
+    const uploadBtn = _addUploadBtn('+ Add video files…');
+    uploadBtn.addEventListener('click', () => {
+      document.getElementById('_lib-video-input').value = '';
+      document.getElementById('_lib-video-input').click();
     });
 
-    // Empty state
     if (!_videoLibrary || _videoLibrary.count === 0) {
-      const empty = document.createElement('div');
-      empty.style.cssText = `
-        text-align:center; padding:24px 12px;
-        border:1px dashed var(--border-dim); border-radius:6px;
-        font-family:var(--font-mono); font-size:9px; color:var(--text-dim); line-height:1.8;
-      `;
-      empty.innerHTML = 'No videos yet.<br>Add files above, then assign them<br>to Video layers in PARAMS.';
-      _container.appendChild(empty);
+      _addEmpty('No videos yet.<br>Add files above.');
       return;
     }
 
-    // Video list
-    const label = document.createElement('div');
-    label.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px';
-    label.textContent   = `${_videoLibrary.count} video${_videoLibrary.count !== 1 ? 's' : ''}`;
-    _container.appendChild(label);
+    _addSectionLabel(`${_videoLibrary.count} video${_videoLibrary.count !== 1 ? 's' : ''}`);
 
     _videoLibrary.entries.forEach(entry => {
-      const card = document.createElement('div');
-      card.style.cssText = `
-        background:var(--bg-card); border:1px solid var(--border-dim);
-        border-radius:5px; padding:8px 10px; margin-bottom:6px;
-        display:flex; align-items:center; gap:8px;
-      `;
+      const card = _card();
 
-      // Mini preview
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+
       const preview = document.createElement('video');
-      preview.src         = entry.url;
-      preview.muted       = true;
-      preview.loop        = true;
-      preview.playsInline = true;
+      preview.src = entry.url; preview.muted = true; preview.loop = true; preview.playsInline = true;
       preview.style.cssText = 'width:54px;height:34px;object-fit:cover;border-radius:3px;flex-shrink:0;background:#000';
       preview.play().catch(() => {});
-      card.appendChild(preview);
+      row.appendChild(preview);
 
       const info = document.createElement('div');
       info.style.cssText = 'flex:1;min-width:0';
-      info.innerHTML = `
-        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);
-                    overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-          ${entry.name}
-        </div>
-        <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-top:2px">
-          ${VaelMath.formatTime(entry.duration)}
-        </div>
-      `;
-      card.appendChild(info);
+      info.innerHTML = `<div style="font-family:var(--font-mono);font-size:9px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${entry.name}</div>
+        <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-top:2px">${VaelMath.formatTime(entry.duration)}</div>`;
+      row.appendChild(info);
+      row.appendChild(_delBtn(() => { _videoLibrary.remove(entry.id); _render(); }));
+      card.appendChild(row);
 
-      const delBtn = document.createElement('button');
-      delBtn.style.cssText = 'background:none;border:none;color:#ff4444;cursor:pointer;font-size:11px;flex-shrink:0;padding:2px';
-      delBtn.textContent   = '✕';
-      delBtn.title         = 'Remove from library';
-      delBtn.addEventListener('click', () => {
-        _videoLibrary.remove(entry.id);
-        Toast.info(`Removed: ${entry.name}`);
-        _render();
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex;gap:4px';
+
+      const addBtn = _smallBtn('+ Add layer', 'accent');
+      addBtn.addEventListener('click', () => {
+        if (!_layerStack) return;
+        const layer = new VideoPlayerLayer(`video-${Date.now()}`, null);
+        layer.params.videoId = entry.id;
+        layer.name = entry.name.replace(/\.[^.]+$/, '');
+        if (typeof layer.init === 'function') layer.init(layer.params);
+        _layerStack.add(layer);
+        Toast.success(`Video layer added: ${layer.name}`);
       });
-      card.appendChild(delBtn);
+      btnRow.appendChild(addBtn);
 
-      _container.appendChild(card);
+      const srcBtn = _smallBtn('Set as video source', '');
+      srcBtn.addEventListener('click', () => {
+        window.dispatchEvent(new CustomEvent('vael:library-set-video-source', { detail: entry }));
+        document.querySelector('[data-tab="video"]')?.click();
+      });
+      btnRow.appendChild(srcBtn);
+
+      card.appendChild(btnRow);
     });
   }
 
   // ── Image section ─────────────────────────────────────────────
 
   function _renderImageSection() {
-    const intro = document.createElement('p');
-    intro.style.cssText = 'font-size:10px;color:var(--text-muted);line-height:1.6;margin-bottom:12px';
-    intro.textContent   = 'Upload images here, then click "Load into layer" to apply to a selected Image layer.';
-    _container.appendChild(intro);
+    _addIntro('Upload images here. Use "+ Add layer" to create a new Image layer, or select an existing Image layer and click "Load into selected".');
 
-    // Upload button
-    const uploadBtn = document.createElement('button');
-    uploadBtn.className        = 'btn accent';
-    uploadBtn.style.width      = '100%';
-    uploadBtn.style.marginBottom = '14px';
-    uploadBtn.textContent      = '+ Add image files…';
-    _container.appendChild(uploadBtn);
-
-    let fileInput = document.getElementById('_lib-image-input');
-    if (!fileInput) {
-      fileInput          = document.createElement('input');
-      fileInput.id       = '_lib-image-input';
-      fileInput.type     = 'file';
-      fileInput.accept   = 'image/*';
-      fileInput.multiple = true;
-      fileInput.style.cssText = 'position:fixed;opacity:0;pointer-events:none;top:-999px';
-      document.body.appendChild(fileInput);
-    }
-
-    uploadBtn.addEventListener('click', () => { fileInput.value = ''; fileInput.click(); });
-
-    fileInput.addEventListener('change', e => {
-      Array.from(e.target.files).forEach(file => {
-        const id  = `img-${++_imgCounter}-${Date.now()}`;
-        const url = URL.createObjectURL(file);
-        _images.set(id, { id, name: file.name, url, file });
-        Toast.success(`Image added: ${file.name}`);
-      });
-      _render();
+    const uploadBtn = _addUploadBtn('+ Add image files…');
+    uploadBtn.addEventListener('click', () => {
+      document.getElementById('_lib-image-input').value = '';
+      document.getElementById('_lib-image-input').click();
     });
 
-    // Empty state
     if (_images.size === 0) {
-      const empty = document.createElement('div');
-      empty.style.cssText = `
-        text-align:center; padding:24px 12px;
-        border:1px dashed var(--border-dim); border-radius:6px;
-        font-family:var(--font-mono); font-size:9px; color:var(--text-dim); line-height:1.8;
-      `;
-      empty.innerHTML = 'No images yet.<br>Add files above, select an Image layer,<br>then click Load into layer.';
-      _container.appendChild(empty);
+      _addEmpty('No images yet.<br>Add files above.');
       return;
     }
 
-    const label = document.createElement('div');
-    label.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px';
-    label.textContent   = `${_images.size} image${_images.size !== 1 ? 's' : ''}`;
-    _container.appendChild(label);
+    _addSectionLabel(`${_images.size} image${_images.size !== 1 ? 's' : ''}`);
 
     _images.forEach(entry => {
-      const card = document.createElement('div');
-      card.style.cssText = `
-        background:var(--bg-card); border:1px solid var(--border-dim);
-        border-radius:5px; padding:8px 10px; margin-bottom:6px;
-      `;
+      const card = _card();
 
-      // Preview row
-      const previewRow = document.createElement('div');
-      previewRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
 
       const img = document.createElement('img');
-      img.src   = entry.url;
-      img.style.cssText = 'width:54px;height:34px;object-fit:cover;border-radius:3px;flex-shrink:0;background:#000';
-      previewRow.appendChild(img);
+      img.src = entry.url;
+      img.style.cssText = 'width:54px;height:34px;object-fit:cover;border-radius:3px;flex-shrink:0;background:#111';
+      row.appendChild(img);
 
       const info = document.createElement('div');
       info.style.cssText = 'flex:1;min-width:0';
-      info.innerHTML = `
-        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);
-                    overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-          ${entry.name}
-        </div>
-      `;
-      previewRow.appendChild(info);
+      info.innerHTML = `<div style="font-family:var(--font-mono);font-size:9px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${entry.name}</div>`;
+      row.appendChild(info);
+      row.appendChild(_delBtn(() => { URL.revokeObjectURL(entry.url); _images.delete(entry.id); _render(); }));
+      card.appendChild(row);
 
-      const delBtn = document.createElement('button');
-      delBtn.style.cssText = 'background:none;border:none;color:#ff4444;cursor:pointer;font-size:11px;flex-shrink:0;padding:2px';
-      delBtn.textContent   = '✕';
-      delBtn.addEventListener('click', () => {
-        URL.revokeObjectURL(entry.url);
-        _images.delete(entry.id);
-        _render();
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex;gap:4px';
+
+      const addBtn = _smallBtn('+ Add layer', 'accent');
+      addBtn.addEventListener('click', async () => {
+        if (!_layerStack) return;
+        const layer = new ImageLayer(`image-${Date.now()}`);
+        layer.name = entry.name.replace(/\.[^.]+$/, '');
+        if (typeof layer.init === 'function') layer.init({});
+        await layer.loadFile(entry.file);
+        _layerStack.add(layer);
+        Toast.success(`Image layer added: ${layer.name}`);
       });
-      previewRow.appendChild(delBtn);
-      card.appendChild(previewRow);
+      btnRow.appendChild(addBtn);
 
-      // Load into layer button
-      const loadBtn = document.createElement('button');
-      loadBtn.className   = 'btn accent';
-      loadBtn.style.width = '100%';
-      loadBtn.style.fontSize = '9px';
-      loadBtn.textContent = '↑ Load into selected Image layer';
+      const loadBtn = _smallBtn('Load into selected', '');
       loadBtn.addEventListener('click', async () => {
         const layer = _getSelectedLayer ? _getSelectedLayer() : null;
-        if (!layer) { Toast.warn('Select an Image layer first'); return; }
+        if (!layer)                         { Toast.warn('Select an Image layer first'); return; }
         if (!(layer instanceof ImageLayer)) { Toast.warn('Selected layer is not an Image layer'); return; }
-        loadBtn.textContent = 'Loading…';
-        loadBtn.disabled    = true;
+        loadBtn.textContent = 'Loading…'; loadBtn.disabled = true;
         try {
           await layer.loadFile(entry.file);
-          Toast.success(`Loaded into ${layer.name}`);
-        } catch {
-          Toast.error('Could not load image into layer');
-        }
-        loadBtn.textContent = '↑ Load into selected Image layer';
-        loadBtn.disabled    = false;
+          window.dispatchEvent(new CustomEvent('vael:refresh-params'));
+          Toast.success(`Loaded into: ${layer.name}`);
+        } catch { Toast.error('Could not load image'); }
+        loadBtn.textContent = 'Load into selected'; loadBtn.disabled = false;
       });
-      card.appendChild(loadBtn);
+      btnRow.appendChild(loadBtn);
 
-      _container.appendChild(card);
+      card.appendChild(btnRow);
     });
+  }
+
+  // ── Audio section ─────────────────────────────────────────────
+
+  function _renderAudioSection() {
+    _addIntro('Store audio files here. Click "Set as audio source" to load into the AudioEngine ready to play.');
+
+    const uploadBtn = _addUploadBtn('+ Add audio files…');
+    uploadBtn.addEventListener('click', () => {
+      document.getElementById('_lib-audio-input').value = '';
+      document.getElementById('_lib-audio-input').click();
+    });
+
+    if (_audioFiles.size === 0) {
+      _addEmpty('No audio files yet.<br>Add files above.');
+      return;
+    }
+
+    _addSectionLabel(`${_audioFiles.size} audio file${_audioFiles.size !== 1 ? 's' : ''}`);
+
+    _audioFiles.forEach(entry => {
+      const card = _card();
+
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+
+      const icon = document.createElement('div');
+      icon.style.cssText = 'width:36px;height:24px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--accent) 10%,var(--bg));border-radius:3px;flex-shrink:0;font-size:14px';
+      icon.textContent   = '♪';
+      row.appendChild(icon);
+
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0';
+      info.innerHTML = `<div style="font-family:var(--font-mono);font-size:9px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${entry.name}</div>
+        <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-top:2px">${VaelMath.formatTime(entry.duration)}</div>`;
+      row.appendChild(info);
+      row.appendChild(_delBtn(() => { URL.revokeObjectURL(entry.url); _audioFiles.delete(entry.id); _render(); }));
+      card.appendChild(row);
+
+      const srcBtn = _smallBtn('Set as audio source', 'accent');
+      srcBtn.style.width = '100%';
+      srcBtn.addEventListener('click', async () => {
+        if (!_audioEngine) { Toast.warn('Audio engine not available'); return; }
+        srcBtn.textContent = 'Loading…'; srcBtn.disabled = true;
+        try {
+          await _audioEngine.loadFile(entry.file);
+          const fnEl = document.getElementById('audio-filename');
+          const tr   = document.getElementById('audio-transport');
+          const lv   = document.getElementById('audio-levels-section');
+          const dot  = document.getElementById('dot-audio');
+          const lbl  = document.getElementById('label-audio');
+          if (fnEl) fnEl.textContent = entry.name;
+          if (tr)   tr.style.display = 'block';
+          if (lv)   lv.style.display = 'block';
+          if (dot)  dot.classList.remove('inactive');
+          if (lbl)  lbl.textContent  = entry.name.replace(/\.[^.]+$/, '');
+          document.querySelector('[data-tab="audio"]')?.click();
+          Toast.success(`Audio loaded: ${entry.name} — press Play to start`);
+        } catch { Toast.error('Could not load audio file'); }
+        srcBtn.textContent = 'Set as audio source'; srcBtn.disabled = false;
+      });
+      card.appendChild(srcBtn);
+    });
+  }
+
+  // ── showAddImagePrompt — modal shown right after adding an ImageLayer ──
+
+  function showAddImagePrompt(layer) {
+    document.getElementById('_img-add-prompt')?.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = '_img-add-prompt';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:1000;backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center';
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:var(--bg-mid);border:1px solid var(--border);border-radius:10px;padding:22px 24px;max-width:380px;width:92%;font-family:var(--font-mono)';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'color:var(--accent);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:14px';
+    title.textContent   = 'New Image Layer — Load an image';
+    dialog.appendChild(title);
+
+    // Library thumbnails
+    if (_images.size > 0) {
+      const libLabel = document.createElement('div');
+      libLabel.style.cssText = 'font-size:8px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px';
+      libLabel.textContent   = 'Pick from library';
+      dialog.appendChild(libLabel);
+
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(4,1fr);gap:5px;margin-bottom:14px';
+
+      _images.forEach(entry => {
+        const cell = document.createElement('div');
+        cell.style.cssText = 'cursor:pointer;border-radius:4px;overflow:hidden;border:2px solid var(--border-dim);transition:border-color 0.15s;aspect-ratio:1;background:#111';
+
+        const img = document.createElement('img');
+        img.src   = entry.url;
+        img.style.cssText = 'width:100%;height:100%;object-fit:cover;display:block';
+        cell.appendChild(img);
+
+        cell.addEventListener('mouseenter', () => { cell.style.borderColor = 'var(--accent)'; });
+        cell.addEventListener('mouseleave', () => { cell.style.borderColor = 'var(--border-dim)'; });
+        cell.addEventListener('click', async () => {
+          overlay.remove();
+          await layer.loadFile(entry.file);
+          window.dispatchEvent(new CustomEvent('vael:refresh-params'));
+          Toast.success(`Image loaded: ${entry.name}`);
+        });
+
+        grid.appendChild(cell);
+      });
+
+      dialog.appendChild(grid);
+
+      const div = document.createElement('div');
+      div.style.cssText = 'height:1px;background:var(--border-dim);margin-bottom:12px';
+      dialog.appendChild(div);
+    }
+
+    // Action buttons
+    const uploadBtn = document.createElement('button');
+    uploadBtn.className   = 'btn accent';
+    uploadBtn.style.cssText = 'width:100%;margin-bottom:8px';
+    uploadBtn.textContent = '↑ Upload image now';
+    uploadBtn.addEventListener('click', () => {
+      overlay.remove();
+      // Single-file picker — listener in _createFileInputs fires vael:image-single-added
+      // which App.js catches and loads into this layer
+      window._pendingImageLayer = layer;
+      document.getElementById('_lib-image-single-input').value = '';
+      document.getElementById('_lib-image-single-input').click();
+    });
+    dialog.appendChild(uploadBtn);
+
+    const blankBtn = document.createElement('button');
+    blankBtn.className   = 'btn';
+    blankBtn.style.cssText = 'width:100%;color:var(--text-dim)';
+    blankBtn.textContent = 'Leave blank — load later';
+    blankBtn.addEventListener('click', () => overlay.remove());
+    dialog.appendChild(blankBtn);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  }
+
+  // ── promptImageForLayer — thumbnail grid inside params panel ──
+
+  function promptImageForLayer(layer, container) {
+    container.innerHTML = '';
+
+    const statusEl = document.createElement('div');
+    statusEl.style.cssText = 'font-family:var(--font-mono);font-size:9px;margin-bottom:12px;' +
+      (layer._loaded ? 'color:var(--accent)' : 'color:var(--text-dim)');
+    statusEl.textContent = layer._loaded ? `✓ ${layer._fileName}` : 'No image loaded';
+    container.appendChild(statusEl);
+
+    // Upload button
+    const uploadBtn = document.createElement('button');
+    uploadBtn.className   = 'btn accent';
+    uploadBtn.style.cssText = 'width:100%;margin-bottom:12px';
+    uploadBtn.textContent = '↑ Upload image file…';
+    uploadBtn.addEventListener('click', () => {
+      window._pendingImageLayer = layer;
+      document.getElementById('_lib-image-single-input').value = '';
+      document.getElementById('_lib-image-single-input').click();
+    });
+    container.appendChild(uploadBtn);
+
+    if (_images.size > 0) {
+      const libLabel = document.createElement('div');
+      libLabel.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px';
+      libLabel.textContent   = 'Pick from library';
+      container.appendChild(libLabel);
+
+      const grid = document.createElement('div');
+      grid.style.cssText = 'display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-bottom:14px';
+
+      _images.forEach(entry => {
+        const cell = document.createElement('div');
+        const isActive = layer._loaded && layer._fileName === entry.name;
+        cell.style.cssText = `cursor:pointer;border-radius:4px;overflow:hidden;
+          border:2px solid ${isActive ? 'var(--accent)' : 'var(--border-dim)'};
+          transition:border-color 0.15s;background:#111`;
+
+        const img = document.createElement('img');
+        img.src   = entry.url;
+        img.style.cssText = 'width:100%;aspect-ratio:1;object-fit:cover;display:block';
+        cell.appendChild(img);
+
+        const name = document.createElement('div');
+        name.style.cssText = 'font-family:var(--font-mono);font-size:7px;color:var(--text-dim);padding:2px 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:rgba(0,0,0,0.7)';
+        name.textContent   = entry.name.replace(/\.[^.]+$/, '');
+        cell.appendChild(name);
+
+        cell.addEventListener('mouseenter', () => { if (!isActive) cell.style.borderColor = 'var(--accent2)'; });
+        cell.addEventListener('mouseleave', () => { if (!isActive) cell.style.borderColor = 'var(--border-dim)'; });
+        cell.addEventListener('click', async () => {
+          await layer.loadFile(entry.file);
+          statusEl.textContent = `✓ ${layer._fileName}`;
+          statusEl.style.color = 'var(--accent)';
+          grid.querySelectorAll('div[style*="border"]').forEach(c => {
+            c.style.borderColor = 'var(--border-dim)';
+          });
+          cell.style.borderColor = 'var(--accent)';
+          Toast.success(`Image loaded: ${entry.name}`);
+        });
+
+        grid.appendChild(cell);
+      });
+
+      container.appendChild(grid);
+    } else {
+      const hint = document.createElement('p');
+      hint.style.cssText = 'font-size:9px;color:var(--text-dim);line-height:1.6;margin-bottom:14px';
+      hint.innerHTML = 'No images in library. Go to <strong style="color:var(--accent2)">LIBRARY → Images</strong> to add files.';
+      container.appendChild(hint);
+    }
   }
 
   // ── Video picker for ParamPanel ───────────────────────────────
@@ -326,43 +524,91 @@ const LibraryPanel = (() => {
   function buildVideoPicker(currentId, layer, paramId) {
     const wrap = document.createElement('div');
     wrap.style.cssText = 'margin-bottom:14px';
-
     const entries = _videoLibrary ? _videoLibrary.entries : [];
-
     wrap.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
         <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted)">Video source</span>
         <span style="font-family:var(--font-mono);font-size:8px;color:var(--accent2)">library</span>
       </div>
-      <select style="
-        width:100%;
-        background:color-mix(in srgb,var(--accent2) 10%,var(--bg));
-        border:1px solid color-mix(in srgb,var(--accent2) 40%,transparent);
-        border-radius:4px; color:var(--accent2);
-        font-family:var(--font-mono); font-size:10px; padding:5px 8px; cursor:pointer;
-      ">
+      <select style="width:100%;background:color-mix(in srgb,var(--accent2) 10%,var(--bg));
+        border:1px solid color-mix(in srgb,var(--accent2) 40%,transparent);border-radius:4px;
+        color:var(--accent2);font-family:var(--font-mono);font-size:10px;padding:5px 8px;cursor:pointer">
         <option value="">— none (use Video tab source) —</option>
-        ${entries.map(e =>
-          `<option value="${e.id}" ${e.id === currentId ? 'selected' : ''}>
-            ${e.name} (${VaelMath.formatTime(e.duration)})
-          </option>`
-        ).join('')}
+        ${entries.map(e => `<option value="${e.id}" ${e.id === currentId ? 'selected' : ''}>${e.name} (${VaelMath.formatTime(e.duration)})</option>`).join('')}
       </select>
-      ${entries.length === 0
-        ? `<div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-top:4px">
-             Add videos in the LIBRARY tab first.
-           </div>`
-        : ''}
+      ${entries.length === 0 ? '<div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-top:4px">Add videos in the LIBRARY tab first.</div>' : ''}
     `;
-
     wrap.querySelector('select').addEventListener('change', e => {
       if (layer.params) layer.params[paramId] = e.target.value;
       if (typeof layer.setParam === 'function') layer.setParam(paramId, e.target.value);
     });
-
     return wrap;
   }
 
-  return { init, refresh, buildVideoPicker };
+  // ── DOM helpers ───────────────────────────────────────────────
+
+  function _addIntro(text) {
+    const p = document.createElement('p');
+    p.style.cssText = 'font-size:10px;color:var(--text-muted);line-height:1.6;margin-bottom:12px';
+    p.textContent   = text;
+    _container.appendChild(p);
+  }
+
+  function _addUploadBtn(label) {
+    const btn = document.createElement('button');
+    btn.className        = 'btn accent';
+    btn.style.width      = '100%';
+    btn.style.marginBottom = '14px';
+    btn.textContent      = label;
+    _container.appendChild(btn);
+    return btn;
+  }
+
+  function _addEmpty(html) {
+    const d = document.createElement('div');
+    d.style.cssText = 'text-align:center;padding:24px 12px;border:1px dashed var(--border-dim);border-radius:6px;font-family:var(--font-mono);font-size:9px;color:var(--text-dim);line-height:1.8';
+    d.innerHTML     = html;
+    _container.appendChild(d);
+  }
+
+  function _addSectionLabel(text) {
+    const d = document.createElement('div');
+    d.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px';
+    d.textContent   = text;
+    _container.appendChild(d);
+  }
+
+  function _card() {
+    const d = document.createElement('div');
+    d.style.cssText = 'background:var(--bg-card);border:1px solid var(--border-dim);border-radius:5px;padding:8px 10px;margin-bottom:6px';
+    _container.appendChild(d);
+    return d;
+  }
+
+  function _delBtn(onClick) {
+    const btn = document.createElement('button');
+    btn.style.cssText = 'background:none;border:none;color:#ff4444;cursor:pointer;font-size:11px;flex-shrink:0;padding:2px';
+    btn.textContent   = '✕';
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  function _smallBtn(label, variant) {
+    const btn = document.createElement('button');
+    btn.className   = variant ? `btn ${variant}` : 'btn';
+    btn.style.cssText = 'flex:1;font-size:9px;padding:5px 6px';
+    btn.textContent = label;
+    return btn;
+  }
+
+  function getImages() { return [..._images.values()]; }
+
+  return {
+    init, refresh,
+    buildVideoPicker,
+    promptImageForLayer,
+    showAddImagePrompt,
+    getImages,
+  };
 
 })();

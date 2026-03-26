@@ -146,9 +146,17 @@ class MathVisualizer extends BaseLayer {
 
     if (digits.length === 0) return;
 
+    // Auto-centre: for modes that wander (path, walk, tree, lsystem) we
+    // compute the bounding box with a fast dry run and offset so the shape
+    // always sits in the middle of the canvas.
+    // Centred modes (circle, chaos, spiral, polar, wave, constellation)
+    // return [0, 0] and are unaffected.
+    const [cx, cy] = this._computeCenter(digits, width, height);
+
     ctx.save();
     const beatScale = 1 + this._beatPulse * 0.06;
     ctx.scale(this._zoomSmooth * beatScale, this._zoomSmooth * beatScale);
+    if (cx !== 0 || cy !== 0) ctx.translate(-cx, -cy);
 
     switch (this.params.mode) {
       case 'path':          this._drawPath(ctx, digits, width, height);          break;
@@ -225,6 +233,75 @@ class MathVisualizer extends BaseLayer {
       default: // rainbow
         return VaelColor.rainbow(t, shift + this._time * 8);
     }
+  }
+
+  // ── Auto-centering ────────────────────────────────────────────
+  // Computes the centroid of points that would be drawn for wandering modes
+  // (path, walk, tree, lsystem). Returns [offsetX, offsetY] to translate by.
+  // For centred modes returns [0, 0] — no adjustment needed.
+
+  _computeCenter(digits, width, height) {
+    const mode = this.params.mode;
+
+    // These modes are already centred around origin — skip
+    if (['circle','chaos','spiral','polar','wave','constellation'].includes(mode)) {
+      return [0, 0];
+    }
+
+    // Dry-run the position calculations (no drawing) to find the centroid
+    const angle = VaelMath.degToRad(this._angleSmooth);
+    let xs = [], ys = [];
+
+    if (mode === 'path') {
+      const step = Math.min(width, height) * 0.018;
+      let x = 0, y = 0, dir = 0;
+      for (let i = 0; i < digits.length - 1; i++) {
+        const d = parseInt(digits[i]);
+        x += Math.cos(dir + angle * d) * step;
+        y += Math.sin(dir + angle * d) * step;
+        dir += angle * d / 5;
+        xs.push(x); ys.push(y);
+      }
+    } else if (mode === 'walk') {
+      const step = Math.min(width, height) * 0.012;
+      const dirs = [[0,-1],[1,-1],[1,0],[1,1],[0,1],[-1,1],[-1,0],[-1,-1],[0,-1],[0,1]];
+      let x = 0, y = 0;
+      for (let i = 0; i < digits.length; i++) {
+        const [dx, dy] = dirs[parseInt(digits[i])];
+        x += dx * step; y += dy * step;
+        xs.push(x); ys.push(y);
+      }
+    } else if (mode === 'tree') {
+      // Tree starts at bottom-centre offset — centre is already reasonable
+      // Just return the translate offset the tree uses
+      return [0, -height * 0.35];
+    } else if (mode === 'lsystem') {
+      const len = Math.min(width, height) * 0.06;
+      const stack = [];
+      let x = 0, y = height * 0.38, dir = -Math.PI / 2;
+      const maxSegs = Math.min(digits.length * 2, 1200);
+      let segCount = 0;
+      for (let i = 0; i < digits.length && segCount < maxSegs; i++) {
+        const d = parseInt(digits[i]);
+        if (d < 3) {
+          x += Math.cos(dir) * len * (0.5 + d * 0.2);
+          y += Math.sin(dir) * len * (0.5 + d * 0.2);
+          xs.push(x); ys.push(y);
+          segCount++;
+        } else if (d < 5) { dir -= angle * (d - 3 + 1); }
+        else if (d < 7)   { dir += angle * (d - 5 + 1); }
+        else if (d === 7) { stack.push({ x, y, dir }); }
+        else if (d === 8 && stack.length > 0) { ({ x, y, dir } = stack.pop()); }
+        else { dir -= angle * 0.5; }
+      }
+    }
+
+    if (xs.length === 0) return [0, 0];
+
+    // Centroid of visited points
+    const cx = xs.reduce((a, b) => a + b, 0) / xs.length;
+    const cy = ys.reduce((a, b) => a + b, 0) / ys.length;
+    return [cx, cy];
   }
 
   // ── Mode: Winding path ───────────────────────────────────────
