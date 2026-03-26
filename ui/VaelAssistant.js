@@ -236,38 +236,29 @@ Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candleligh
 
     const systemPrompt = _buildSystemPrompt();
 
-    return new Promise((resolve, reject) => {
-      // Connect to our secure local bridge
-      const ws = new WebSocket('ws://localhost:8080');
-
-      ws.onopen = () => {
-        // Send the AI request to our local Node.js server
-        ws.send(JSON.stringify({
-          type: 'ai-request',
-          apiKey: apiKey,
-          system: systemPrompt,
-          messages: _messages.concat([{ role: 'user', content: userMessage }])
-        }));
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data);
-          // Only react if this is the AI response (ignore standard OSC traffic)
-          if (data.type === 'ai-response') {
-            ws.close();
-            if (data.error) reject(new Error(data.error));
-            else resolve(data.content);
-          }
-        } catch (e) {
-          // Ignore non-JSON or unrelated messages
-        }
-      };
-
-      ws.onerror = () => {
-        reject(new Error('Could not connect to local osc-bridge. Make sure you are running "node osc-bridge.js" in your terminal.'));
-      };
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key':    apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-io': 'true',
+      },
+      body: JSON.stringify({
+        model:      'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        system:     systemPrompt,
+        messages:   _messages.concat([{ role: 'user', content: userMessage }]),
+      }),
     });
+
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(`API error ${response.status}: ${err.error?.message || response.statusText}`);
+    }
+
+    const data = await response.json();
+    return data.content[0]?.text || '';
   }
 
   // ── UI ────────────────────────────────────────────────────────

@@ -63,7 +63,7 @@ wss.on('connection', ws => {
             'anthropic-version': '2023-06-01'
           },
           body: JSON.stringify({
-            model: 'claude-3-5-sonnet-latest', 
+            model: 'claude-sonnet-4-20250514', 
             max_tokens: 1000,
             system: data.system,
             messages: data.messages
@@ -87,7 +87,7 @@ wss.on('connection', ws => {
   });
 
   ws.on('close', () => {
-    clients.add(ws);
+    clients.delete(ws);
     console.log(`Vael disconnected (${clients.size} remaining)`);
   });
 });

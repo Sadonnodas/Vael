@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Vael — Light onto Sound</title>
+  <link rel="icon" type="image/png" href="Vael-icon.png" />
   <style>
     /* ── Reset & base ─────────────────────────────────────────── */
     *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -462,8 +463,19 @@
   <div id="sidebar">
 
     <div id="sidebar-header">
-      <div id="sidebar-title">VAEL</div>
-      <div id="sidebar-tagline">Light onto Sound</div>
+      <img id="vael-logo" src="Vael-logo.png" alt="Vael"
+        onerror="this.style.display='none';document.getElementById('sidebar-title-fallback').style.display='block'"
+        style="
+          display: block;
+          margin: 0 auto 4px auto;   /* centered horizontally */
+          height: 52px;              /* ← adjust this to resize */
+          max-width: 100%;
+          object-fit: contain;
+        " />
+      <div id="sidebar-title-fallback" style="display:none">
+        <div id="sidebar-title">VAEL</div>
+        <div id="sidebar-tagline">Light onto Sound</div>
+      </div>
     </div>
 
     <div id="sidebar-tabs">

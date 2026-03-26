@@ -197,22 +197,56 @@ const ParamPanel = (() => {
   // Colour picker
   function buildColorPicker(param, current, layer) {
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;';
+    wrap.style.cssText = 'margin-bottom:14px;';
+
+    const safeColor = (current && /^#[0-9a-fA-F]{3,6}$/.test(current)) ? current : '#00d4aa';
 
     wrap.innerHTML = `
-      <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted)">
-        ${param.label}
-      </span>
-      <input type="color" value="${current || '#00d4aa'}" style="
-        width:36px;height:24px;padding:2px;
-        border:1px solid var(--border);border-radius:4px;
-        background:var(--bg);cursor:pointer;
-      " />
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+        <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted)">${param.label}</span>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center">
+        <input type="color" class="cp-swatch" value="${safeColor}" style="
+          width:36px;height:28px;padding:2px;flex-shrink:0;
+          border:1px solid var(--border);border-radius:4px;
+          background:var(--bg);cursor:pointer;
+        " />
+        <input type="text" class="cp-hex" value="${safeColor}" maxlength="7"
+          placeholder="#rrggbb"
+          style="flex:1;background:var(--bg);border:1px solid var(--border);
+                 border-radius:4px;color:var(--text);font-family:var(--font-mono);
+                 font-size:10px;padding:4px 8px;letter-spacing:1px;" />
+      </div>
     `;
 
-    wrap.querySelector('input').addEventListener('input', e => {
-      if (layer.params) layer.params[param.id] = e.target.value;
-      if (typeof layer.setParam === 'function') layer.setParam(param.id, e.target.value);
+    const swatch = wrap.querySelector('.cp-swatch');
+    const hexIn  = wrap.querySelector('.cp-hex');
+
+    const applyColor = (val) => {
+      if (layer.params) layer.params[param.id] = val;
+      if (typeof layer.setParam === 'function') layer.setParam(param.id, val);
+    };
+
+    swatch.addEventListener('input', e => {
+      hexIn.value = e.target.value;
+      applyColor(e.target.value);
+    });
+
+    hexIn.addEventListener('input', e => {
+      const v = e.target.value.trim();
+      if (/^#[0-9a-fA-F]{6}$/.test(v) || /^#[0-9a-fA-F]{3}$/.test(v)) {
+        swatch.value = v;
+        applyColor(v);
+        hexIn.style.borderColor = 'var(--border)';
+      } else {
+        hexIn.style.borderColor = '#ff4444';
+      }
+    });
+
+    hexIn.addEventListener('blur', e => {
+      // Auto-fix partial hex on blur
+      const v = e.target.value.trim();
+      if (!v.startsWith('#')) { hexIn.value = '#' + v; }
     });
 
     return wrap;

@@ -45,6 +45,11 @@ const LayerPanel = (() => {
     _layers.onChanged = () => renderLayerList();
     _wireGroupButton();
     _startThumbUpdater();
+
+    // Wire add-layer button now that _layerTypes is populated
+    document.getElementById('btn-add-layer')?.addEventListener('click', () => {
+      showLayerPicker();
+    });
   }
 
   function setSelectedId(id) { _selectedLayerId = id; }
@@ -81,6 +86,7 @@ const LayerPanel = (() => {
 
   function selectLayer(id) {
     _selectedLayerId = id;
+    if (!_paramsEmptyEl || !_paramsContentEl) return;  // DOM not ready yet
 
     // Search both top-level layers and group children
     let layer = _layers.layers.find(l => l.id === id);
@@ -121,6 +127,7 @@ const LayerPanel = (() => {
   // ── Multi-select state ───────────────────────────────────────
 
   function renderLayerList() {
+    if (!_layerListEl) return;   // not yet initialised — skip silently
     _layerListEl.innerHTML = '';
     const hasLayers = _layers.count > 0;
     _emptyStateEl.style.display = hasLayers ? 'none' : 'block';
@@ -138,7 +145,17 @@ const LayerPanel = (() => {
       const row = document.createElement('div');
       row.className    = 'layer-row';
       row.dataset.id   = layer.id;
-      row.draggable    = true;
+      row.draggable = true;
+
+      // Prevent drag when interacting with sliders, selects, inputs inside the row
+      row.addEventListener('mousedown', e => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' ||
+            e.target.tagName === 'BUTTON' || e.target.tagName === 'LABEL') {
+          row.draggable = false;
+        }
+      });
+      row.addEventListener('mouseup',   () => { row.draggable = true; });
+      row.addEventListener('mouseleave',() => { row.draggable = true; });
       row.style.cssText = `
         background: var(--bg-card);
         border: 1px solid ${
@@ -177,31 +194,51 @@ const LayerPanel = (() => {
         _layers._notify();
       });
 
+      // Collapsed state per layer (stored on the layer object)
+      if (layer._rowCollapsed === undefined) layer._rowCollapsed = false;
+
+      const typeName = layer.constructor.name.replace('Layer','').replace('Visualizer','Viz');
+
       row.innerHTML = `
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <div style="display:flex;align-items:center;gap:6px">
           <!-- Thumbnail -->
           <canvas class="layer-thumb" width="36" height="24"
             style="border-radius:3px;flex-shrink:0;background:var(--bg);
                    border:1px solid var(--border-dim);cursor:pointer"
             title="Click to select"></canvas>
+
           <input type="checkbox" class="layer-select-cb"
             ${isMultiSelected ? 'checked' : ''}
             style="accent-color:var(--accent2);cursor:pointer;flex-shrink:0"
             title="Select for grouping" />
+
           <button class="vis-toggle" data-id="${layer.id}" title="Toggle visibility"
-            style="background:none;border:none;cursor:pointer;font-size:13px;
+            style="background:none;border:none;cursor:pointer;font-size:13px;flex-shrink:0;
                    color:${layer.visible ? 'var(--accent)' : 'var(--text-dim)'}">
             ${layer.visible ? '◉' : '○'}
           </button>
-          <span class="layer-name-btn" title="Click to edit params · Double-click to rename"
-            style="flex:1;font-family:var(--font-mono);font-size:10px;color:var(--text);
-                   cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
-            ${layer instanceof GroupLayer ? '⊞ ' : ''}${layer.name}
-          </span>
+
+          <div style="flex:1;min-width:0">
+            <span class="layer-name-btn" title="Click to edit · Double-click to rename"
+              style="font-family:var(--font-mono);font-size:10px;color:var(--text);
+                     cursor:pointer;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+              ${layer instanceof GroupLayer ? '⊞ ' : ''}${layer.name}
+            </span>
+            <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);
+                         opacity:0.6">${typeName}</span>
+          </div>
+
+          <!-- Row collapse toggle -->
+          <button class="row-collapse" title="Collapse/expand"
+            style="background:none;border:none;cursor:pointer;color:var(--text-dim);
+                   font-size:9px;padding:2px;flex-shrink:0">
+            ${layer._rowCollapsed ? '▸' : '▾'}
+          </button>
+
           ${layer instanceof GroupLayer ? `
             <button class="group-collapse" data-id="${layer.id}"
               style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:10px">
-              ${layer.collapsed ? '▸' : '▾'}
+              ${layer.collapsed ? '⊞' : '⊟'}
             </button>
             <button class="group-ungroup" data-id="${layer.id}"
               style="background:none;border:1px solid var(--border-dim);border-radius:3px;
@@ -211,29 +248,33 @@ const LayerPanel = (() => {
             <button class="layer-up"   data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px" title="Move up">↑</button>
             <button class="layer-down" data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px" title="Move down">↓</button>
           `}
-          <button class="layer-del"  data-id="${layer.id}" style="background:none;border:none;cursor:pointer;color:#ff4444;font-size:11px" title="Remove">✕</button>
+          <button class="layer-del" data-id="${layer.id}"
+            style="background:none;border:none;cursor:pointer;color:#ff4444;font-size:11px" title="Remove">✕</button>
         </div>
-        <div style="display:flex;align-items:center;gap:8px">
-          <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);width:30px">opac</span>
-          <input type="range" class="opacity-sl" data-id="${layer.id}"
-            min="0" max="1" step="0.01" value="${layer.opacity}"
-            style="flex:1;accent-color:var(--accent)">
-          <span class="opacity-val" style="font-family:var(--font-mono);font-size:9px;
-                color:var(--accent);width:28px;text-align:right">
-            ${Math.round(layer.opacity * 100)}%
-          </span>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;margin-top:5px">
-          <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);width:30px">blend</span>
-          <select class="blend-sel" data-id="${layer.id}"
-            style="flex:1;background:var(--bg);border:1px solid var(--border);
-                   color:var(--text);font-family:var(--font-mono);font-size:9px;
-                   padding:3px;border-radius:3px">
-            ${_blendModes.map(m =>
-              `<option value="${m}" ${layer.blendMode === m ? 'selected' : ''}>${m}</option>`
-            ).join('')}
-          </select>
-        </div>
+
+        <!-- Collapsible body -->
+        <div class="row-body" style="display:${layer._rowCollapsed ? 'none' : 'block'};margin-top:6px">
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);width:30px">opac</span>
+            <input type="range" class="opacity-sl" data-id="${layer.id}"
+              min="0" max="1" step="0.01" value="${layer.opacity}"
+              style="flex:1;accent-color:var(--accent)">
+            <span class="opacity-val" style="font-family:var(--font-mono);font-size:9px;
+                  color:var(--accent);width:28px;text-align:right">
+              ${Math.round(layer.opacity * 100)}%
+            </span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:5px">
+            <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);width:30px">blend</span>
+            <select class="blend-sel" data-id="${layer.id}"
+              style="flex:1;background:var(--bg);border:1px solid var(--border);
+                     color:var(--text);font-family:var(--font-mono);font-size:9px;
+                     padding:3px;border-radius:3px">
+              ${_blendModes.map(m =>
+                `<option value="${m}" ${layer.blendMode === m ? 'selected' : ''}>${m}</option>`
+              ).join('')}
+            </select>
+          </div>
         <div style="display:flex;align-items:center;gap:8px;margin-top:5px">
           <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);width:30px">mask</span>
           <select class="mask-sel" data-id="${layer.id}"
@@ -302,10 +343,21 @@ const LayerPanel = (() => {
             </div>
           </div>
         </div>
+        </div><!-- /row-body -->
       `;
 
+      // Row collapse toggle
+      row.querySelector('.row-collapse')?.addEventListener('click', e => {
+        e.stopPropagation();
+        layer._rowCollapsed = !layer._rowCollapsed;
+        const body = row.querySelector('.row-body');
+        const btn  = row.querySelector('.row-collapse');
+        if (body) body.style.display = layer._rowCollapsed ? 'none' : 'block';
+        if (btn)  btn.textContent     = layer._rowCollapsed ? '▸' : '▾';
+      });
+
       // Multi-select checkbox
-      row.querySelector('.layer-select-cb').addEventListener('change', e => {
+      row.querySelector('.layer-select-cb')?.addEventListener('change', e => {
         if (e.target.checked) _multiSelect.add(layer.id);
         else                  _multiSelect.delete(layer.id);
         renderLayerList();
@@ -588,37 +640,7 @@ const LayerPanel = (() => {
     });
   }
 
-  // Add layer button → simple picker
-  document.getElementById('btn-add-layer').addEventListener('click', () => {
-    showLayerPicker();
-  });
-
-  // Group selected button — injected into DOM by renderLayerList
-  // Wire via delegation since the button is created dynamically
-  document.addEventListener('click', e => {
-    if (e.target.id !== 'btn-group-selected') return;
-    const selectedLayers = [..._multiSelect]
-      .map(id => _layers.layers.find(l => l.id === id))
-      .filter(Boolean);
-    if (selectedLayers.length < 2) { Toast.warn('Select 2+ layers to group'); return; }
-
-    const group = new GroupLayer(`group-${Date.now()}`);
-    group.name = 'Group';
-
-    // Insert at the position of the topmost selected layer
-    const indices = selectedLayers.map(l => _layers.layers.indexOf(l));
-    const insertAt = Math.min(...indices);
-
-    selectedLayers.forEach(l => {
-      _layers.layers.splice(_layers.layers.indexOf(l), 1);
-      group.addChild(l);
-    });
-
-    _layers.layers.splice(insertAt, 0, group);
-    _multiSelect.clear();
-    _layers._notify();
-    Toast.success(`Grouped ${selectedLayers.length} layers`);
-  });
+  // ── Standalone event wirings (moved to init) ─────────────────
 
   function showLayerPicker() {
     document.getElementById('layer-picker')?.remove();

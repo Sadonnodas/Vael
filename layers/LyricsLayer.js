@@ -18,6 +18,8 @@ class LyricsLayer extends BaseLayer {
     version: '1.0',
     params: [
       { id: 'fontSize',    label: 'Font size',    type: 'int',   default: 48,   min: 12,  max: 200 },
+      { id: 'fontFamily',  label: 'Font',         type: 'enum',  default: 'system',
+        options: ['system','serif','mono','Georgia','Palatino','Garamond','Didot','Futura','Gill Sans','Trebuchet','Impact','Courier'] },
       { id: 'posY',        label: 'Vertical pos', type: 'float', default: 0.75, min: 0,   max: 1   },
       { id: 'color',       label: 'Color',        type: 'color', default: '#ffffff' },
       { id: 'transition',  label: 'Transition',   type: 'enum',  default: 'fade',
@@ -31,6 +33,7 @@ class LyricsLayer extends BaseLayer {
     super(id, 'Lyrics');
     this.params = {
       fontSize:    48,
+      fontFamily:  'system',
       posY:        0.75,
       color:       '#ffffff',
       transition:  'fade',
@@ -171,7 +174,19 @@ class LyricsLayer extends BaseLayer {
 
     ctx.save();
     ctx.globalAlpha  = VaelMath.clamp(this._alpha * this.opacity, 0, 1);
-    ctx.font         = `bold ${fontSize}px system-ui, -apple-system, sans-serif`;
+    const _fontFamilies = {
+      system: 'system-ui, -apple-system, sans-serif',
+      serif:  'Georgia, "Times New Roman", serif',
+      mono:   '"Courier New", Courier, monospace',
+      Georgia: 'Georgia, serif',
+      Palatino: '"Palatino Linotype", Palatino, serif',
+      Garamond: 'Garamond, "EB Garamond", serif',
+      Trebuchet: '"Trebuchet MS", sans-serif',
+      Impact: 'Impact, Haettenschweiler, sans-serif',
+      Courier: '"Courier New", Courier, monospace',
+    };
+    const _ff = _fontFamilies[this.params.fontFamily || 'system'] || _fontFamilies.system;
+    ctx.font         = `bold ${fontSize}px ${_ff}`;
     ctx.textAlign    = 'center';
     ctx.textBaseline = 'middle';
 

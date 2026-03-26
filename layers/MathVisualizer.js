@@ -8,20 +8,21 @@ class MathVisualizer extends BaseLayer {
 
   static manifest = {
     name: 'Math Visualizer',
-    version: '1.0',
+    version: '2.0',
     params: [
-      { id: 'constant',    label: 'Constant',    type: 'enum',  default: 'pi',    options: ['pi','e','phi','sqrt2','ln2','apery','euler-mascheroni','catalan'] },
-      { id: 'mode',        label: 'Mode',        type: 'enum',  default: 'path',  options: ['path','tree','circle','chaos','spiral','walk','polar','lsystem','wave','constellation'] },
-      { id: 'buildMode',   label: 'Build mode',  type: 'bool',  default: false },
-      { id: 'buildSpeed',  label: 'Build speed', type: 'float', default: 8, min: 0.5, max: 60 },
-      { id: 'colorMode',   label: 'Color mode',  type: 'enum',  default: 'rainbow', options: ['rainbow','digit','mono'] },
-      { id: 'digitCount',  label: 'Digits',      type: 'int',   default: 800,  min: 50,  max: 2000 },
-      { id: 'angle',       label: 'Angle',       type: 'float', default: 36,   min: 1,   max: 180  },
-      { id: 'lineWidth',   label: 'Line width',  type: 'float', default: 1.2,  min: 0.3, max: 8    },
-      { id: 'dotSize',     label: 'Dot size',    type: 'float', default: 2.5,  min: 0.5, max: 12   },
-      { id: 'zoom',        label: 'Zoom',        type: 'float', default: 1.0,  min: 0.2, max: 4    },
-      { id: 'audioTarget', label: 'Audio → angle', type: 'band', default: 'bass' },
-      { id: 'hueShift',    label: 'Hue shift',   type: 'float', default: 0,    min: 0,   max: 360  },
+      { id: 'constant',    label: 'Constant',      type: 'enum',  default: 'pi',    options: ['pi','e','phi','sqrt2','ln2','apery','euler-mascheroni','catalan'] },
+      { id: 'mode',        label: 'Mode',          type: 'enum',  default: 'path',  options: ['path','tree','circle','chaos','spiral','walk','polar','lsystem','wave','constellation'] },
+      { id: 'colorMode',   label: 'Color mode',    type: 'enum',  default: 'rainbow', options: ['rainbow','digit','mono'] },
+      { id: 'digitCount',  label: 'Max digits',    type: 'int',   default: 800,  min: 50,  max: 2000 },
+      { id: 'angle',       label: 'Angle',         type: 'float', default: 36,   min: 1,   max: 180  },
+      { id: 'lineWidth',   label: 'Line width',    type: 'float', default: 1.2,  min: 0.3, max: 8    },
+      { id: 'dotSize',     label: 'Dot size',      type: 'float', default: 2.5,  min: 0.5, max: 12   },
+      { id: 'zoom',        label: 'Zoom',          type: 'float', default: 1.0,  min: 0.2, max: 4    },
+      { id: 'hueShift',    label: 'Hue shift',     type: 'float', default: 0,    min: 0,   max: 360  },
+      { id: 'buildMode',   label: 'Animate digits',type: 'bool',  default: false },
+      { id: 'buildMin',    label: 'Start digits',  type: 'int',   default: 1,    min: 1,   max: 500  },
+      { id: 'buildSpeed',  label: 'Grow speed',    type: 'float', default: 8,    min: 0.5, max: 120  },
+      { id: 'buildLoop',   label: 'Loop mode',     type: 'enum',  default: 'restart', options: ['restart','bounce','once'] },
     ],
   };
 
@@ -36,10 +37,11 @@ class MathVisualizer extends BaseLayer {
       lineWidth:   1.2,
       dotSize:     2.5,
       zoom:        1.0,
-      audioTarget: 'bass',
       hueShift:    0,
       buildMode:   false,
+      buildMin:    1,
       buildSpeed:  8,
+      buildLoop:   'restart',
     };
     this._time        = 0;
     this._angleSmooth = 36;
@@ -47,7 +49,8 @@ class MathVisualizer extends BaseLayer {
     this._audioSmooth = 0;
     this._chaosPoints = [];
     this._chaosInit   = false;
-    this._buildCount  = 0;  // current digit count when in build mode
+    this._buildCount  = 0;
+    this._buildDir    = 1;   // +1 = growing, -1 = shrinking (bounce mode)
   }
 
   init(params = {}) {
@@ -75,16 +78,35 @@ class MathVisualizer extends BaseLayer {
     if (audioData?.isBeat) this._beatPulse = 1.0;
     this._beatPulse = Math.max(0, (this._beatPulse ?? 0) - dt * 5);
 
-    // Build mode — grow digit count over time
+    // Build mode — animate digit count
     if (this.params.buildMode) {
-      const speed = this.params.buildSpeed * (1 + audioVal * 2);
-      this._buildCount = Math.min(
-        this.params.digitCount,
-        (this._buildCount || 0) + dt * speed
-      );
-      // Loop when complete
-      if (this._buildCount >= this.params.digitCount) {
-        setTimeout(() => { this._buildCount = 0; }, 800);
+      const min   = Math.max(1, this.params.buildMin || 1);
+      const max   = this.params.digitCount;
+      const speed = this.params.buildSpeed * (1 + this._audioSmooth * 1.5);
+
+      if (this._buildCount === 0) this._buildCount = min;
+
+      switch (this.params.buildLoop) {
+        case 'bounce':
+          this._buildCount += this._buildDir * dt * speed;
+          if (this._buildCount >= max) {
+            this._buildCount = max;
+            this._buildDir   = -1;
+          } else if (this._buildCount <= min) {
+            this._buildCount = min;
+            this._buildDir   = 1;
+          }
+          break;
+        case 'once':
+          if (this._buildDir > 0) {
+            this._buildCount = Math.min(max, this._buildCount + dt * speed);
+          }
+          break;
+        default: // restart
+          this._buildCount += dt * speed;
+          if (this._buildCount > max) {
+            this._buildCount = min;
+          }
       }
     }
   }

@@ -135,6 +135,12 @@
   const lfoManager = new LFOManager();
   LFOPanel.init(lfoManager, layers, document.getElementById('lfo-panel-content'));
 
+  // Refresh LFO panel when layers are added/removed so the dropdown stays current
+  layers.onChanged = () => {
+    renderLayerList();
+    LFOPanel.refresh();
+  };
+
   // ── Post-processing FX ────────────────────────────────────────
   PostFXPanel.init(renderer, document.getElementById('fx-panel-content'));
 
@@ -175,34 +181,50 @@
 
   // ── Layer picker config ──────────────────────────────────────
   const LAYER_TYPES = [
-    { id: 'gradient',    label: 'Gradient',            cls: () => new GradientLayer(`gradient-${Date.now()}`) },
-    { id: 'math',        label: 'Math Visualizer',      cls: () => new MathVisualizer(`math-${Date.now()}`) },
-    { id: 'particles',   label: 'Particles',            cls: () => new ParticleLayer(`particles-${Date.now()}`) },
-    { id: 'noise',       label: 'Noise Field',          cls: () => new NoiseFieldLayer(`noise-${Date.now()}`) },
-    { id: 'lyrics',      label: 'Lyrics / Text',        cls: () => new LyricsLayer(`lyrics-${Date.now()}`) },
-    { id: 'video',       label: 'Video file',           cls: () => new VideoPlayerLayer(`video-${Date.now()}`, video.videoElement) },
-    { id: 'webcam',      label: 'Webcam',               cls: () => new WebcamLayer(`webcam-${Date.now()}`) },
-    { id: 'waveform',    label: 'Waveform / Spectrum',   cls: () => {
-      const l = new WaveformLayer(`waveform-${Date.now()}`);
-      l._audioEngine = audio;
-      return l;
-    }},
-    { id: 'pattern',     label: 'Pattern (geometric)',   cls: () => new PatternLayer(`pattern-${Date.now()}`) },
-    { id: 'image',       label: 'Image (PNG/JPG/SVG)',   cls: () => new ImageLayer(`image-${Date.now()}`) },
-    { id: 'group',       label: 'Group (empty)',          cls: () => { const g = new GroupLayer(`group-${Date.now()}`); g.name = 'Group'; return g; } },
-    { id: 'shader-plasma',   label: 'Shader — Plasma',    cls: () => ShaderLayer.fromBuiltin('plasma') },
-    { id: 'shader-ripple',   label: 'Shader — Ripple',    cls: () => ShaderLayer.fromBuiltin('ripple') },
-    { id: 'shader-distort',  label: 'Shader — Distort',   cls: () => ShaderLayer.fromBuiltin('distort') },
-    { id: 'shader-bloom',    label: 'Shader — Bloom',     cls: () => ShaderLayer.fromBuiltin('bloom') },
-    { id: 'shader-chromatic',label: 'Shader — Chromatic', cls: () => ShaderLayer.fromBuiltin('chromatic') },
+    { id: 'gradient',        label: 'Gradient',             cls: () => new GradientLayer(`gradient-${Date.now()}`) },
+    { id: 'noise',           label: 'Noise Field',           cls: () => new NoiseFieldLayer(`noise-${Date.now()}`) },
+    { id: 'particles',       label: 'Particles',             cls: () => new ParticleLayer(`particles-${Date.now()}`) },
+    { id: 'math',            label: 'Math Visualizer',       cls: () => new MathVisualizer(`math-${Date.now()}`) },
+    { id: 'waveform',        label: 'Waveform / Spectrum',   cls: () => { const l = new WaveformLayer(`waveform-${Date.now()}`); l._audioEngine = audio; return l; }},
+    { id: 'pattern',         label: 'Pattern (geometric)',   cls: () => new PatternLayer(`pattern-${Date.now()}`) },
+    { id: 'lyrics',          label: 'Lyrics / Text',         cls: () => new LyricsLayer(`lyrics-${Date.now()}`) },
+    { id: 'image',           label: 'Image (PNG/JPG/SVG)',   cls: () => new ImageLayer(`image-${Date.now()}`) },
+    { id: 'video',           label: 'Video file',            cls: () => new VideoPlayerLayer(`video-${Date.now()}`, video.videoElement) },
+    { id: 'webcam',          label: 'Webcam',                cls: () => new WebcamLayer(`webcam-${Date.now()}`) },
+    { id: 'group',           label: 'Group (empty)',          cls: () => { const g = new GroupLayer(`group-${Date.now()}`); g.name = 'Group'; return g; } },
+    { id: 'shader-custom',   label: 'Shader — Custom (blank)', cls: () => { const s = new ShaderLayer(`shader-${Date.now()}`); s._shaderName = 'custom'; s._customGLSL = ''; s.name = 'Custom Shader'; return s; } },
+    { id: 'shader-plasma',   label: 'Shader — Plasma',       cls: () => ShaderLayer.fromBuiltin('plasma') },
+    { id: 'shader-ripple',   label: 'Shader — Ripple',       cls: () => ShaderLayer.fromBuiltin('ripple') },
+    { id: 'shader-distort',  label: 'Shader — Distort',      cls: () => ShaderLayer.fromBuiltin('distort') },
+    { id: 'shader-bloom',    label: 'Shader — Bloom',        cls: () => ShaderLayer.fromBuiltin('bloom') },
+    { id: 'shader-chromatic',label: 'Shader — Chromatic',    cls: () => ShaderLayer.fromBuiltin('chromatic') },
   ];
 
   const BLEND_MODES = ['normal','multiply','screen','overlay','add','softlight','difference','luminosity','subtract','exclusion'];
 
+  // ── Layer panel init FIRST — before any layers.add() so onChanged has valid DOM refs
+  const paramsEmpty   = document.getElementById('params-empty');
+  const paramsContent = document.getElementById('params-content');
+
+  LayerPanel.init({
+    layers,
+    layerFactory,
+    audio,
+    canvas,
+    blendModes:  BLEND_MODES,
+    layerTypes:  LAYER_TYPES,
+    renderImageLayerPanel: _renderImageLayerPanel,
+    onSelectLayer: (id) => {
+      _selectedLayerId = id;
+      LayerPanel.setSelectedId(id);
+    },
+  });
+
+  function renderLayerList() { LayerPanel.renderLayerList(); }
+
   // ── Default scene ────────────────────────────────────────────
-  // A polished starting point — noise field + math visualizer + subtle particles
   const noiseLayer = new NoiseFieldLayer('noise-default');
-  noiseLayer.init({ hueA: 210, hueB: 260, speed: 0.10, lightness: 0.10, saturation: 0.7 });
+  noiseLayer.init({ mode: 'field', hueA: 210, hueB: 260, speed: 0.08, lightness: 0.08, saturation: 0.6 });
   noiseLayer.opacity   = 1.0;
   noiseLayer.blendMode = 'normal';
 
@@ -211,11 +233,12 @@
     mode:        'path',
     constant:    'pi',
     colorMode:   'rainbow',
-    digitCount:  800,
+    digitCount:  1200,
     angle:       36,
     lineWidth:   1.4,
     zoom:        0.9,
-    audioTarget: 'bass',
+    buildMode:   true,
+    buildSpeed:  10,
   });
   mathLayer.opacity   = 0.9;
   mathLayer.blendMode = 'screen';
@@ -233,28 +256,6 @@
 
   // Restore last autosave if no scene was force-loaded
   setTimeout(() => _restoreAutoSave(), 100);
-
-
-  // ── Layer panel (delegated to LayerPanel module) ──────────────
-  const paramsEmpty   = document.getElementById('params-empty');
-  const paramsContent = document.getElementById('params-content');
-
-  LayerPanel.init({
-    layers,
-    layerFactory,
-    audio,
-    canvas,
-    blendModes:  ['normal','multiply','screen','overlay','add','softlight','difference','luminosity','subtract','exclusion'],
-    layerTypes:  LAYER_TYPES,
-    renderImageLayerPanel: _renderImageLayerPanel,
-    onSelectLayer: (id) => {
-      _selectedLayerId = id;
-      LayerPanel.setSelectedId(id);
-      // LayerPanel.selectLayer handles params panel rendering and tab switching
-    },
-  });
-
-  function renderLayerList() { LayerPanel.renderLayerList(); }
 
   // ── Preset save / load ────────────────────────────────────────
   document.getElementById('btn-preset-save').addEventListener('click', () => {

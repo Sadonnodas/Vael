@@ -96,11 +96,20 @@ const LFOPanel = (() => {
     formLabel.textContent   = 'Add LFO';
     _container.appendChild(formLabel);
 
+    const layers = _layerStack?.layers || [];
+    if (layers.length === 0) {
+      const msg = document.createElement('p');
+      msg.style.cssText = 'font-size:10px;color:var(--text-dim);text-align:center;padding:12px 0';
+      msg.textContent   = 'Add some layers first, then come back here to assign LFOs to their parameters.';
+      _container.appendChild(msg);
+      return;
+    }
+
     // Layer picker
     _container.appendChild(_row('Layer', `
       <select id="lfo-layer" style="width:100%;background:var(--bg);border:1px solid var(--border);
         border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:10px;padding:5px 8px">
-        ${_layerStack.layers.map(l => `<option value="${l.id}">${l.name}</option>`).join('')}
+        ${layers.map(l => `<option value="${l.id}">${l.name} (${l.constructor.name.replace('Layer','').replace('Visualizer','Viz')})</option>`).join('')}
       </select>
     `));
 
