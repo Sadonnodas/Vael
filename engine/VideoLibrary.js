@@ -1,17 +1,16 @@
 /**
  * engine/VideoLibrary.js
  * Manages a collection of uploaded video files.
- * Each VideoPlayerLayer references a video by its library ID.
  *
- * FIX: Uses 'loadeddata' instead of 'oncanplay' — more reliable.
- * Timeout fallback prevents the promise hanging on bad files.
+ * FIX: entry now stores the original File object so VideoPanel can
+ * pass it to VideoEngine.loadFile() when "Set as video source" is clicked.
  */
 
 class VideoLibrary {
 
   constructor() {
-    this._videos  = new Map();
-    this._counter = 0;
+    this._videos   = new Map();
+    this._counter  = 0;
     this.onChanged = null;
   }
 
@@ -26,7 +25,6 @@ class VideoLibrary {
     el.playsInline = true;
     el.preload     = 'auto';
 
-    // Wait for enough data — with a 10s timeout fallback
     await new Promise((resolve) => {
       const done = () => { el.removeEventListener('loadeddata', done); resolve(); };
       el.addEventListener('loadeddata', done);
@@ -40,6 +38,7 @@ class VideoLibrary {
       id,
       name:     file.name,
       url,
+      file,        // ← store the original File so VideoEngine can reload it
       element:  el,
       duration: isFinite(el.duration) ? el.duration : 0,
     };
@@ -63,12 +62,9 @@ class VideoLibrary {
     [...this._videos.keys()].forEach(id => this.remove(id));
   }
 
-  getElement(id) {
-    return this._videos.get(id)?.element || null;
-  }
-
-  get entries() { return Array.from(this._videos.values()); }
-  get count()   { return this._videos.size; }
+  getElement(id)  { return this._videos.get(id)?.element || null; }
+  get entries()   { return Array.from(this._videos.values()); }
+  get count()     { return this._videos.size; }
 
   playAll()  { this._videos.forEach(v => v.element.play().catch(() => {})); }
   pauseAll() { this._videos.forEach(v => v.element.pause()); }

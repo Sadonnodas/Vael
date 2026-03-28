@@ -121,11 +121,19 @@ const LibraryPanel = (() => {
 
   async function _getAudioDuration(url) {
     return new Promise(resolve => {
-      const tmp = document.createElement('audio');
-      tmp.src   = url;
-      tmp.addEventListener('loadedmetadata', () => resolve(tmp.duration || 0));
-      setTimeout(() => resolve(0), 5000);
-      tmp.load();
+      const tmp  = document.createElement('audio');
+      tmp.preload = 'metadata';  // metadata only — does NOT trigger playback
+      const done = (duration) => {
+        tmp.removeEventListener('loadedmetadata', onMeta);
+        tmp.pause();
+        tmp.src = '';            // release the resource immediately
+        resolve(duration);
+      };
+      const onMeta = () => done(tmp.duration || 0);
+      tmp.addEventListener('loadedmetadata', onMeta);
+      setTimeout(() => done(0), 5000);
+      tmp.src = url;             // assign AFTER listener so event isn't missed
+      // Do NOT call tmp.play() — preload="metadata" fetches just the header
     });
   }
 
@@ -318,46 +326,81 @@ const LibraryPanel = (() => {
 
     _addSectionLabel(`${_audioFiles.size} audio file${_audioFiles.size !== 1 ? 's' : ''}`);
 
+    // Track the currently previewing audio element so we can stop it
+    // when another track is previewed or the section is re-rendered.
+    let _previewEl = null;
+
     _audioFiles.forEach(entry => {
       const card = _card();
 
       const row = document.createElement('div');
       row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
 
-      const icon = document.createElement('div');
-      icon.style.cssText = 'width:36px;height:24px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--accent) 10%,var(--bg));border-radius:3px;flex-shrink:0;font-size:14px';
-      icon.textContent   = '♪';
-      row.appendChild(icon);
+      // Preview play/pause button — local preview only, does NOT affect AudioEngine
+      const previewBtn = document.createElement('button');
+      previewBtn.style.cssText = `
+        width:32px;height:32px;flex-shrink:0;border-radius:3px;
+        background:color-mix(in srgb,var(--accent) 12%,var(--bg));
+        border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);
+        color:var(--accent);font-size:12px;cursor:pointer;
+        display:flex;align-items:center;justify-content:center;
+      `;
+      previewBtn.textContent = '▶';
+      previewBtn.title = 'Preview (local only — does not affect audio source)';
+
+      previewBtn.addEventListener('click', () => {
+        if (_previewEl && !_previewEl.paused) {
+          // Stop whatever is playing
+          _previewEl.pause();
+          _previewEl.currentTime = 0;
+          _previewEl = null;
+          // Reset all preview buttons
+          card.closest('[id="library-panel-content"]')
+            ?.querySelectorAll('.lib-preview-btn')
+            .forEach(b => { b.textContent = '▶'; b.style.color = 'var(--accent)'; });
+          return;
+        }
+        // Stop any other preview
+        if (_previewEl) { _previewEl.pause(); _previewEl.currentTime = 0; }
+
+        const el = new Audio(entry.url);
+        el.volume = 0.7;
+        el.play().catch(() => {});
+        el.addEventListener('ended', () => {
+          previewBtn.textContent = '▶';
+          previewBtn.style.color = 'var(--accent)';
+          _previewEl = null;
+        });
+        _previewEl = el;
+        previewBtn.textContent = '■';
+        previewBtn.style.color = 'var(--accent2)';
+      });
+
+      previewBtn.classList.add('lib-preview-btn');
+      row.appendChild(previewBtn);
 
       const info = document.createElement('div');
       info.style.cssText = 'flex:1;min-width:0';
       info.innerHTML = `<div style="font-family:var(--font-mono);font-size:9px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${entry.name}</div>
         <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-top:2px">${VaelMath.formatTime(entry.duration)}</div>`;
       row.appendChild(info);
-      row.appendChild(_delBtn(() => { URL.revokeObjectURL(entry.url); _audioFiles.delete(entry.id); _render(); }));
+      row.appendChild(_delBtn(() => {
+        if (_previewEl) { _previewEl.pause(); _previewEl = null; }
+        URL.revokeObjectURL(entry.url);
+        _audioFiles.delete(entry.id);
+        _render();
+      }));
       card.appendChild(row);
 
       const srcBtn = _smallBtn('Set as audio source', 'accent');
       srcBtn.style.width = '100%';
-      srcBtn.addEventListener('click', async () => {
-        if (!_audioEngine) { Toast.warn('Audio engine not available'); return; }
-        srcBtn.textContent = 'Loading…'; srcBtn.disabled = true;
-        try {
-          await _audioEngine.loadFile(entry.file);
-          const fnEl = document.getElementById('audio-filename');
-          const tr   = document.getElementById('audio-transport');
-          const lv   = document.getElementById('audio-levels-section');
-          const dot  = document.getElementById('dot-audio');
-          const lbl  = document.getElementById('label-audio');
-          if (fnEl) fnEl.textContent = entry.name;
-          if (tr)   tr.style.display = 'block';
-          if (lv)   lv.style.display = 'block';
-          if (dot)  dot.classList.remove('inactive');
-          if (lbl)  lbl.textContent  = entry.name.replace(/\.[^.]+$/, '');
-          document.querySelector('[data-tab="audio"]')?.click();
-          Toast.success(`Audio loaded: ${entry.name} — press Play to start`);
-        } catch { Toast.error('Could not load audio file'); }
-        srcBtn.textContent = 'Set as audio source'; srcBtn.disabled = false;
+      srcBtn.addEventListener('click', () => {
+        // Stop local preview if playing
+        if (_previewEl) { _previewEl.pause(); _previewEl.currentTime = 0; _previewEl = null; }
+        window.dispatchEvent(new CustomEvent('vael:library-set-audio-source', {
+          detail: { name: entry.name, file: entry.file, url: entry.url, duration: entry.duration }
+        }));
+        document.querySelector('[data-tab="audio"]')?.click();
       });
       card.appendChild(srcBtn);
     });
@@ -603,12 +646,30 @@ const LibraryPanel = (() => {
 
   function getImages() { return [..._images.values()]; }
 
+  // ── Public add methods — called by AudioPanel / VideoPanel ────
+  // Allows files uploaded in the AUDIO or VIDEO tabs to appear in
+  // the LIBRARY without duplicating the file input listeners.
+
+  async function addAudioFile(file) {
+    const id       = `aud-${++_audioCounter}-${Date.now()}`;
+    const url      = URL.createObjectURL(file);
+    const duration = await _getAudioDuration(url);
+    _audioFiles.set(id, { id, name: file.name, url, file, duration });
+    // Only re-render if the Audio section is currently visible
+    if (_activeSection === 'audio') _render();
+    return id;
+  }
+
+  // Videos are managed by VideoLibrary (shared singleton), so we just
+  // refresh the panel when videoLibrary.onChanged fires — no extra method needed.
+
   return {
     init, refresh,
     buildVideoPicker,
     promptImageForLayer,
     showAddImagePrompt,
     getImages,
+    addAudioFile,
   };
 
 })();

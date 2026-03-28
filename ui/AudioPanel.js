@@ -31,6 +31,32 @@ const AudioPanel = (() => {
     // File upload
     document.getElementById('btn-audio-file')?.addEventListener('click', () => inputFile?.click());
 
+    // Select from library
+    document.getElementById('btn-audio-library')?.addEventListener('click', () => {
+      const lib = window.videoLibrary;  // VideoLibrary stores video files, audio uses LibraryPanel's _audioFiles
+      // Dispatch to LibraryPanel to open the audio section
+      window.dispatchEvent(new CustomEvent('vael:open-library-audio'));
+      document.querySelector('[data-tab="library"]')?.click();
+    });
+
+    // Listen for audio source set from library
+    window.addEventListener('vael:library-set-audio-source', async e => {
+      const entry = e.detail; // { name, file, url, duration }
+      if (!entry?.file) return;
+      try {
+        await _audio.loadFile(entry.file);
+        filenameEl.textContent   = entry.name;
+        transport.style.display  = 'block';
+        micActiveEl.style.display = 'none';
+        levelsEl.style.display   = 'block';
+        _statusDot.classList.remove('inactive');
+        _statusLabel.textContent = entry.name.replace(/\.[^.]+$/, '');
+        _loopIn = 0; _loopOut = 1;
+        _updateLoopPointUI();
+        Toast.success(`Audio loaded: ${entry.name} — press Play to start`);
+      } catch { Toast.error('Could not load audio from library'); }
+    });
+
     inputFile?.addEventListener('change', async e => {
       const file = e.target.files[0];
       if (!file) return;
@@ -47,6 +73,10 @@ const AudioPanel = (() => {
         _audio.play();
         btnPlay.textContent = '⏸';
         Toast.success(`Loaded: ${file.name}`);
+        // Also register in the library so it appears in LIBRARY → Audio
+        if (typeof LibraryPanel !== 'undefined' && LibraryPanel.addAudioFile) {
+          LibraryPanel.addAudioFile(file).catch(() => {});
+        }
       } catch (err) {
         Toast.error('Could not load audio file');
       }

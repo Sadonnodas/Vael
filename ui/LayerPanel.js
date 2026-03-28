@@ -298,7 +298,9 @@ const LayerPanel = (() => {
             ▸ Transform ${(layer.transform?.x || layer.transform?.y || layer.transform?.rotation || (layer.transform?.scaleX !== 1) || (layer.transform?.scaleY !== 1)) ? '●' : ''}
           </button>
           <div class="transform-panel" data-id="${layer.id}" style="display:none;padding-top:6px">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:5px">
+
+            <!-- Position X / Y -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:8px">
               <div>
                 <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:2px">X offset</div>
                 <input type="number" class="tr-x" data-id="${layer.id}" value="${layer.transform?.x || 0}" step="5"
@@ -311,34 +313,58 @@ const LayerPanel = (() => {
                   style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:3px;
                          color:var(--text);font-family:var(--font-mono);font-size:9px;padding:3px 5px" />
               </div>
-            <div style="display:grid;grid-template-columns:1fr auto 1fr;gap:5px;margin-bottom:5px;align-items:end">
+            </div>
+
+            <!-- Unified scale slider (linked by default) -->
+            <div style="margin-bottom:6px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+                <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">Scale</span>
+                <div style="display:flex;align-items:center;gap:4px">
+                  <button class="tr-link-scale" title="Unlink X and Y scale"
+                    style="background:color-mix(in srgb,var(--accent) 12%,transparent);
+                           border:1px solid var(--accent);border-radius:3px;
+                           color:var(--accent);font-size:9px;padding:2px 5px;cursor:pointer;
+                           line-height:1;font-family:var(--font-mono)">🔒 linked</button>
+                  <input type="number" class="tr-scale-num" value="${Math.round(((layer.transform?.scaleX ?? 1) * 100))}"
+                    style="width:46px;background:var(--bg);border:1px solid var(--border);border-radius:3px;
+                           color:var(--accent);font-family:var(--font-mono);font-size:9px;padding:2px 4px;text-align:right" />
+                </div>
+              </div>
+              <input type="range" class="tr-scale-sl" min="10" max="400" step="1"
+                value="${Math.round(((layer.transform?.scaleX ?? 1) * 100))}"
+                style="width:100%;accent-color:var(--accent)" />
+            </div>
+
+            <!-- Scale X / Y (shown when unlinked) -->
+            <div class="tr-xy-scale" style="display:none;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:8px">
               <div>
                 <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:2px">Scale X</div>
-                <input type="number" class="tr-sx" data-id="${layer.id}" value="${layer.transform?.scaleX ?? 1}" step="0.1" min="0.1" max="10"
+                <input type="number" class="tr-sx" data-id="${layer.id}" value="${layer.transform?.scaleX ?? 1}" step="0.05" min="0.1" max="10"
                   style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:3px;
                          color:var(--text);font-family:var(--font-mono);font-size:9px;padding:3px 5px" />
-              </div>
-              <div style="display:flex;align-items:center;padding-bottom:2px">
-                <button class="tr-link-scale" title="Link X and Y scale"
-                  style="background:none;border:1px solid var(--border-dim);border-radius:3px;
-                         color:var(--text-dim);font-size:10px;padding:3px 4px;cursor:pointer;
-                         line-height:1">🔓</button>
               </div>
               <div>
                 <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:2px">Scale Y</div>
-                <input type="number" class="tr-sy" data-id="${layer.id}" value="${layer.transform?.scaleY ?? 1}" step="0.1" min="0.1" max="10"
+                <input type="number" class="tr-sy" data-id="${layer.id}" value="${layer.transform?.scaleY ?? 1}" step="0.05" min="0.1" max="10"
                   style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:3px;
                          color:var(--text);font-family:var(--font-mono);font-size:9px;padding:3px 5px" />
               </div>
             </div>
-            </div>
-            <div style="margin-bottom:5px">
-              <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:2px">Rotation (°)</div>
+
+            <!-- Rotation -->
+            <div style="margin-bottom:8px">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:3px">
+                <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">Rotation (°)</span>
+                <input type="number" class="tr-rot-num" value="${layer.transform?.rotation || 0}" min="-180" max="180" step="1"
+                  style="width:46px;background:var(--bg);border:1px solid var(--border);border-radius:3px;
+                         color:var(--text);font-family:var(--font-mono);font-size:9px;padding:2px 4px;text-align:right" />
+              </div>
               <input type="range" class="tr-rot" data-id="${layer.id}" value="${layer.transform?.rotation || 0}" min="-180" max="180" step="1"
                 style="width:100%;accent-color:var(--accent)" />
             </div>
+
             <div style="display:flex;gap:5px">
-              <button class="tr-reset btn" data-id="${layer.id}" style="flex:1;font-size:8px;padding:4px">Reset</button>
+              <button class="tr-reset btn" data-id="${layer.id}" style="flex:1;font-size:8px;padding:4px">↺ Reset</button>
               <button class="tr-dupe btn accent" data-id="${layer.id}" style="flex:1;font-size:8px;padding:4px">⧉ Duplicate</button>
             </div>
           </div>
@@ -508,48 +534,114 @@ const LayerPanel = (() => {
         const btn   = row.querySelector('.transform-toggle');
         const open  = panel.style.display === 'none';
         panel.style.display = open ? 'block' : 'none';
-        btn.textContent = (open ? '▾' : '▸') + ' Transform';
+        btn.textContent = (open ? '▾' : '▸') + ' Transform' +
+          ((layer.transform?.x || layer.transform?.y || layer.transform?.rotation ||
+           (layer.transform?.scaleX !== 1) || (layer.transform?.scaleY !== 1)) ? ' ●' : '');
       });
 
-      // Linked scale lock
-      let _scaleLocked = false;
-      const linkBtn = row.querySelector('.tr-link-scale');
-      if (linkBtn) {
-        linkBtn.addEventListener('click', () => {
-          _scaleLocked = !_scaleLocked;
-          linkBtn.textContent = _scaleLocked ? '🔒' : '🔓';
-          linkBtn.style.color = _scaleLocked ? 'var(--accent)' : 'var(--text-dim)';
-          linkBtn.style.borderColor = _scaleLocked ? 'var(--accent)' : 'var(--border-dim)';
-        });
-      }
+      // Scale link toggle — linked by default
+      let _scaleLocked = true;
+      const linkBtn    = row.querySelector('.tr-link-scale');
+      const xyScaleDiv = row.querySelector('.tr-xy-scale');
+      const scaleSl    = row.querySelector('.tr-scale-sl');
+      const scaleNum   = row.querySelector('.tr-scale-num');
 
-      // Transform inputs
-      const setTransform = (changedId) => {
-        const newSx = parseFloat(row.querySelector('.tr-sx').value) || 1;
-        const newSy = parseFloat(row.querySelector('.tr-sy').value) || 1;
-
-        // If scale locked, sync the other axis
-        if (_scaleLocked && changedId === 'sx') {
-          row.querySelector('.tr-sy').value = newSx;
-          layer.transform.scaleY = newSx;
-        } else if (_scaleLocked && changedId === 'sy') {
-          row.querySelector('.tr-sx').value = newSy;
-          layer.transform.scaleX = newSy;
+      linkBtn?.addEventListener('click', () => {
+        _scaleLocked = !_scaleLocked;
+        if (_scaleLocked) {
+          linkBtn.textContent   = '🔒 linked';
+          linkBtn.style.background = 'color-mix(in srgb,var(--accent) 12%,transparent)';
+          linkBtn.style.borderColor = 'var(--accent)';
+          linkBtn.style.color   = 'var(--accent)';
+          xyScaleDiv.style.display = 'none';
+          scaleSl.style.display    = 'block';
+          scaleNum.style.display   = 'block';
+        } else {
+          linkBtn.textContent   = '🔓 unlinked';
+          linkBtn.style.background = 'none';
+          linkBtn.style.borderColor = 'var(--border-dim)';
+          linkBtn.style.color   = 'var(--text-dim)';
+          xyScaleDiv.style.display = 'grid';
+          // Sync individual inputs from current scale
+          const sx = layer.transform?.scaleX ?? 1;
+          const sy = layer.transform?.scaleY ?? 1;
+          row.querySelector('.tr-sx').value = sx;
+          row.querySelector('.tr-sy').value = sy;
         }
+      });
 
+      // Unified scale slider — drives both scaleX and scaleY
+      const applyUnifiedScale = (pct) => {
+        const s = Math.max(0.1, pct / 100);
+        layer.transform.scaleX = s;
+        layer.transform.scaleY = s;
+        scaleSl.value  = pct;
+        scaleNum.value = pct;
+        row.querySelector('.tr-sx').value = s.toFixed(2);
+        row.querySelector('.tr-sy').value = s.toFixed(2);
+      };
+
+      scaleSl?.addEventListener('input', () => {
+        applyUnifiedScale(parseInt(scaleSl.value));
+      });
+
+      scaleNum?.addEventListener('change', () => {
+        const raw = scaleNum.value.replace('%','');
+        const pct = Math.max(10, Math.min(400, parseInt(raw) || 100));
+        applyUnifiedScale(pct);
+      });
+      scaleNum?.addEventListener('keydown', e => {
+        if (e.key === 'Enter') scaleNum.blur();
+      });
+
+      // Individual scale X/Y (unlinked mode)
+      const setTransform = (changedId) => {
+        if (_scaleLocked) {
+          // Linked mode — use unified slider value
+          const pct = parseInt(scaleSl?.value || 100);
+          const s   = Math.max(0.1, pct / 100);
+          layer.transform.scaleX = s;
+          layer.transform.scaleY = s;
+        } else {
+          const newSx = parseFloat(row.querySelector('.tr-sx').value) || 1;
+          const newSy = parseFloat(row.querySelector('.tr-sy').value) || 1;
+          layer.transform.scaleX = newSx;
+          layer.transform.scaleY = newSy;
+          // Keep unified slider at average
+          const avg = (newSx + newSy) / 2;
+          if (scaleSl) scaleSl.value  = Math.round(avg * 100);
+          if (scaleNum) scaleNum.value = Math.round(avg * 100);
+        }
         layer.transform.x        = parseFloat(row.querySelector('.tr-x').value)  || 0;
         layer.transform.y        = parseFloat(row.querySelector('.tr-y').value)  || 0;
-        layer.transform.scaleX   = parseFloat(row.querySelector('.tr-sx').value) || 1;
-        layer.transform.scaleY   = parseFloat(row.querySelector('.tr-sy').value) || 1;
         layer.transform.rotation = parseFloat(row.querySelector('.tr-rot').value) || 0;
       };
 
-      row.querySelector('.tr-sx')?.addEventListener('input', () => setTransform('sx'));
-      row.querySelector('.tr-sy')?.addEventListener('input', () => setTransform('sy'));
-      row.querySelectorAll('.tr-x,.tr-y,.tr-rot').forEach(el => {
-        el.addEventListener('input', () => setTransform(null));
+      row.querySelector('.tr-sx')?.addEventListener('input',  () => setTransform('sx'));
+      row.querySelector('.tr-sx')?.addEventListener('change', () => setTransform('sx'));
+      row.querySelector('.tr-sy')?.addEventListener('input',  () => setTransform('sy'));
+      row.querySelector('.tr-sy')?.addEventListener('change', () => setTransform('sy'));
+
+      row.querySelectorAll('.tr-x,.tr-y').forEach(el => {
+        el.addEventListener('input',  () => setTransform(null));
         el.addEventListener('change', () => setTransform(null));
       });
+
+      // Rotation slider + number input sync
+      const rotSl  = row.querySelector('.tr-rot');
+      const rotNum = row.querySelector('.tr-rot-num');
+      rotSl?.addEventListener('input', () => {
+        const v = parseFloat(rotSl.value);
+        layer.transform.rotation = v;
+        if (rotNum) rotNum.value = v;
+      });
+      rotNum?.addEventListener('change', () => {
+        const v = Math.max(-180, Math.min(180, parseFloat(rotNum.value) || 0));
+        layer.transform.rotation = v;
+        if (rotSl) rotSl.value = v;
+        rotNum.value = v;
+      });
+      rotNum?.addEventListener('keydown', e => { if (e.key === 'Enter') rotNum.blur(); });
 
       // Reset transform
       row.querySelector('.tr-reset').addEventListener('click', () => {
@@ -748,6 +840,143 @@ const LayerPanel = (() => {
       _thumbCache.clear();  // Force re-render next time layers are drawn
     }, 3000);
   }
+  // ── Canvas drag ──────────────────────────────────────────────
+  // Click and drag on the canvas to move the selected layer.
+  // Scroll on the canvas to scale the selected layer.
+  // No modifier key required — just select a layer then interact with the canvas.
+  // Groups: if the selected layer is inside a group, the group moves as a whole.
+
+  function _initCanvasDrag(canvas) {
+    if (!canvas) return;
+
+    // Hint label — shown briefly when a layer is selected
+    const hint = document.createElement('div');
+    hint.id = 'canvas-drag-hint';
+    hint.style.cssText = `
+      position: absolute;
+      bottom: 44px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(0,0,0,0.75);
+      border: 1px solid var(--accent);
+      border-radius: 4px;
+      padding: 4px 10px;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--accent);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.3s;
+      white-space: nowrap;
+      z-index: 60;
+    `;
+    hint.textContent = 'Drag to move  ·  Scroll to scale';
+    // Append to canvas-area (canvas parent)
+    canvas.parentElement?.appendChild(hint);
+
+    let _hintTimer = null;
+    function _showHint() {
+      hint.style.opacity = '1';
+      clearTimeout(_hintTimer);
+      _hintTimer = setTimeout(() => { hint.style.opacity = '0'; }, 2000);
+    }
+
+    // Show hint whenever a layer becomes selected
+    const _origSetSelected = setSelectedId.bind(null);
+    // Hook into selectLayer instead
+    const _origSelectLayer2 = selectLayer;
+
+    // ── Drag state ────────────────────────────────────────────
+    let _dragging   = false;
+    let _dragLayer  = null;   // the layer (or group) being moved
+    let _dragStartX = 0;
+    let _dragStartY = 0;
+    let _dragOrigX  = 0;
+    let _dragOrigY  = 0;
+
+    // Find the layer to move: if selected layer is inside a group,
+    // return the group (so the whole group moves).
+    function _getMovableLayer() {
+      if (!_selectedLayerId) return null;
+
+      // Direct lookup
+      const direct = _layers.layers.find(l => l.id === _selectedLayerId);
+      if (direct) return direct;
+
+      // Check if it's inside a group
+      for (const l of _layers.layers) {
+        if (l instanceof GroupLayer && l.children) {
+          const inGroup = l.children.find(c => c.id === _selectedLayerId);
+          if (inGroup) return l;   // move the whole group
+        }
+      }
+      return null;
+    }
+
+    canvas.style.cursor = 'default';
+
+    canvas.addEventListener('mousedown', e => {
+      const layer = _getMovableLayer();
+      if (!layer) return;
+
+      _dragging   = true;
+      _dragLayer  = layer;
+      _dragStartX = e.clientX;
+      _dragStartY = e.clientY;
+      // Ensure transform object exists
+      if (!layer.transform) layer.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+      _dragOrigX  = layer.transform.x || 0;
+      _dragOrigY  = layer.transform.y || 0;
+      canvas.style.cursor = 'grabbing';
+      e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', e => {
+      if (!_dragging || !_dragLayer) return;
+      const dx = e.clientX - _dragStartX;
+      const dy = e.clientY - _dragStartY;
+      _dragLayer.transform.x = _dragOrigX + dx;
+      _dragLayer.transform.y = _dragOrigY + dy;
+    });
+
+    document.addEventListener('mouseup', () => {
+      if (_dragging) {
+        _dragging  = false;
+        _dragLayer = null;
+        canvas.style.cursor = _selectedLayerId ? 'grab' : 'default';
+        // Refresh transform panel if open
+        const openPanel = document.querySelector(`.transform-panel[data-id="${_selectedLayerId}"]`);
+        if (openPanel && openPanel.style.display !== 'none') renderLayerList();
+      }
+    });
+
+    // Update cursor when layer is selected/deselected
+    // We patch this by watching _selectedLayerId via the selectLayer function
+    const _patchSelectForCursor = (id) => {
+      canvas.style.cursor = id ? 'grab' : 'default';
+      if (id) _showHint();
+    };
+
+    // Export so App.js can call after selectLayer
+    canvas._onLayerSelect = _patchSelectForCursor;
+
+    // Scroll to scale
+    canvas.addEventListener('wheel', e => {
+      const layer = _getMovableLayer();
+      if (!layer) return;
+      e.preventDefault();
+
+      if (!layer.transform) layer.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+
+      // Shift+scroll = finer control (0.01 steps), normal = 0.05 steps
+      const step   = e.shiftKey ? 0.01 : 0.05;
+      const delta  = e.deltaY > 0 ? -step : step;
+      const newS   = Math.max(0.1, Math.min(10, (layer.transform.scaleX ?? 1) + delta));
+      layer.transform.scaleX = newS;
+      layer.transform.scaleY = newS;
+    }, { passive: false });
+  }
+
            return { 
     init, 
     selectLayer, 
@@ -755,6 +984,7 @@ const LayerPanel = (() => {
     setSelectedId,
     getSelectedId,
     getMultiSelect,
+    _initCanvasDrag,
     get onSelect() { return onSelect; },
     set onSelect(fn) { onSelect = fn; } 
   };

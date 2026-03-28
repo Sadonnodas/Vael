@@ -1,24 +1,11 @@
 /**
  * ui/App.js
  * Top-level application controller.
- *
- * CHANGES vs previous version:
- * - Removed the extra 'input-video-file' change listener that was adding
- *   videos to the library a second time (causing the doubling bug).
- *   LibraryPanel._createFileInputs() handles all library uploads internally.
- * - ImageLayer flow: when an ImageLayer is added via the picker,
- *   LibraryPanel.showAddImagePrompt(layer) is called immediately.
- * - 'vael:image-single-added' event loads the file into window._pendingImageLayer.
- * - 'vael:image-layer-upload' event triggers the single-file picker.
- * - 'vael:refresh-params' event re-renders the params panel for the current layer.
- * - _renderImageLayerPanel now uses LibraryPanel.promptImageForLayer() for
- *   the thumbnail grid + upload button.
  */
 
 (function () {
   'use strict';
 
-  // ── Engine instances ─────────────────────────────────────────
   const canvas   = document.getElementById('main-canvas');
   const renderer = new Renderer(canvas);
   const audio    = new AudioEngine();
@@ -57,37 +44,26 @@
   }
 
   // ── Image layer panel ─────────────────────────────────────────
-  // Uses LibraryPanel.promptImageForLayer() which shows the thumbnail grid
-  // and an upload button — no more hunting for a separate file picker.
   function _renderImageLayerPanel(layer, container) {
     container.innerHTML = '';
-
     if (typeof ParamPanel !== 'undefined' && ParamPanel._buildNameHeader) {
       container.appendChild(ParamPanel._buildNameHeader(layer, 'Image'));
     }
-
-    // Image picker section (thumbnails + upload button from LibraryPanel)
     LibraryPanel.promptImageForLayer(layer, container);
-
     const tip = document.createElement('p');
     tip.style.cssText = 'font-size:9px;color:var(--text-dim);line-height:1.6;margin-bottom:14px;margin-top:4px';
     tip.innerHTML = 'Use a PNG with transparency as a <strong style="color:var(--accent2)">mask</strong> on another layer, or any image as a visual with blend modes.';
     container.appendChild(tip);
-
-    // Standard params + ModMatrix + FX
     ParamPanel.render(layer, container, audio);
   }
 
   // ── Image upload events ───────────────────────────────────────
-  // LibraryPanel fires 'vael:image-single-added' when the single-file picker
-  // is used from inside showAddImagePrompt or promptImageForLayer.
   window.addEventListener('vael:image-single-added', async e => {
     const pendingLayer = window._pendingImageLayer;
     if (!pendingLayer) return;
     window._pendingImageLayer = null;
     try {
       await pendingLayer.loadFile(e.detail.file);
-      // Refresh the params panel if this layer is selected
       if (_selectedLayerId === pendingLayer.id) {
         _renderImageLayerPanel(pendingLayer, paramsContent);
       }
@@ -95,30 +71,23 @@
     } catch { Toast.error('Could not load image'); }
   });
 
-  // 'vael:image-layer-upload' triggers the single-file picker
   window.addEventListener('vael:image-layer-upload', e => {
     window._pendingImageLayer = e.detail.layer;
     document.getElementById('_lib-image-single-input').value = '';
     document.getElementById('_lib-image-single-input').click();
   });
 
-  // 'vael:refresh-params' re-renders the params panel for the selected layer
   window.addEventListener('vael:refresh-params', () => {
     if (!_selectedLayerId) return;
     const layer = layers.layers.find(l => l.id === _selectedLayerId);
     if (!layer) return;
-    if (layer instanceof ImageLayer) {
-      _renderImageLayerPanel(layer, paramsContent);
-    } else if (layer instanceof ShaderLayer) {
-      ShaderPanel.render(layer, paramsContent);
-    } else if (layer instanceof LyricsLayer) {
-      LyricsPanel.render(layer, paramsContent);
-    } else {
-      ParamPanel.render(layer, paramsContent, audio);
-    }
+    if (layer instanceof ImageLayer)  _renderImageLayerPanel(layer, paramsContent);
+    else if (layer instanceof ShaderLayer) ShaderPanel.render(layer, paramsContent);
+    else if (layer instanceof LyricsLayer) LyricsPanel.render(layer, paramsContent);
+    else ParamPanel.render(layer, paramsContent, audio);
   });
 
-  // ── MathVisualizer panel ──────────────────────────────────────
+  // ── MathVisualizer restart button ─────────────────────────────
   function _injectMathRestartBtn(layer, container) {
     const restartBtn = document.createElement('button');
     restartBtn.className   = 'btn';
@@ -128,9 +97,7 @@
       if (typeof layer.restartBuild === 'function') layer.restartBuild();
       Toast.info('Animation restarted');
     });
-    const modDivider = [...container.children].find(el =>
-      el.style?.height === '1px'
-    );
+    const modDivider = [...container.children].find(el => el.style?.height === '1px');
     if (modDivider) container.insertBefore(restartBtn, modDivider);
     else            container.appendChild(restartBtn);
   }
@@ -145,9 +112,7 @@
     document.getElementById('params-empty').style.display = 'block';
   });
 
-  document.getElementById('btn-preset-library')?.addEventListener('click', () => {
-    PresetBrowser.toggle();
-  });
+  document.getElementById('btn-preset-library')?.addEventListener('click', () => PresetBrowser.toggle());
 
   // ── Setlist + performance mode ───────────────────────────────
   const setlist  = new SetlistManager(layers, layerFactory);
@@ -163,18 +128,15 @@
 
   // ── MIDI ──────────────────────────────────────────────────────
   const midi = new MidiEngine(layers);
-  midi.init().then(() => {
-    MidiPanel.init(midi, layers, document.getElementById('midi-panel-content'));
-  });
+  midi.init().then(() => MidiPanel.init(midi, layers, document.getElementById('midi-panel-content')));
 
-  // ── OSC Bridge ───────────────────────────────────────────────
+  // ── OSC ──────────────────────────────────────────────────────
   const osc = new OscBridge({ layerStack: layers, setlist, recorder });
   osc.connect('ws://localhost:8080');
 
   // ── LFO ──────────────────────────────────────────────────────
   const lfoManager = new LFOManager();
   LFOPanel.init(lfoManager, layers, document.getElementById('lfo-panel-content'));
-
   layers.onChanged = () => { renderLayerList(); LFOPanel.refresh(); };
 
   // ── Post FX ──────────────────────────────────────────────────
@@ -189,7 +151,6 @@
     container:         document.getElementById('library-panel-content'),
   });
 
-  // When video library changes, refresh library panel + param panel if needed
   videoLibrary.onChanged = () => {
     LibraryPanel.refresh();
     if (_selectedLayerId) {
@@ -201,7 +162,6 @@
   // ── Sequencer ────────────────────────────────────────────────
   const seq = new Sequencer();
   SequencerPanel.init(seq, beat, document.getElementById('beat-panel-content'));
-
   seq.onStep = (step, event) => {
     if (event === 'flash' || event === 'beat') {
       audio.smoothed.isBeat = true;
@@ -254,18 +214,20 @@
   const paramsContent = document.getElementById('params-content');
 
   LayerPanel.init({
-    layers,
-    layerFactory,
-    audio,
-    canvas,
+    layers, layerFactory, audio, canvas,
     blendModes:            BLEND_MODES,
     layerTypes:            LAYER_TYPES,
     renderImageLayerPanel: _renderImageLayerPanel,
     onSelectLayer: (id) => {
       _selectedLayerId = id;
       LayerPanel.setSelectedId(id);
+      // Update canvas cursor + show drag hint
+      if (canvas._onLayerSelect) canvas._onLayerSelect(id);
     },
   });
+
+  // Wire canvas drag — hold Alt to drag/scroll selected layer
+  LayerPanel._initCanvasDrag(canvas);
 
   // Hook selectLayer to inject Restart button for MathVisualizer
   const _origSelectLayer = LayerPanel.selectLayer.bind(LayerPanel);
@@ -277,38 +239,29 @@
     }
   };
 
-  // When an ImageLayer is added, show the library/upload prompt immediately
+  // When an ImageLayer is added, show the library/upload prompt
   const _origLayersAdd = layers.add.bind(layers);
   layers.add = (layer) => {
     _origLayersAdd(layer);
     if (layer instanceof ImageLayer) {
-      // Small delay so the layer list renders first
       setTimeout(() => LibraryPanel.showAddImagePrompt(layer), 100);
     }
   };
 
   function renderLayerList() { LayerPanel.renderLayerList(); }
 
-  // ── Default scene ────────────────────────────────────────────
+  // ── Default scene — clean slate, just noise + particles ──────
   const noiseLayer = new NoiseFieldLayer('noise-default');
   noiseLayer.init({ mode: 'field', hueA: 210, hueB: 260, speed: 0.08, lightness: 0.08, saturation: 0.6 });
   noiseLayer.opacity   = 1.0;
   noiseLayer.blendMode = 'normal';
 
-  const mathLayer = new MathVisualizer('math-default');
-  mathLayer.init({ mode: 'path', constant: 'pi', colorMode: 'rainbow',
-    digitCount: 1200, angle: 36, lineWidth: 1.4, zoom: 0.9, buildMode: true, buildSpeed: 10 });
-  mathLayer.opacity   = 0.9;
-  mathLayer.blendMode = 'screen';
-
   const particleLayer = new ParticleLayer('particles-default');
-  particleLayer.init({ mode: 'drift', count: 300, size: 1.5, speed: 0.25, colorMode: 'rainbow' });
-  particleLayer.opacity   = 0.35;
+  particleLayer.init({ mode: 'drift', count: 300, size: 1.5, speed: 0.25, colorMode: 'cool' });
+  particleLayer.opacity   = 0.5;
   particleLayer.blendMode = 'add';
 
-  // Use _origLayersAdd for default layers so the image prompt doesn't fire
   _origLayersAdd(noiseLayer);
-  _origLayersAdd(mathLayer);
   _origLayersAdd(particleLayer);
 
   renderer.start();
@@ -335,8 +288,7 @@
   document.getElementById('btn-scene-new')?.addEventListener('click', () => {
     _autoSave();
     [...layers.layers].forEach(l => layers.remove(l.id));
-    _selectedLayerId = null;
-    LayerPanel.setSelectedId(null);
+    _selectedLayerId = null; LayerPanel.setSelectedId(null);
     paramsContent.innerHTML   = '';
     paramsEmpty.style.display = 'block';
     document.getElementById('preset-name').value = 'my-scene';
@@ -353,8 +305,7 @@
     try {
       const preset = await PresetManager.load(file, layers, layerFactory);
       if (preset.name) document.getElementById('preset-name').value = preset.name;
-      _selectedLayerId = null;
-      LayerPanel.setSelectedId(null);
+      _selectedLayerId = null; LayerPanel.setSelectedId(null);
       paramsContent.innerHTML   = '';
       paramsEmpty.style.display = 'block';
       Toast.success(`Scene "${preset.name || file.name}" loaded`);
@@ -406,17 +357,14 @@
     lfoManager.tick(dt, beat.bpm || seq.bpm, layers);
     setlist.tick(dt);
     perfMode.tick(dt);
-
     AudioPanel.tick(audio.smoothed);
     VideoPanel.tick();
-
     dotAudio.classList.toggle('inactive', !audio.smoothed.isActive);
   };
 
   // ── Scene Palette ─────────────────────────────────────────────
   const paletteContainer = document.getElementById('params-palette-container');
   if (paletteContainer) ScenePalette.renderPanel(layers, paletteContainer);
-
   VaelAssistant.init(layers, layerFactory, renderer);
 
   // ── Autosave ──────────────────────────────────────────────────

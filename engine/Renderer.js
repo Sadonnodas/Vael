@@ -2,14 +2,16 @@
  * engine/Renderer.js
  * WebGL compositor built on Three.js (r128).
  *
- * Architecture:
- *   - Each layer renders to its own offscreen Canvas 2D buffer
- *   - The Renderer pulls those as THREE.CanvasTexture every frame
- *   - Textured quads are composited in a WebGL scene with blend modes
- *   - Post-processing passes (bloom, chromatic, distort) run after
+ * FIX — screen blend + opacity:
+ * The screen blend equation (src + dst*(1-src)) uses THREE.OneFactor as the
+ * source weight, which ignores material.opacity entirely. The same is true for
+ * 'add' and some other custom blending modes.
  *
- * Layer code is unchanged — layers still draw to a Canvas 2D context.
- * The GPU handles blending, scaling, and post-processing.
+ * Fix: before uploading each layer's texture to the GPU, if opacity < 1 and
+ * the blend mode is one that ignores material.opacity, we bake the opacity
+ * into the offscreen canvas by drawing it onto a temp canvas with globalAlpha.
+ * This means the alpha is pre-multiplied into the pixel data, and every blend
+ * mode respects it correctly.
  */
 
 class Renderer {
@@ -17,7 +19,6 @@ class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
 
-    // ── Three.js setup ──────────────────────────────────────────
     this._scene    = new THREE.Scene();
     this._camera   = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 10);
     this._camera.position.z = 1;
@@ -31,23 +32,22 @@ class Renderer {
     this._renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this._renderer.setClearColor(0x000000, 1);
 
-    // ── Layer quad pool ─────────────────────────────────────────
-    // Map from layer.id → { offscreen, offCtx, texture, mesh }
     this._quads = new Map();
 
-    // ── Post-processing ─────────────────────────────────────────
     this._postEnabled  = false;
-    this._postPasses   = [];   // ordered list of active post passes
-    this._postTarget   = null; // render target for intermediate passes
+    this._postPasses   = [];
+    this._postTarget   = null;
 
-    // ── State ───────────────────────────────────────────────────
     this._rafId       = null;
     this._lastT       = 0;
     this._fpsSmoothed = 60;
     this._cssW        = 0;
     this._cssH        = 0;
 
-    // ── External references (set by App.js) ─────────────────────
+    // Temp canvas for baking opacity into textures
+    this._opacityCanvas = document.createElement('canvas');
+    this._opacityCtx    = this._opacityCanvas.getContext('2d');
+
     this.layerStack   = null;
     this.audioData    = null;
     this.videoData    = null;
@@ -67,17 +67,16 @@ class Renderer {
     this._cssH = h;
     this._renderer.setSize(w, h, false);
 
-    // Resize all offscreen canvases
     this._quads.forEach(quad => {
       quad.offscreen.width  = w;
       quad.offscreen.height = h;
       quad.texture.needsUpdate = true;
     });
 
-    // Resize post target
-    if (this._postTarget) {
-      this._postTarget.setSize(w, h);
-    }
+    if (this._postTarget) this._postTarget.setSize(w, h);
+
+    this._opacityCanvas.width  = w;
+    this._opacityCanvas.height = h;
   }
 
   // ── Render loop ──────────────────────────────────────────────
@@ -113,10 +112,9 @@ class Renderer {
     const H = this._cssH;
     const layers = this.layerStack.layers;
 
-    // Sync quad pool with current layer stack
     this._syncQuads(layers, W, H);
 
-    // ── Pass 1: render ALL layers to their offscreen canvases ───
+    // ── Pass 1: render layers to offscreen canvases ─────────────
     layers.forEach(layer => {
       if (!layer.visible) return;
       const quad = this._quads.get(layer.id);
@@ -126,8 +124,7 @@ class Renderer {
       offCtx.clearRect(0, 0, W, H);
       offCtx.save();
 
-      // Apply transform: translate to centre, then apply layer transform, then render
-      const t = layer.transform || {};
+      const t  = layer.transform || {};
       const cx = W / 2 + (t.x || 0);
       const cy = H / 2 + (t.y || 0);
       offCtx.translate(cx, cy);
@@ -142,7 +139,7 @@ class Renderer {
       offCtx.restore();
     });
 
-    // ── Pass 2: apply masks, upload textures, add to scene ──────
+    // ── Pass 2: masks, FX, opacity bake, upload ─────────────────
     while (this._scene.children.length) this._scene.remove(this._scene.children[0]);
 
     layers.forEach((layer, i) => {
@@ -150,35 +147,41 @@ class Renderer {
       const quad = this._quads.get(layer.id);
       if (!quad) return;
 
-      // Apply mask if set — uses the already-rendered mask layer canvas
+      // Mask
       if (layer.maskLayerId) {
         const maskQuad = this._quads.get(layer.maskLayerId);
         if (maskQuad) {
-          const { offCtx } = quad;
-          offCtx.save();
-          offCtx.globalCompositeOperation = 'destination-in';
-          offCtx.drawImage(maskQuad.offscreen, 0, 0);
-          offCtx.restore();
+          quad.offCtx.save();
+          quad.offCtx.globalCompositeOperation = 'destination-in';
+          quad.offCtx.drawImage(maskQuad.offscreen, 0, 0);
+          quad.offCtx.restore();
         }
       }
 
-      // Apply per-layer FX (blur, glow, chromatic, etc.)
+      // Per-layer FX
       if (layer.fx && layer.fx.length > 0) {
         LayerFX.apply(layer, quad.offscreen, quad.offCtx, W, H, this.audioData);
       }
 
-      // Upload to GPU
+      const opacity    = VaelMath.clamp(layer.opacity ?? 1, 0, 1);
+      const blendMode  = layer.blendMode || 'normal';
+
+      // FIX: for blend modes where THREE ignores material.opacity (screen, add,
+      // subtract, difference, exclusion), bake opacity into the canvas pixels.
+      // For normal/multiply/overlay etc. material.opacity works fine.
+      if (opacity < 0.999 && _blendIgnoresOpacity(blendMode)) {
+        this._bakeOpacity(quad.offscreen, W, H, opacity);
+        // After baking, tell the material to use full opacity
+        this._applyBlend(quad.mesh.material, blendMode, 1.0);
+      } else {
+        this._applyBlend(quad.mesh.material, blendMode, opacity);
+      }
+
       quad.texture.needsUpdate = true;
-
-      // Set blend mode and opacity
-      this._applyBlend(quad.mesh.material, layer.blendMode, layer.opacity ?? 1);
-
-      // Z-order
       quad.mesh.position.z = i * 0.01;
       this._scene.add(quad.mesh);
     });
 
-    // Render to screen or post pipeline
     if (this._postEnabled && this._postPasses.length > 0) {
       this._renderWithPost();
     } else {
@@ -187,12 +190,28 @@ class Renderer {
     }
   }
 
-  // ── Quad pool management ─────────────────────────────────────
+  /**
+   * Draw the offscreen canvas onto itself with globalAlpha = opacity,
+   * effectively multiplying every pixel's alpha by the opacity value.
+   */
+  _bakeOpacity(offscreen, W, H, opacity) {
+    const oc  = this._opacityCanvas;
+    const oct = this._opacityCtx;
+    if (oc.width !== W || oc.height !== H) { oc.width = W; oc.height = H; }
+    oct.clearRect(0, 0, W, H);
+    oct.globalAlpha = opacity;
+    oct.drawImage(offscreen, 0, 0);
+    oct.globalAlpha = 1;
+
+    const offCtx = offscreen.getContext('2d');
+    offCtx.clearRect(0, 0, W, H);
+    offCtx.drawImage(oc, 0, 0);
+  }
+
+  // ── Quad pool ────────────────────────────────────────────────
 
   _syncQuads(layers, W, H) {
     const activeIds = new Set(layers.map(l => l.id));
-
-    // Remove quads for deleted layers
     this._quads.forEach((quad, id) => {
       if (!activeIds.has(id)) {
         quad.texture.dispose();
@@ -202,28 +221,21 @@ class Renderer {
       }
     });
 
-    // Create quads for new layers
     layers.forEach(layer => {
       if (this._quads.has(layer.id)) return;
 
-      const offscreen = document.createElement('canvas');
-      offscreen.width  = W || 800;
-      offscreen.height = H || 600;
-      const offCtx = offscreen.getContext('2d', { willReadFrequently: false });
-
-      const texture  = new THREE.CanvasTexture(offscreen);
-      texture.minFilter = THREE.LinearFilter;
-      texture.magFilter = THREE.LinearFilter;
-
-      const geometry = new THREE.PlaneGeometry(2, 2);
-      const material = new THREE.MeshBasicMaterial({
-        map:         texture,
-        transparent: true,
-        depthWrite:  false,
-        depthTest:   false,
+      const offscreen    = document.createElement('canvas');
+      offscreen.width    = W || 800;
+      offscreen.height   = H || 600;
+      const offCtx       = offscreen.getContext('2d', { willReadFrequently: false });
+      const texture      = new THREE.CanvasTexture(offscreen);
+      texture.minFilter  = THREE.LinearFilter;
+      texture.magFilter  = THREE.LinearFilter;
+      const geometry     = new THREE.PlaneGeometry(2, 2);
+      const material     = new THREE.MeshBasicMaterial({
+        map: texture, transparent: true, depthWrite: false, depthTest: false,
       });
       const mesh = new THREE.Mesh(geometry, material);
-
       this._quads.set(layer.id, { offscreen, offCtx, texture, mesh });
     });
   }
@@ -257,7 +269,6 @@ class Renderer {
         material.premultipliedAlpha = false;
         break;
       case 'difference':
-        // Simulate difference via custom blending
         material.blending           = THREE.CustomBlending;
         material.blendSrc           = THREE.OneMinusDstColorFactor;
         material.blendDst           = THREE.OneMinusSrcColorFactor;
@@ -290,20 +301,14 @@ class Renderer {
 
   // ── Post-processing ──────────────────────────────────────────
 
-  /**
-   * Add a post-processing pass.
-   * @param {object} pass  — { name, uniforms, fragmentShader }
-   */
   addPostPass(pass) {
     if (!this._postTarget) {
       this._postTarget  = new THREE.WebGLRenderTarget(this._cssW, this._cssH, {
         minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat,
       });
-      // Second target for ping-pong (feedback)
       this._postTargetB = new THREE.WebGLRenderTarget(this._cssW, this._cssH, {
         minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat,
       });
-      // Persistent feedback buffer (stores previous composited frame)
       this._feedbackBuffer = new THREE.WebGLRenderTarget(this._cssW, this._cssH, {
         minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBAFormat,
       });
@@ -325,7 +330,7 @@ class Renderer {
       const mat = new THREE.ShaderMaterial({
         uniforms: {
           tDiffuse:    { value: null },
-          tFeedback:   { value: null },   // previous frame, used by feedback pass
+          tFeedback:   { value: null },
           iResolution: { value: new THREE.Vector2(this._cssW, this._cssH) },
           iTime:       { value: 0 },
           iBass:       { value: 0 },
@@ -335,10 +340,7 @@ class Renderer {
           iBeat:       { value: 0 },
           ...pass.uniforms,
         },
-        vertexShader: `
-          varying vec2 vUv;
-          void main() { vUv = uv; gl_Position = vec4(position, 1.0); }
-        `,
+        vertexShader: `varying vec2 vUv; void main() { vUv = uv; gl_Position = vec4(position, 1.0); }`,
         fragmentShader: pass.fragmentShader,
         depthWrite: false,
         depthTest:  false,
@@ -351,14 +353,12 @@ class Renderer {
     const postScene  = new THREE.Scene();
     const postCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
-    // 1. Render scene to target A
     this._renderer.setRenderTarget(this._postTarget);
     this._renderer.render(this._scene, this._camera);
 
     let readTarget  = this._postTarget;
     let writeTarget = this._postTargetB;
 
-    // 2. Run each post pass
     this._postMeshes?.forEach(({ pass, mesh }, i) => {
       const isLast = i === this._postMeshes.length - 1;
       const mat    = mesh.material;
@@ -372,36 +372,24 @@ class Renderer {
       mat.uniforms.iVolume.value     = this.audioData?.volume  ?? 0;
       mat.uniforms.iBeat.value       = this.audioData?.isBeat  ? 1.0 : 0.0;
 
-      // Feedback pass — provide previous composited frame
       if (pass.needsFeedback && mat.uniforms.tFeedback) {
         mat.uniforms.tFeedback.value = this._feedbackBuffer.texture;
       }
-
       if (pass.updateUniforms) pass.updateUniforms(mat.uniforms, this.audioData);
 
       postScene.add(mesh);
-
-      if (isLast) {
-        this._renderer.setRenderTarget(null);
-      } else {
-        this._renderer.setRenderTarget(writeTarget);
-      }
-
+      this._renderer.setRenderTarget(isLast ? null : writeTarget);
       this._renderer.render(postScene, postCamera);
       postScene.remove(mesh);
 
-      // Ping-pong
       const tmp = readTarget; readTarget = writeTarget; writeTarget = tmp;
     });
 
-    // 3. Copy final output to feedback buffer for next frame
     if (this._feedbackBuffer && this._postMeshes?.length > 0) {
-      // Blit last rendered output into feedback buffer
-      const blitScene  = new THREE.Scene();
-      const geo        = new THREE.PlaneGeometry(2, 2);
-      const mat        = new THREE.MeshBasicMaterial({ map: readTarget.texture, depthWrite: false, depthTest: false });
-      const blitMesh   = new THREE.Mesh(geo, mat);
-      blitScene.add(blitMesh);
+      const blitScene = new THREE.Scene();
+      const geo       = new THREE.PlaneGeometry(2, 2);
+      const mat       = new THREE.MeshBasicMaterial({ map: readTarget.texture, depthWrite: false, depthTest: false });
+      blitScene.add(new THREE.Mesh(geo, mat));
       this._renderer.setRenderTarget(this._feedbackBuffer);
       this._renderer.render(blitScene, postCamera);
       this._renderer.setRenderTarget(null);
@@ -409,13 +397,9 @@ class Renderer {
     }
   }
 
-  // ── Accessors ────────────────────────────────────────────────
-
   get fps()    { return Math.round(this._fpsSmoothed); }
   get width()  { return this._cssW; }
   get height() { return this._cssH; }
-
-  // ── Cleanup ──────────────────────────────────────────────────
 
   dispose() {
     this.stop();
@@ -426,4 +410,10 @@ class Renderer {
     });
     this._renderer.dispose();
   }
+}
+
+// Blend modes where THREE.js ignores material.opacity —
+// we need to bake opacity into the canvas pixels instead.
+function _blendIgnoresOpacity(mode) {
+  return ['screen', 'add', 'subtract', 'difference', 'exclusion'].includes(mode);
 }

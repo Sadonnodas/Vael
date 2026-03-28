@@ -545,6 +545,9 @@
             <button class="btn" id="btn-audio-file">Upload file</button>
             <button class="btn" id="btn-audio-mic">Microphone</button>
           </div>
+          <button class="btn accent" id="btn-audio-library" style="width:100%;margin-bottom:6px;font-size:9px">
+            📂 Select from library
+          </button>
           <button class="btn" id="btn-audio-system" style="width:100%;margin-bottom:8px;font-size:9px;color:var(--text-muted)"
             title="Capture audio from Spotify, Cubase, YouTube, or any app">
             🖥 System audio (Spotify, Cubase…)
@@ -637,6 +640,9 @@
             <button class="btn" id="btn-video-file">Upload video</button>
             <button class="btn" id="btn-video-webcam">Webcam</button>
           </div>
+          <button class="btn accent" id="btn-video-library" style="width:100%;margin-bottom:8px;font-size:9px">
+            📂 Select from library
+          </button>
           <input type="file" id="input-video-file" accept="video/*" style="display:none" />
 
           <div id="video-monitor" style="display:none;margin-bottom:8px;">
@@ -833,7 +839,8 @@
           </div>
         </div>
 
-      
+      </div>
+
 <!-- Keyboard shortcut help overlay -->
 <div id="shortcut-overlay" style="
   display:none;position:fixed;inset:0;
@@ -866,12 +873,6 @@
 </div>
 
 
-</div><!-- /sidebar -->
-
-</div><!-- /app -->
-
-<!-- Performance HUD -->
-<div id="perf-hud" class="hidden">
   <span id="hud-scene">Vael</span>
   &nbsp;·&nbsp;
   <span id="hud-fps">60 fps</span>

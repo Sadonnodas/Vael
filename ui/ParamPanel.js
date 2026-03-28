@@ -77,33 +77,85 @@ const ParamPanel = (() => {
     const wrap = document.createElement('div');
     wrap.style.cssText = 'margin-bottom: 14px;';
 
-    const isInt = param.type === 'int';
-    const step  = isInt ? 1 : (param.step || 0.01);
-    const min   = param.min ?? 0;
-    const max   = param.max ?? 1;
-    const fmt   = v => isInt ? Math.round(v) : parseFloat(v).toFixed(2);
+    const isInt  = param.type === 'int';
+    const step   = isInt ? 1 : (param.step || 0.01);
+    const min    = param.min ?? 0;
+    const max    = param.max ?? 1;
+    const fmt    = v => isInt ? String(Math.round(v)) : parseFloat(v).toFixed(2);
+    const clamp  = v => Math.max(min, Math.min(max, v));
 
-    wrap.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:5px">
-        <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted)">
-          ${param.label}
-        </span>
-        <span class="pv" style="font-family:var(--font-mono);font-size:9px;color:var(--accent)">
-          ${fmt(current)}
-        </span>
-      </div>
-      <input type="range" min="${min}" max="${max}" step="${step}" value="${current}"
-             style="width:100%;accent-color:var(--accent);cursor:pointer" />
+    // Label row
+    const labelRow = document.createElement('div');
+    labelRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:5px';
+
+    const label = document.createElement('span');
+    label.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted)';
+    label.textContent   = param.label;
+    labelRow.appendChild(label);
+
+    // Number input — acts as both value display and direct type-in field
+    const numInput = document.createElement('input');
+    numInput.type  = 'number';
+    numInput.value = fmt(current);
+    numInput.min   = min;
+    numInput.max   = max;
+    numInput.step  = step;
+    numInput.style.cssText = `
+      font-family: var(--font-mono);
+      font-size: 9px;
+      color: var(--accent);
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid transparent;
+      outline: none;
+      width: 52px;
+      text-align: right;
+      padding: 0;
+      cursor: text;
+      -moz-appearance: textfield;
     `;
+    // Hide browser spinner arrows (we'll use our own)
+    numInput.addEventListener('focus', () => { numInput.style.borderBottomColor = 'var(--accent)'; });
+    numInput.addEventListener('blur',  () => { numInput.style.borderBottomColor = 'transparent'; });
+    labelRow.appendChild(numInput);
+    wrap.appendChild(labelRow);
 
-    const valEl = wrap.querySelector('.pv');
-    const input = wrap.querySelector('input');
+    // Range slider
+    const slider = document.createElement('input');
+    slider.type  = 'range';
+    slider.min   = min;
+    slider.max   = max;
+    slider.step  = step;
+    slider.value = current;
+    slider.style.cssText = 'width:100%;accent-color:var(--accent);cursor:pointer';
+    wrap.appendChild(slider);
 
-    input.addEventListener('input', () => {
-      const v = isInt ? parseInt(input.value) : parseFloat(input.value);
-      valEl.textContent = fmt(v);
-      if (layer.params) layer.params[param.id] = v;
-      if (typeof layer.setParam === 'function') layer.setParam(param.id, v);
+    // Shared apply function
+    const apply = (v) => {
+      const clamped = clamp(isInt ? Math.round(v) : parseFloat(v.toFixed(10)));
+      const display = fmt(clamped);
+      slider.value   = clamped;
+      numInput.value = display;
+      if (layer.params) layer.params[param.id] = clamped;
+      if (typeof layer.setParam === 'function') layer.setParam(param.id, clamped);
+    };
+
+    // Slider drives number input
+    slider.addEventListener('input', () => {
+      apply(parseFloat(slider.value));
+    });
+
+    // Number input drives slider — on Enter or blur
+    const commitNumber = () => {
+      const v = parseFloat(numInput.value);
+      if (!isNaN(v)) apply(v);
+      else numInput.value = fmt(clamp(current));
+    };
+    numInput.addEventListener('blur',    commitNumber);
+    numInput.addEventListener('keydown', e => {
+      if (e.key === 'Enter')  { e.preventDefault(); numInput.blur(); }
+      if (e.key === 'Escape') { numInput.value = fmt(parseFloat(slider.value)); numInput.blur(); }
+      // Arrow keys on the number input work natively for step increment
     });
 
     return wrap;

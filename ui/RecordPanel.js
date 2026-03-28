@@ -1,6 +1,9 @@
 /**
  * ui/RecordPanel.js
  * Wires the REC tab: manual record, quick-record workflow, resolution.
+ *
+ * CHANGE: recorder.start() now receives _audio so the Recorder can
+ * attach a MediaStreamAudioDestinationNode and record audio + video.
  */
 
 const RecordPanel = (() => {
@@ -38,7 +41,8 @@ const RecordPanel = (() => {
     // Manual start
     document.getElementById('btn-rec-start')?.addEventListener('click', () => {
       _applyResolution();
-      _recorder.start(_canvas, parseInt(slFps?.value || 60));
+      // Pass _audio so Recorder can capture the AudioContext stream
+      _recorder.start(_canvas, parseInt(slFps?.value || 60), _audio);
       _recIdle.style.display   = 'none';
       _recActive.style.display = 'block';
       _recDone.style.display   = 'none';
@@ -46,7 +50,8 @@ const RecordPanel = (() => {
       _recorder._uiTimer = setInterval(() => {
         _recTimer.textContent = VaelMath.formatTime(_recorder.duration);
       }, 500);
-      Toast.info('Recording started');
+      const hasAudio = _audio?.isPlaying;
+      Toast.info(hasAudio ? 'Recording started (video + audio)' : 'Recording started (video only)');
     });
 
     // Manual stop
@@ -63,9 +68,9 @@ const RecordPanel = (() => {
     // Discard
     document.getElementById('btn-rec-discard')?.addEventListener('click', () => {
       _recorder.reset();
-      _recDone.style.display  = 'none';
-      _recIdle.style.display  = 'block';
-      _recTimer.textContent   = '0:00';
+      _recDone.style.display = 'none';
+      _recIdle.style.display = 'block';
+      _recTimer.textContent  = '0:00';
     });
 
     // Quick record
@@ -76,32 +81,39 @@ const RecordPanel = (() => {
       }
       _applyResolution();
       _audio.seekTo(0);
-      _recorder.start(_canvas, parseInt(slFps?.value || 60));
-      _recIdle.style.display   = 'none';
-      _recActive.style.display = 'block';
-      _recDone.style.display   = 'none';
-      _recTimer.textContent    = '0:00';
-      _recorder._uiTimer = setInterval(() => {
-        _recTimer.textContent = VaelMath.formatTime(_recorder.duration);
-      }, 500);
       _audio.play();
       document.getElementById('btn-audio-play').textContent = '⏸';
 
-      const quickStatus = document.getElementById('rec-quick-status');
-      if (quickStatus) { quickStatus.style.display = 'block'; quickStatus.textContent = 'Recording… stops when song ends'; }
+      // Small delay so AudioEngine has time to start playing before we capture
+      setTimeout(() => {
+        _recorder.start(_canvas, parseInt(slFps?.value || 60), _audio);
+        _recIdle.style.display   = 'none';
+        _recActive.style.display = 'block';
+        _recDone.style.display   = 'none';
+        _recTimer.textContent    = '0:00';
+        _recorder._uiTimer = setInterval(() => {
+          _recTimer.textContent = VaelMath.formatTime(_recorder.duration);
+        }, 500);
 
-      // Switch to REC tab
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-      document.querySelector('[data-tab="record"]')?.classList.add('active');
-      document.getElementById('tab-record')?.classList.add('active');
+        const quickStatus = document.getElementById('rec-quick-status');
+        if (quickStatus) {
+          quickStatus.style.display = 'block';
+          quickStatus.textContent   = 'Recording video + audio… stops when song ends';
+        }
 
-      Toast.info('Quick record started');
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        document.querySelector('[data-tab="record"]')?.classList.add('active');
+        document.getElementById('tab-record')?.classList.add('active');
+
+        Toast.info('Quick record started (video + audio)');
+      }, 150);
     });
 
     // Resolution dropdown
     document.getElementById('sl-res')?.addEventListener('change', e => {
-      document.getElementById('val-res').textContent = e.target.value === 'native' ? 'Native' : e.target.value;
+      document.getElementById('val-res').textContent =
+        e.target.value === 'native' ? 'Native' : e.target.value;
     });
   }
 
@@ -129,7 +141,6 @@ const RecordPanel = (() => {
     }, 200);
   }
 
-  // Called by audio.onStateChange when song ends
   function onAudioEnd() {
     if (_recorder.state !== 'recording') return;
     setTimeout(() => _stopRecording(), 600);

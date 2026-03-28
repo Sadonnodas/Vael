@@ -1,12 +1,14 @@
 /**
  * ui/VideoPanel.js
- * Wires the VIDEO tab: file load, webcam, transport, loop points.
+ * Wires the VIDEO tab.
  *
- * CHANGES:
- * - Listens for 'vael:library-set-video-source' from LibraryPanel so
- *   "Set as video source" in the library works without opening the VIDEO tab.
- * - Audio import prompt: when a video with audio is loaded and audio is
- *   already active, asks before replacing. Silent import if nothing loaded.
+ * FIXES:
+ * - 'vael:library-set-video-source' handler now works: uses entry.file
+ *   (now stored in VideoLibrary entries) to call _video.loadFile() properly.
+ * - Added "Select from library" button in the video source section.
+ * - Added "Select from library" button in the audio source section (dispatches
+ *   to AudioPanel via 'vael:library-set-audio-source').
+ * - Audio import prompt: asks before replacing active audio from a video file.
  */
 
 const VideoPanel = (() => {
@@ -33,38 +35,14 @@ const VideoPanel = (() => {
     // Listen for "Set as video source" from LibraryPanel
     window.addEventListener('vael:library-set-video-source', async e => {
       const entry = e.detail;
-      if (!entry?.url || !entry?.file) return;
+      // entry has: { id, name, url, file, element, duration }
+      if (!entry?.file) {
+        Toast.error('Library entry missing file data — try re-uploading');
+        return;
+      }
       try {
-        // Create a File-like object from the library entry
-        _videoEl.src  = entry.url;
-        _videoEl.loop = true;
-        await _videoEl.play();
-        await _video.loadFile(entry.file);
-
-        const filenameEl   = document.getElementById('video-filename');
-        const transport    = document.getElementById('video-transport');
-        const monitorEl    = document.getElementById('video-monitor');
-        const webcamActive = document.getElementById('webcam-active');
-        const levelsEl     = document.getElementById('video-levels-section');
-        const btnPlay      = document.getElementById('btn-video-play');
-
-        if (filenameEl)   filenameEl.textContent     = entry.name;
-        if (transport)    transport.style.display    = 'block';
-        if (monitorEl)    monitorEl.style.display    = 'block';
-        if (webcamActive) webcamActive.style.display = 'none';
-        if (levelsEl)     levelsEl.style.display     = 'block';
-        if (btnPlay)      btnPlay.textContent        = '⏸';
-        _statusDot.classList.remove('inactive');
-        _statusLabel.textContent = entry.name.replace(/\.[^.]+$/, '');
-        _loopIn = 0; _loopOut = 1;
-        _updateLoopPointUI();
-
-        _layers.layers.forEach(l => {
-          if (l instanceof VideoPlayerLayer) l.setVideoElement(_video.videoElement);
-        });
-
-        _handleVideoAudio(entry.file);
-        Toast.success(`Video source set: ${entry.name}`);
+        await _loadVideoFile(entry.file, entry.url);
+        Toast.success(`Video source: ${entry.name}`);
       } catch (err) {
         Toast.error('Could not set video source');
         console.error(err);
@@ -72,43 +50,74 @@ const VideoPanel = (() => {
     });
   }
 
-  function _wire() {
-    const inputFile    = document.getElementById('input-video-file');
+  // ── Shared file load helper ───────────────────────────────────
+  // Used by both the file input handler and the library source handler.
+
+  async function _loadVideoFile(file, prebuiltUrl) {
+    const url = prebuiltUrl || URL.createObjectURL(file);
+
+    // Set DOM preview element
+    _videoEl.srcObject = null;
+    _videoEl.src       = url;
+    _videoEl.loop      = true;
+    await _videoEl.play().catch(() => {});
+
+    // Load into VideoEngine (creates its own internal element for analysis)
+    await _video.loadFile(file);
+
+    // Update UI
+    const filenameEl   = document.getElementById('video-filename');
     const transport    = document.getElementById('video-transport');
+    const monitorEl    = document.getElementById('video-monitor');
     const webcamActive = document.getElementById('webcam-active');
     const levelsEl     = document.getElementById('video-levels-section');
-    const monitorEl    = document.getElementById('video-monitor');
-    const filenameEl   = document.getElementById('video-filename');
     const btnPlay      = document.getElementById('btn-video-play');
 
+    if (filenameEl)   filenameEl.textContent     = file.name;
+    if (transport)    transport.style.display    = 'block';
+    if (monitorEl)    monitorEl.style.display    = 'block';
+    if (webcamActive) webcamActive.style.display = 'none';
+    if (levelsEl)     levelsEl.style.display     = 'block';
+    if (btnPlay)      btnPlay.textContent        = '⏸';
+
+    _statusDot.classList.remove('inactive');
+    _statusLabel.textContent = file.name.replace(/\.[^.]+$/, '');
+    _loopIn = 0; _loopOut = 1;
+    _updateLoopPointUI();
+
+    // Update any VideoPlayerLayer using the legacy single-video path
+    _layers.layers.forEach(l => {
+      if (l instanceof VideoPlayerLayer) l.setVideoElement(_video.videoElement);
+    });
+
+    // Register in VideoLibrary so it appears in LIBRARY → Videos
+    // Only when uploaded fresh (prebuiltUrl means it came from library already)
+    if (!prebuiltUrl && window.videoLibrary) {
+      window.videoLibrary.add(file).catch(() => {});
+    }
+
+    // Handle audio track
+    _handleVideoAudio(file);
+  }
+
+  // ── Wire UI ───────────────────────────────────────────────────
+
+  function _wire() {
+    const inputFile = document.getElementById('input-video-file');
+    const btnPlay   = document.getElementById('btn-video-play');
+
+    // Upload file button
     document.getElementById('btn-video-file')?.addEventListener('click', () => inputFile?.click());
+
+    // "Select from library" button — shows a small picker modal
+    document.getElementById('btn-video-library')?.addEventListener('click', () => {
+      _showLibraryPicker('video');
+    });
 
     inputFile?.addEventListener('change', async e => {
       const file = e.target.files[0];
       if (!file) return;
-
-      const url = URL.createObjectURL(file);
-      _videoEl.src  = url;
-      _videoEl.loop = true;
-      await _videoEl.play();
-      await _video.loadFile(file);
-
-      filenameEl.textContent     = file.name;
-      transport.style.display    = 'block';
-      monitorEl.style.display    = 'block';
-      webcamActive.style.display = 'none';
-      levelsEl.style.display     = 'block';
-      _statusDot.classList.remove('inactive');
-      _statusLabel.textContent = file.name.replace(/\.[^.]+$/, '');
-      btnPlay.textContent = '⏸';
-      _loopIn = 0; _loopOut = 1;
-      _updateLoopPointUI();
-
-      _layers.layers.forEach(l => {
-        if (l instanceof VideoPlayerLayer) l.setVideoElement(_video.videoElement);
-      });
-
-      _handleVideoAudio(file);
+      await _loadVideoFile(file);
       e.target.value = '';
     });
 
@@ -118,10 +127,10 @@ const VideoPanel = (() => {
         await _video.startWebcam();
         const stream = _video.videoElement?.srcObject;
         if (stream) { _videoEl.srcObject = stream; _videoEl.play(); }
-        monitorEl.style.display    = 'block';
-        transport.style.display    = 'none';
-        webcamActive.style.display = 'block';
-        levelsEl.style.display     = 'block';
+        document.getElementById('video-monitor').style.display    = 'block';
+        document.getElementById('video-transport').style.display  = 'none';
+        document.getElementById('webcam-active').style.display    = 'block';
+        document.getElementById('video-levels-section').style.display = 'block';
         _statusDot.classList.remove('inactive');
         _statusLabel.textContent = 'Webcam';
         _layers.layers.forEach(l => {
@@ -141,9 +150,9 @@ const VideoPanel = (() => {
     document.getElementById('btn-video-stop')?.addEventListener('click', () => {
       _videoEl.pause(); _videoEl.src = ''; _videoEl.srcObject = null;
       _video.stop();
-      transport.style.display  = 'none';
-      monitorEl.style.display  = 'none';
-      levelsEl.style.display   = 'none';
+      document.getElementById('video-transport').style.display    = 'none';
+      document.getElementById('video-monitor').style.display      = 'none';
+      document.getElementById('video-levels-section').style.display = 'none';
       _statusDot.classList.add('inactive');
       _statusLabel.textContent = 'No video';
     });
@@ -151,11 +160,11 @@ const VideoPanel = (() => {
     document.getElementById('btn-webcam-stop')?.addEventListener('click', () => {
       _video.stop();
       if (_videoEl.srcObject) { _videoEl.srcObject.getTracks().forEach(t => t.stop()); _videoEl.srcObject = null; }
-      monitorEl.style.display    = 'none';
-      webcamActive.style.display = 'none';
-      levelsEl.style.display     = 'none';
+      document.getElementById('video-monitor').style.display      = 'none';
+      document.getElementById('webcam-active').style.display      = 'none';
+      document.getElementById('video-levels-section').style.display = 'none';
       _statusDot.classList.add('inactive');
-      _statusLabel.textContent   = 'No video';
+      _statusLabel.textContent = 'No video';
     });
 
     // Scrubber
@@ -183,7 +192,82 @@ const VideoPanel = (() => {
     });
   }
 
-  // ── Audio import prompt ───────────────────────────────────────
+  // ── Library picker modal ──────────────────────────────────────
+
+  function _showLibraryPicker(type) {
+    document.getElementById('_lib-picker-modal')?.remove();
+
+    // Get entries from the library
+    const entries = type === 'video'
+      ? (window.videoLibrary?.entries || [])
+      : [];   // audio handled differently below
+
+    if (entries.length === 0) {
+      Toast.warn(`No ${type} files in library yet — add some in the LIBRARY tab`);
+      document.querySelector('[data-tab="library"]')?.click();
+      return;
+    }
+
+    const overlay = document.createElement('div');
+    overlay.id = '_lib-picker-modal';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:1000;backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center';
+
+    const dialog = document.createElement('div');
+    dialog.style.cssText = 'background:var(--bg-mid);border:1px solid var(--border);border-radius:10px;padding:20px 22px;max-width:380px;width:92%;font-family:var(--font-mono)';
+
+    const title = document.createElement('div');
+    title.style.cssText = 'color:var(--accent2);font-size:9px;letter-spacing:1.5px;text-transform:uppercase;margin-bottom:14px';
+    title.textContent   = `Select ${type} source from library`;
+    dialog.appendChild(title);
+
+    entries.forEach(entry => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 10px;border:1px solid var(--border-dim);border-radius:5px;margin-bottom:6px;cursor:pointer;transition:border-color 0.15s';
+      row.addEventListener('mouseenter', () => { row.style.borderColor = 'var(--accent2)'; });
+      row.addEventListener('mouseleave', () => { row.style.borderColor = 'var(--border-dim)'; });
+
+      if (type === 'video') {
+        const preview = document.createElement('video');
+        preview.src = entry.url; preview.muted = true; preview.playsInline = true;
+        preview.style.cssText = 'width:60px;height:38px;object-fit:cover;border-radius:3px;flex-shrink:0;background:#000';
+        preview.play().catch(() => {});
+        row.appendChild(preview);
+      } else {
+        const icon = document.createElement('div');
+        icon.style.cssText = 'width:36px;height:36px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--accent) 10%,var(--bg));border-radius:3px;flex-shrink:0;font-size:18px';
+        icon.textContent   = '♪';
+        row.appendChild(icon);
+      }
+
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0';
+      info.innerHTML = `
+        <div style="font-size:9px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${entry.name}</div>
+        <div style="font-size:8px;color:var(--text-dim);margin-top:2px">${VaelMath.formatTime(entry.duration)}</div>
+      `;
+      row.appendChild(info);
+
+      row.addEventListener('click', async () => {
+        overlay.remove();
+        window.dispatchEvent(new CustomEvent('vael:library-set-video-source', { detail: entry }));
+      });
+
+      dialog.appendChild(row);
+    });
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className   = 'btn';
+    cancelBtn.style.cssText = 'width:100%;margin-top:6px;color:var(--text-dim)';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.addEventListener('click', () => overlay.remove());
+    dialog.appendChild(cancelBtn);
+
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  }
+
+  // ── Audio import from video ───────────────────────────────────
 
   async function _handleVideoAudio(file) {
     let hasAudio = false;
@@ -196,60 +280,34 @@ const VideoPanel = (() => {
     } catch { hasAudio = false; }
 
     if (!hasAudio) { Toast.info('No audio track in this video'); return; }
-
-    // No audio loaded — import silently
-    if (_audio.sourceType === 'none') {
-      await _importAudio(file);
-      return;
-    }
-
-    // Audio already active — ask
+    if (_audio.sourceType === 'none') { await _importAudio(file); return; }
     _showAudioPrompt(file);
   }
 
   function _showAudioPrompt(file) {
     document.getElementById('_video-audio-prompt')?.remove();
-
     const prompt = document.createElement('div');
     prompt.id    = '_video-audio-prompt';
-    prompt.style.cssText = `
-      position:fixed;bottom:60px;left:50%;transform:translateX(-50%);
-      background:var(--bg-mid);border:1px solid var(--accent2);border-radius:8px;
-      padding:14px 18px;z-index:1000;font-family:var(--font-mono);font-size:10px;
-      color:var(--text);box-shadow:0 8px 32px rgba(0,0,0,0.6);
-      backdrop-filter:blur(12px);max-width:340px;width:90%;
-    `;
+    prompt.style.cssText = 'position:fixed;bottom:60px;left:50%;transform:translateX(-50%);background:var(--bg-mid);border:1px solid var(--accent2);border-radius:8px;padding:14px 18px;z-index:1000;font-family:var(--font-mono);font-size:10px;color:var(--text);box-shadow:0 8px 32px rgba(0,0,0,0.6);backdrop-filter:blur(12px);max-width:340px;width:90%';
     prompt.innerHTML = `
-      <div style="color:var(--accent2);font-size:9px;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">
-        Video has audio track
-      </div>
+      <div style="color:var(--accent2);font-size:9px;letter-spacing:1px;text-transform:uppercase;margin-bottom:8px">Video has audio track</div>
       <div style="color:var(--text-muted);margin-bottom:12px;line-height:1.6">
-        Replace current audio with audio from
-        <strong style="color:var(--text)">${file.name}</strong>?
+        Replace current audio with audio from <strong style="color:var(--text)">${file.name}</strong>?
       </div>
       <div style="display:flex;gap:8px">
         <button id="_vap-yes" class="btn accent" style="flex:1;font-size:9px">↺ Replace audio</button>
         <button id="_vap-no"  class="btn"        style="flex:1;font-size:9px">Keep current</button>
-      </div>
-    `;
+      </div>`;
     document.body.appendChild(prompt);
-
-    document.getElementById('_vap-yes').addEventListener('click', async () => {
-      prompt.remove();
-      await _importAudio(file);
-    });
-    document.getElementById('_vap-no').addEventListener('click', () => {
-      prompt.remove();
-      Toast.info('Audio unchanged');
-    });
+    document.getElementById('_vap-yes').addEventListener('click', async () => { prompt.remove(); await _importAudio(file); });
+    document.getElementById('_vap-no').addEventListener('click',  () => { prompt.remove(); Toast.info('Audio unchanged'); });
     setTimeout(() => { document.getElementById('_video-audio-prompt')?.remove(); }, 12000);
   }
 
   async function _importAudio(file) {
     try {
       await _audio.loadFile(file);
-      _audio.loop = true;
-      _audio.play();
+      _audio.loop = true; _audio.play();
       const fnEl = document.getElementById('audio-filename');
       const tr   = document.getElementById('audio-transport');
       const lv   = document.getElementById('audio-levels-section');
@@ -271,10 +329,7 @@ const VideoPanel = (() => {
     const regionEl = document.getElementById('video-loop-region');
     if (inEl)     inEl.textContent  = VaelMath.formatTime(_loopIn  * dur);
     if (outEl)    outEl.textContent = VaelMath.formatTime(_loopOut * dur);
-    if (regionEl) {
-      regionEl.style.left  = `${_loopIn  * 100}%`;
-      regionEl.style.width = `${(_loopOut - _loopIn) * 100}%`;
-    }
+    if (regionEl) { regionEl.style.left = `${_loopIn*100}%`; regionEl.style.width = `${(_loopOut-_loopIn)*100}%`; }
   }
 
   function tick() {
