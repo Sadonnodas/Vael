@@ -117,15 +117,61 @@ const RecordPanel = (() => {
     });
   }
 
+  // Store native canvas dimensions so we can restore after recording
+  let _nativeW = 0;
+  let _nativeH = 0;
+  let _nativeStyleW = '';
+  let _nativeStyleH = '';
+  let _resolutionOverrideActive = false;
+
   function _applyResolution() {
     const res = document.getElementById('sl-res')?.value;
     if (!res || res === 'native') return;
     const [w, h] = res.split('x').map(Number);
-    if (w && h && _renderer) {
-      _canvas.style.width  = `${w}px`;
-      _canvas.style.height = `${h}px`;
-      _renderer._resize();
-    }
+    if (!w || !h || !_renderer) return;
+
+    // Save current state so we can restore it after recording
+    _nativeW       = _canvas.width;
+    _nativeH       = _canvas.height;
+    _nativeStyleW  = _canvas.style.width;
+    _nativeStyleH  = _canvas.style.height;
+    _resolutionOverrideActive = true;
+
+    // Set actual canvas pixel dimensions (not just CSS)
+    // This is what the WebGL renderer captures, so this is the real output size
+    _canvas.width        = w;
+    _canvas.height       = h;
+    _canvas.style.width  = '100%';   // let CSS scale it visually
+    _canvas.style.height = '100%';
+
+    // Tell the renderer about the new size
+    _renderer._cssW = w;
+    _renderer._cssH = h;
+    _renderer._renderer.setSize(w, h, false);
+
+    // Resize all offscreen canvases in the quad pool
+    _renderer._quads?.forEach(quad => {
+      quad.offscreen.width  = w;
+      quad.offscreen.height = h;
+      if (quad.texture) quad.texture.needsUpdate = true;
+    });
+
+    if (_renderer._postTarget) _renderer._postTarget.setSize(w, h);
+
+    Toast.info(`Output: ${w}×${h}`);
+  }
+
+  function _restoreResolution() {
+    if (!_resolutionOverrideActive) return;
+    _resolutionOverrideActive = false;
+
+    _canvas.width        = _nativeW;
+    _canvas.height       = _nativeH;
+    _canvas.style.width  = _nativeStyleW;
+    _canvas.style.height = _nativeStyleH;
+
+    // Let renderer recalculate from CSS dimensions
+    _renderer._resize?.();
   }
 
   function _stopRecording() {
@@ -138,6 +184,8 @@ const RecordPanel = (() => {
       const qs = document.getElementById('rec-quick-status');
       if (qs) qs.style.display = 'none';
       Toast.success(`Recording ready — ${_recTimer.textContent}`);
+      // Restore canvas to its natural display resolution
+      _restoreResolution();
     }, 200);
   }
 

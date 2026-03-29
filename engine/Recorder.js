@@ -29,36 +29,10 @@ class Recorder {
   start(canvas, fps = 60, audioEngine = null) {
     if (this.state === 'recording') return;
     this._chunks = [];
+    this._recordingDest = null;
 
     // Canvas video stream
     const videoStream = canvas.captureStream(fps);
-
-    // Try to get an audio stream from the AudioContext
-    let combinedStream = videoStream;
-    try {
-      if (audioEngine?._ctx && audioEngine.isPlaying) {
-        const ctx      = audioEngine._ctx;
-        const dest     = ctx.createMediaStreamDestination();
-
-        // Connect the analyser (which sits between source and destination)
-        // to our recording destination as well
-        if (audioEngine._analyser) {
-          audioEngine._analyser.connect(dest);
-        }
-
-        const audioTracks = dest.stream.getAudioTracks();
-        if (audioTracks.length > 0) {
-          // Merge: take video tracks + audio tracks into one stream
-          combinedStream = new MediaStream([
-            ...videoStream.getVideoTracks(),
-            ...audioTracks,
-          ]);
-        }
-      }
-    } catch (e) {
-      console.warn('Recorder: could not attach audio — recording video only', e);
-      combinedStream = videoStream;
-    }
 
     const mimes = [
       'video/webm;codecs=vp9,opus',
@@ -70,6 +44,28 @@ class Recorder {
     ];
     const mimeType = mimes.find(m => MediaRecorder.isTypeSupported(m)) || '';
 
+    // Build the stream — video only, or video+audio
+    let combinedStream = videoStream;
+    try {
+      if (audioEngine?._ctx && audioEngine.isPlaying && audioEngine._analyser) {
+        const dest = audioEngine._ctx.createMediaStreamDestination();
+        audioEngine._analyser.connect(dest);
+        this._recordingDest = dest;
+
+        const audioTracks = dest.stream.getAudioTracks();
+        if (audioTracks.length > 0) {
+          combinedStream = new MediaStream([
+            ...videoStream.getVideoTracks(),
+            ...audioTracks,
+          ]);
+        }
+      }
+    } catch (e) {
+      console.warn('Recorder: could not attach audio — recording video only', e);
+      combinedStream = videoStream;
+      this._recordingDest = null;
+    }
+
     try {
       this._recorder = new MediaRecorder(
         combinedStream,
@@ -77,6 +73,10 @@ class Recorder {
       );
     } catch (e) {
       console.error('Recorder: MediaRecorder not supported', e);
+      if (this._recordingDest && audioEngine?._analyser) {
+        try { audioEngine._analyser.disconnect(this._recordingDest); } catch {}
+        this._recordingDest = null;
+      }
       return;
     }
 
@@ -91,49 +91,12 @@ class Recorder {
       this._prevUrl = this.blobUrl;
       this.state    = 'stopped';
 
-      // Disconnect the recording node if we added one
+      // Disconnect the recording tap from the audio graph
       if (this._recordingDest && audioEngine?._analyser) {
         try { audioEngine._analyser.disconnect(this._recordingDest); } catch {}
         this._recordingDest = null;
       }
     };
-
-    // Store for cleanup in onstop
-    this._recordingDest = null;
-    try {
-      if (audioEngine?._ctx && audioEngine.isPlaying && audioEngine._analyser) {
-        const dest = audioEngine._ctx.createMediaStreamDestination();
-        audioEngine._analyser.connect(dest);
-        this._recordingDest = dest;
-        // Rebuild combined stream with this dest (the one we actually connected)
-        const audioTracks = dest.stream.getAudioTracks();
-        if (audioTracks.length > 0) {
-          combinedStream = new MediaStream([
-            ...videoStream.getVideoTracks(),
-            ...audioTracks,
-          ]);
-          // Re-create recorder with the correct stream
-          this._recorder.stream?.getTracks().forEach(t => {});
-          try {
-            this._recorder = new MediaRecorder(
-              combinedStream,
-              mimeType ? { mimeType } : undefined
-            );
-            this._recorder.ondataavailable = e => {
-              if (e.data && e.data.size > 0) this._chunks.push(e.data);
-            };
-            this._recorder.onstop = () => {
-              const blob = new Blob(this._chunks, { type: mimeType || 'video/webm' });
-              if (this._prevUrl) URL.revokeObjectURL(this._prevUrl);
-              this.blobUrl  = URL.createObjectURL(blob);
-              this._prevUrl = this.blobUrl;
-              this.state    = 'stopped';
-              try { audioEngine._analyser.disconnect(dest); } catch {}
-            };
-          } catch {}
-        }
-      }
-    } catch {}
 
     this._recorder.start(100);
     this._startMs = performance.now();

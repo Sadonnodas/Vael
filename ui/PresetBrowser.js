@@ -12,8 +12,83 @@
 
 const PresetBrowser = (() => {
 
-  const LS_KEY  = 'vael-preset-library-v2';
-  const MAX_CAP = 40;   // max presets stored
+  const DB_NAME    = 'vael-presets';
+  const DB_VERSION = 1;
+  const STORE_NAME = 'presets';
+  const MAX_CAP    = 60;   // max presets stored (IDB has no 5 MB cap)
+
+  // In-memory cache — loaded once from IDB on init, written back async on save.
+  let _cache = [];
+  let _db    = null;
+
+  // ── IndexedDB helpers ─────────────────────────────────────────
+
+  async function _openDB() {
+    if (_db) return _db;
+    return new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = e => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains(STORE_NAME)) {
+          const store = db.createObjectStore(STORE_NAME, { keyPath: 'id' });
+          store.createIndex('by_saved', 'saved', { unique: false });
+        }
+      };
+      req.onsuccess = e => { _db = e.target.result; resolve(_db); };
+      req.onerror   = () => reject(req.error);
+    });
+  }
+
+  async function _loadFromIDB() {
+    try {
+      const db = await _openDB();
+      return new Promise((resolve, reject) => {
+        const tx  = db.transaction(STORE_NAME, 'readonly');
+        const req = tx.objectStore(STORE_NAME).index('by_saved').getAll();
+        req.onsuccess = () => {
+          // Most recent first
+          resolve((req.result || []).reverse());
+        };
+        req.onerror = () => reject(req.error);
+      });
+    } catch { return []; }
+  }
+
+  async function _saveToIDB(preset) {
+    try {
+      const db = await _openDB();
+      return new Promise((resolve, reject) => {
+        const tx  = db.transaction(STORE_NAME, 'readwrite');
+        const req = tx.objectStore(STORE_NAME).put(preset);
+        req.onsuccess = () => resolve();
+        req.onerror   = () => reject(req.error);
+      });
+    } catch (e) { console.warn('PresetBrowser: IDB save failed', e); }
+  }
+
+  async function _deleteFromIDB(id) {
+    try {
+      const db = await _openDB();
+      return new Promise((resolve, reject) => {
+        const tx  = db.transaction(STORE_NAME, 'readwrite');
+        const req = tx.objectStore(STORE_NAME).delete(id);
+        req.onsuccess = () => resolve();
+        req.onerror   = () => reject(req.error);
+      });
+    } catch {}
+  }
+
+  // Migrate any existing localStorage presets into IDB (one-time migration)
+  async function _migrateFromLocalStorage() {
+    const LS_KEY = 'vael-preset-library-v2';
+    try {
+      const old = JSON.parse(localStorage.getItem(LS_KEY) || '[]');
+      if (!old.length) return;
+      for (const p of old) { await _saveToIDB(p); }
+      localStorage.removeItem(LS_KEY);
+      console.log(`PresetBrowser: migrated ${old.length} presets from localStorage to IndexedDB`);
+    } catch {}
+  }
 
   let _layerStack   = null;
   let _layerFactory = null;
@@ -135,15 +210,10 @@ const PresetBrowser = (() => {
     },
   ];
 
-  function _getAll() {
-    try { return JSON.parse(localStorage.getItem(LS_KEY) || '[]'); }
-    catch { return []; }
-  }
-
-  function _setAll(list) {
-    try { localStorage.setItem(LS_KEY, JSON.stringify(list)); }
-    catch (e) { Toast.warn('Preset storage full — delete some presets'); }
-  }
+  // _cache is populated on init — _getAll() and _setAll() work synchronously
+  // against the cache, while IDB persistence happens asynchronously in the background.
+  function _getAll()        { return _cache; }
+  function _setAll(list)    { _cache = list; }
 
   function save(layerStack, name, thumbnail = null) {
     const preset = {
@@ -174,7 +244,9 @@ const PresetBrowser = (() => {
   }
 
   function remove(name) {
+    const toDelete = _getAll().find(p => p.name === name);
     _setAll(_getAll().filter(p => p.name !== name));
+    if (toDelete?.id) _deleteFromIDB(toDelete.id).catch(() => {});
   }
 
   function rename(oldName, newName) {
@@ -218,6 +290,12 @@ const PresetBrowser = (() => {
     _layerFactory = layerFactory;
     _onLoad       = onLoad;
     _buildPanel();
+
+    // Load persisted presets from IndexedDB into the in-memory cache
+    _migrateFromLocalStorage().then(() => _loadFromIDB()).then(presets => {
+      _cache = presets;
+      _render();  // re-render grid with loaded presets
+    }).catch(() => {});
   }
 
   function _buildPanel() {

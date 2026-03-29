@@ -12,7 +12,7 @@ class PatternLayer extends BaseLayer {
     name: 'Pattern',
     version: '1.0',
     params: [
-      { id: 'pattern',     label: 'Pattern',      type: 'enum',  default: 'star',
+      { id: 'pattern',     label: 'Pattern',      type: 'enum',  default: 'star', triggersRefresh: true,
         options: ['star','mandala','hexgrid','circles','lissajous','spirograph','flower','grid'] },
       { id: 'color',       label: 'Color',         type: 'color', default: '#ffffff' },
       { id: 'color2',      label: 'Color 2',       type: 'color', default: '#00d4aa' },
@@ -20,9 +20,9 @@ class PatternLayer extends BaseLayer {
       { id: 'speed',       label: 'Speed',         type: 'float', default: 0.3, min: 0,   max: 3   },
       { id: 'complexity',  label: 'Complexity',    type: 'int',   default: 5,   min: 2,   max: 20  },
       { id: 'lineWidth',   label: 'Line width',    type: 'float', default: 1.5, min: 0.5, max: 8   },
-      { id: 'filled',      label: 'Filled',        type: 'bool',  default: false },
-      { id: 'audioTarget', label: 'Audio → size',  type: 'band',  default: 'bass' },
-      { id: 'audioAmount', label: 'Audio amount',  type: 'float', default: 0.3, min: 0,   max: 1   },
+      { id: 'filled',      label: 'Filled',        type: 'bool',  default: false,
+        showWhen: { pattern: ['star','circles','flower','mandala'] } },
+      { id: 'audioReact',  label: 'Audio react',  type: 'float', default: 0.3, min: 0,   max: 1   },
     ],
   };
 
@@ -37,8 +37,7 @@ class PatternLayer extends BaseLayer {
       complexity:  5,
       lineWidth:   1.5,
       filled:      false,
-      audioTarget: 'bass',
-      audioAmount: 0.3,
+      audioReact:  0.3,
     };
     this._time        = 0;
     this._audioSmooth = 0;
@@ -49,14 +48,14 @@ class PatternLayer extends BaseLayer {
 
   update(audioData, videoData, dt) {
     this._time += dt * this.params.speed;
-    const av = audioData?.isActive ? (audioData[this.params.audioTarget] ?? 0) : 0;
+    const av = audioData?.isActive ? (audioData.bass ?? 0) * (this.params.audioReact ?? 0.3) : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.08);
     if (audioData?.isBeat) this._beatPulse = 1.0;
     this._beatPulse = Math.max(0, this._beatPulse - dt * 6);
   }
 
   render(ctx, width, height) {
-    const scale    = this.params.size * (1 + this._audioSmooth * this.params.audioAmount * 0.5 + this._beatPulse * 0.08);
+    const scale    = this.params.size * (1 + this._audioSmooth * 0.5 + this._beatPulse * 0.08);
     const baseSize = Math.min(width, height) * 0.35 * scale;
     const t        = this._time;
     const n        = this.params.complexity;

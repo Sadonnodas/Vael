@@ -124,10 +124,21 @@ class LFOManager {
     if (!layerStack) return;
     this.lfos.forEach(lfo => {
       const layer = layerStack.layers.find(l => l.id === lfo.layerId);
-      if (!layer || !layer.params) return;
+      if (!layer) return;
       const value = lfo.tick(dt, bpm);
-      layer.params[lfo.paramId] = value;
-      if (typeof layer.setParam === 'function') layer.setParam(lfo.paramId, value);
+
+      if (lfo.paramId === 'opacity') {
+        // Special: opacity lives on layer directly, not in layer.params
+        layer.opacity = Math.max(0, Math.min(1, value));
+      } else if (lfo.paramId.startsWith('transform.')) {
+        // Special: transform targets
+        const key = lfo.paramId.slice('transform.'.length);
+        if (layer.transform) layer.transform[key] = value;
+      } else {
+        if (!layer.params) return;
+        layer.params[lfo.paramId] = value;
+        if (typeof layer.setParam === 'function') layer.setParam(lfo.paramId, value);
+      }
     });
   }
 

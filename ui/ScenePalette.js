@@ -132,6 +132,41 @@ const ScenePalette = (() => {
         layer.params.color = VaelColor.rgbToHex(r, g, b);
       }
     }
+
+    // ShaderLayer — set iColorA, iColorB from palette hues, plus hueShift
+    if (layer instanceof ShaderLayer) {
+      if ('hueShift' in layer.params) layer.params.hueShift = p.shaderHue ?? p.hueA;
+      if ('colorA'   in layer.params) {
+        const [r, g, b] = VaelColor.hslToRgb(p.hueA, p.saturation, 0.55);
+        layer.params.colorA = VaelColor.rgbToHex(r, g, b);
+      }
+      if ('colorB'   in layer.params) {
+        const [r, g, b] = VaelColor.hslToRgb(p.hueB, p.saturation * 0.9, 0.45);
+        layer.params.colorB = VaelColor.rgbToHex(r, g, b);
+      }
+      // Rebuild the GPU material so colour uniforms update immediately
+      if (typeof layer._gpuDirty !== 'undefined') layer._gpuDirty = true;
+    }
+
+    // PatternLayer — set color and color2 from palette
+    if (layer instanceof PatternLayer) {
+      if ('color' in layer.params) {
+        const [r, g, b] = VaelColor.hslToRgb(p.hueA, p.saturation, 0.6);
+        layer.params.color = VaelColor.rgbToHex(r, g, b);
+      }
+      if ('color2' in layer.params) {
+        const [r, g, b] = VaelColor.hslToRgb(p.hueB, p.saturation * 0.8, 0.5);
+        layer.params.color2 = VaelColor.rgbToHex(r, g, b);
+      }
+    }
+
+    // ImageLayer — apply tint from palette hue
+    if (layer instanceof ImageLayer) {
+      if ('tintHue'    in layer.params) layer.params.tintHue    = p.hueA;
+      if ('tintAmount' in layer.params && layer.params.tintAmount === 0) {
+        layer.params.tintAmount = 0.15; // nudge tint on if it was off
+      }
+    }
   }
 
   // ── UI ────────────────────────────────────────────────────────

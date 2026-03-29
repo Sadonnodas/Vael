@@ -114,7 +114,17 @@ class Renderer {
 
     this._syncQuads(layers, W, H);
 
-    // ── Pass 1: render layers to offscreen canvases ─────────────
+    // Collect the set of layer IDs that are used purely as masks.
+    // These should NOT be rendered as visible layers in the scene —
+    // they exist only to provide pixel data for masking other layers.
+    const maskSourceIds = new Set(
+      layers.filter(l => l.maskLayerId).map(l => l.maskLayerId)
+    );
+
+    // ── Pass 1: render ALL layers to their offscreen canvases ───
+    // Mask source layers must be rendered even if not added to the scene,
+    // because their pixel data is needed in Pass 2. We render ALL visible
+    // layers unconditionally here, then selectively skip scene-add in Pass 2.
     layers.forEach(layer => {
       if (!layer.visible) return;
       const quad = this._quads.get(layer.id);
@@ -139,7 +149,7 @@ class Renderer {
       offCtx.restore();
     });
 
-    // ── Pass 2: masks, FX, opacity bake, upload ─────────────────
+    // ── Pass 2: apply masks, FX, opacity bake, upload ───────────
     while (this._scene.children.length) this._scene.remove(this._scene.children[0]);
 
     layers.forEach((layer, i) => {
@@ -147,14 +157,12 @@ class Renderer {
       const quad = this._quads.get(layer.id);
       if (!quad) return;
 
-      // Mask
+      // Apply mask if set
       if (layer.maskLayerId) {
         const maskQuad = this._quads.get(layer.maskLayerId);
         if (maskQuad) {
-          quad.offCtx.save();
-          quad.offCtx.globalCompositeOperation = 'destination-in';
-          quad.offCtx.drawImage(maskQuad.offscreen, 0, 0);
-          quad.offCtx.restore();
+          _applyMask(quad.offscreen, quad.offCtx, maskQuad.offscreen,
+                     layer.maskMode || 'luminance', W, H);
         }
       }
 
@@ -163,15 +171,22 @@ class Renderer {
         LayerFX.apply(layer, quad.offscreen, quad.offCtx, W, H, this.audioData);
       }
 
-      const opacity    = VaelMath.clamp(layer.opacity ?? 1, 0, 1);
-      const blendMode  = layer.blendMode || 'normal';
+      const opacity   = VaelMath.clamp(layer.opacity ?? 1, 0, 1);
+      const blendMode = layer.blendMode || 'normal';
 
-      // FIX: for blend modes where THREE ignores material.opacity (screen, add,
-      // subtract, difference, exclusion), bake opacity into the canvas pixels.
-      // For normal/multiply/overlay etc. material.opacity works fine.
-      if (opacity < 0.999 && _blendIgnoresOpacity(blendMode)) {
+      // Modes that need canvas 2D compositing (WebGL can't do them natively):
+      // overlay, softlight, hardlight, luminosity, color, hue, saturation.
+      // We flag these quads so the composite loop can handle them with a canvas pass.
+      quad._needsCanvasBlend = _isCanvasOnlyBlend(blendMode);
+
+      if (quad._needsCanvasBlend) {
+        // Bake opacity into pixels so the canvas compositor respects it
+        if (opacity < 0.999) this._bakeOpacity(quad.offscreen, W, H, opacity);
+        // Use normal blending as a no-op placeholder; this quad will be
+        // re-drawn onto a canvas accumulator after the WebGL pass.
+        this._applyBlend(quad.mesh.material, 'normal', 0.0001); // near-invisible in GL
+      } else if (opacity < 0.999 && _blendIgnoresOpacity(blendMode)) {
         this._bakeOpacity(quad.offscreen, W, H, opacity);
-        // After baking, tell the material to use full opacity
         this._applyBlend(quad.mesh.material, blendMode, 1.0);
       } else {
         this._applyBlend(quad.mesh.material, blendMode, opacity);
@@ -179,7 +194,12 @@ class Renderer {
 
       quad.texture.needsUpdate = true;
       quad.mesh.position.z = i * 0.01;
-      this._scene.add(quad.mesh);
+
+      // BUG FIX: If this layer is used as a mask source for another layer,
+      // do NOT add it to the scene as a visible quad. It renders silently.
+      if (!maskSourceIds.has(layer.id)) {
+        this._scene.add(quad.mesh);
+      }
     });
 
     if (this._postEnabled && this._postPasses.length > 0) {
@@ -188,7 +208,18 @@ class Renderer {
       this._renderer.setRenderTarget(null);
       this._renderer.render(this._scene, this._camera);
     }
-  }
+
+    // ── Canvas-only blend pass ───────────────────────────────────
+    // Overlay, softlight, hardlight, luminosity, color, hue, saturation
+    // are not achievable in WebGL without custom shaders. We composite
+    // them on top using the Canvas 2D API after the GL pass completes.
+    const canvasLayers = layers.filter(l =>
+      l.visible && this._quads.get(l.id)?._needsCanvasBlend && !maskSourceIds.has(l.id)
+    );
+    if (canvasLayers.length > 0) {
+      this._applyCanvasBlendLayers(canvasLayers, W, H);
+    }
+  }  // end _compositeFrame()
 
   /**
    * Draw the offscreen canvas onto itself with globalAlpha = opacity,
@@ -401,6 +432,46 @@ class Renderer {
   get width()  { return this._cssW; }
   get height() { return this._cssH; }
 
+  /**
+   * Composite canvas-only blend mode layers (overlay, softlight, etc.)
+   * on top of the WebGL output by reading back the GL canvas and drawing
+   * each layer's offscreen canvas onto it with the correct 2D composite op.
+   */
+  _applyCanvasBlendLayers(layers, W, H) {
+    if (!this._canvas2d) {
+      this._canvas2d    = document.createElement('canvas');
+      this._canvas2dCtx = this._canvas2d.getContext('2d');
+    }
+    if (this._canvas2d.width !== W || this._canvas2d.height !== H) {
+      this._canvas2d.width  = W;
+      this._canvas2d.height = H;
+    }
+
+    const ctx = this._canvas2dCtx;
+    ctx.clearRect(0, 0, W, H);
+
+    // Draw current WebGL output as the base
+    ctx.drawImage(this.canvas, 0, 0);
+
+    // Composite each canvas-blend layer on top
+    layers.forEach(layer => {
+      const quad = this._quads.get(layer.id);
+      if (!quad) return;
+      const op = _canvas2dBlendOp(layer.blendMode);
+      ctx.save();
+      ctx.globalCompositeOperation = op;
+      ctx.drawImage(quad.offscreen, 0, 0);
+      ctx.restore();
+    });
+
+    // Write the composited result back onto the GL canvas
+    const glCtx = this.canvas.getContext('2d');
+    if (glCtx) {
+      glCtx.clearRect(0, 0, W, H);
+      glCtx.drawImage(this._canvas2d, 0, 0);
+    }
+  }
+
   dispose() {
     this.stop();
     this._quads.forEach(quad => {
@@ -416,4 +487,88 @@ class Renderer {
 // we need to bake opacity into the canvas pixels instead.
 function _blendIgnoresOpacity(mode) {
   return ['screen', 'add', 'subtract', 'difference', 'exclusion'].includes(mode);
+}
+
+// Blend modes that WebGL can't do natively — handled via Canvas 2D after the GL pass.
+function _isCanvasOnlyBlend(mode) {
+  return ['overlay', 'softlight', 'hardlight', 'luminosity', 'color', 'hue', 'saturation'].includes(mode);
+}
+
+// Map Vael blend mode names to Canvas 2D globalCompositeOperation values.
+function _canvas2dBlendOp(mode) {
+  const map = {
+    overlay:    'overlay',
+    softlight:  'soft-light',
+    hardlight:  'hard-light',
+    luminosity: 'luminosity',
+    color:      'color',
+    hue:        'hue',
+    saturation: 'saturation',
+  };
+  return map[mode] || 'source-over';
+}
+
+/**
+ * Apply a mask from maskCanvas onto targetCanvas.
+ *
+ * mode 'alpha'     — Hard alpha mask. The mask layer's drawn pixels (any colour,
+ *                    any alpha > 0) define what is visible. Areas outside the mask
+ *                    are cut away. Best for shape/silhouette masks using an image
+ *                    layer with transparency.
+ *
+ * mode 'luminance' — Soft luminance mask. The mask layer's brightness controls
+ *                    the target layer's opacity: white = fully visible,
+ *                    black = fully transparent, grey = semi-transparent.
+ *                    Best for organic, painterly masks using noise, video,
+ *                    or shaders. The most cinematic of the two modes.
+ *
+ * mode 'invert'    — Same as luminance but inverted: dark areas of the mask
+ *                    reveal the layer, bright areas hide it.
+ */
+function _applyMask(targetCanvas, targetCtx, maskCanvas, mode, W, H) {
+  if (mode === 'alpha') {
+    // Standard alpha compositing: keep only pixels where the mask has coverage
+    targetCtx.save();
+    targetCtx.globalCompositeOperation = 'destination-in';
+    targetCtx.drawImage(maskCanvas, 0, 0);
+    targetCtx.restore();
+    return;
+  }
+
+  // Luminance modes: read mask pixels, derive an alpha map, apply to target
+  // This requires reading pixel data — done on a small temp canvas to keep
+  // it off the GPU hot path. We read at full resolution for accuracy.
+  try {
+    // Get mask pixel data
+    const maskCtx  = maskCanvas.getContext('2d');
+    const maskData = maskCtx.getImageData(0, 0, W, H);
+    const md       = maskData.data;
+
+    // Get target pixel data
+    const targetData = targetCtx.getImageData(0, 0, W, H);
+    const td         = targetData.data;
+
+    const invert = mode === 'invert';
+
+    for (let i = 0; i < td.length; i += 4) {
+      // Perceived luminance (ITU-R BT.709 weights)
+      const r = md[i], g = md[i+1], b = md[i+2], a = md[i+3];
+      // Premultiply by mask alpha so fully-transparent mask pixels become black
+      const premR = r * (a / 255);
+      const premG = g * (a / 255);
+      const premB = b * (a / 255);
+      let luma = (0.2126 * premR + 0.7152 * premG + 0.0722 * premB) / 255;
+      if (invert) luma = 1 - luma;
+      // Multiply the target pixel's alpha by the luminance value
+      td[i+3] = Math.round(td[i+3] * luma);
+    }
+
+    targetCtx.putImageData(targetData, 0, 0);
+  } catch (e) {
+    // Canvas tainted (cross-origin) or other error — fall back to alpha mask
+    targetCtx.save();
+    targetCtx.globalCompositeOperation = 'destination-in';
+    targetCtx.drawImage(maskCanvas, 0, 0);
+    targetCtx.restore();
+  }
 }

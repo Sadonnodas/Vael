@@ -17,16 +17,18 @@ class WaveformLayer extends BaseLayer {
     name: 'Waveform',
     version: '1.0',
     params: [
-      { id: 'mode',       label: 'Mode',         type: 'enum',   default: 'waveform',
-        options: ['waveform','bars','mirror','radial','particles'] },
+      { id: 'mode',       label: 'Mode',         type: 'enum',   default: 'waveform', triggersRefresh: true,
+        options: ['waveform','bars','mirror','radial','particles','spectrogram'] },
       { id: 'color',      label: 'Color',         type: 'color',  default: '#00d4aa' },
       { id: 'colorMode',  label: 'Color mode',    type: 'enum',   default: 'solid',
         options: ['solid','rainbow','frequency'] },
       { id: 'lineWidth',  label: 'Line width',    type: 'float',  default: 1.5, min: 0.5, max: 8  },
       { id: 'scale',      label: 'Amplitude',     type: 'float',  default: 1.0, min: 0.1, max: 4  },
       { id: 'smoothing',  label: 'Smoothing',     type: 'float',  default: 0.8, min: 0,   max: 0.99 },
-      { id: 'barCount',   label: 'Bar count',     type: 'int',    default: 64,  min: 8,   max: 256 },
-      { id: 'mirror',     label: 'Mirror Y',      type: 'bool',   default: false },
+      { id: 'barCount',   label: 'Bar count',     type: 'int',    default: 64,  min: 8,   max: 256,
+        showWhen: { mode: ['bars','radial','particles'] } },
+      { id: 'mirror',     label: 'Mirror Y',      type: 'bool',   default: false,
+        showWhen: { mode: ['waveform','bars','particles'] } },
       { id: 'glow',       label: 'Glow',          type: 'bool',   default: true },
     ],
   };
@@ -53,6 +55,12 @@ class WaveformLayer extends BaseLayer {
     // Smoothed bar heights for bars/radial modes
     this._smoothedBars = null;
     this._time         = 0;
+
+    // Spectrogram scrolling history — array of Float32Array snapshots
+    this._spectroHistory  = [];
+    this._spectroMaxRows  = 256;   // how many time-slices to keep (vertical resolution)
+    this._spectroOffCanvas = null;
+    this._spectroOffCtx    = null;
   }
 
   init(params = {}) { Object.assign(this.params, params); }
@@ -90,6 +98,14 @@ class WaveformLayer extends BaseLayer {
         const raw = this._dataArray[i * binStep] / 255;
         this._smoothedBars[i] = this._smoothedBars[i] * smooth + raw * (1 - smooth);
       }
+
+      // Spectrogram: push a snapshot of the current bar values each frame
+      if (this.params.mode === 'spectrogram') {
+        this._spectroHistory.push(new Float32Array(this._smoothedBars));
+        if (this._spectroHistory.length > this._spectroMaxRows) {
+          this._spectroHistory.shift();
+        }
+      }
     }
   }
 
@@ -105,7 +121,8 @@ class WaveformLayer extends BaseLayer {
       case 'bars':      this._drawBars(ctx, width, height);       break;
       case 'mirror':    this._drawMirror(ctx, width, height);     break;
       case 'radial':    this._drawRadial(ctx, width, height);     break;
-      case 'particles': this._drawParticles(ctx, width, height);  break;
+      case 'particles':    this._drawParticles(ctx, width, height);   break;
+      case 'spectrogram': this._drawSpectrogram(ctx, width, height); break;
     }
   }
 
@@ -300,6 +317,53 @@ class WaveformLayer extends BaseLayer {
     }
 
     this._clearGlow(ctx);
+    ctx.restore();
+  }
+
+  _drawSpectrogram(ctx, W, H) {
+    const history = this._spectroHistory;
+    if (!history.length) return;
+
+    const rows    = history.length;
+    const cols    = this.params.barCount;
+    const cellW   = W / cols;
+    const cellH   = H / this._spectroMaxRows;
+
+    ctx.save();
+    ctx.translate(-W / 2, -H / 2);
+
+    // Draw from oldest (top) to newest (bottom)
+    for (let r = 0; r < rows; r++) {
+      const snapshot = history[r];
+      // Newest row at bottom: map r=0 → y near top of visible area
+      const startRow = this._spectroMaxRows - rows;
+      const y = (startRow + r) * cellH;
+
+      for (let c = 0; c < cols; c++) {
+        const v = snapshot[c];
+        if (v < 0.01) continue;
+
+        // Colour: frequency position determines hue, amplitude drives brightness
+        const t       = c / cols;
+        const hue     = this.params.colorMode === 'rainbow'
+          ? (t * 280 + (this._time * 5)) % 360
+          : VaelColor.rgbToHsl(...VaelColor.hexToRgb(this.params.color))[0];
+        const bright  = VaelMath.clamp(v * 1.4, 0, 1);
+        const alpha   = VaelMath.clamp(v * 2.0, 0, 1);
+
+        ctx.fillStyle = VaelColor.hsla(hue, 0.85, 0.15 + bright * 0.6, alpha);
+        ctx.fillRect(c * cellW, y, cellW + 0.5, cellH + 0.5);
+      }
+    }
+
+    // Horizontal line at the current write position (newest row)
+    ctx.strokeStyle = 'rgba(255,255,255,0.15)';
+    ctx.lineWidth   = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, H - cellH);
+    ctx.lineTo(W, H - cellH);
+    ctx.stroke();
+
     ctx.restore();
   }
 

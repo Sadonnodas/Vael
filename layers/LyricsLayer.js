@@ -26,6 +26,15 @@ class LyricsLayer extends BaseLayer {
         options: ['fade', 'slide', 'typewriter', 'none'] },
       { id: 'duration',    label: 'Duration (s)', type: 'float', default: 4.0,  min: 0.5, max: 30  },
       { id: 'autoAdvance', label: 'Auto advance', type: 'bool',  default: false },
+      { id: 'align',       label: 'Align',        type: 'enum',  default: 'center',
+        options: ['left','center','right'] },
+      { id: 'posX',        label: 'Horizontal pos',type:'float', default: 0.5,  min: 0,   max: 1   },
+      { id: 'outline',     label: 'Outline',       type: 'bool',  default: false, triggersRefresh: true },
+      { id: 'outlineColor',label: 'Outline color', type: 'color', default: '#000000',
+        showWhen: { outline: true } },
+      { id: 'outlineWidth',label: 'Outline width', type: 'float', default: 2.0,  min: 0.5, max: 10,
+        showWhen: { outline: true } },
+      { id: 'uppercase',   label: 'Uppercase',     type: 'bool',  default: false },
     ],
   };
 
@@ -39,6 +48,12 @@ class LyricsLayer extends BaseLayer {
       transition:  'fade',
       duration:    4.0,
       autoAdvance: false,
+      align:       'center',
+      posX:        0.5,
+      outline:     false,
+      outlineColor:'#000000',
+      outlineWidth: 2.0,
+      uppercase:   false,
     };
 
     this.lines        = [];     // array of strings
@@ -170,7 +185,16 @@ class LyricsLayer extends BaseLayer {
 
     const fontSize = this.params.fontSize;
     const posY     = (this.params.posY - 0.5) * height + this._slideY;
+    const posX     = (this.params.posX ?? 0.5) - 0.5;   // -0.5..+0.5 → offset from centre
     const color    = this.params.color || '#ffffff';
+    const align    = this.params.align || 'center';
+    const displayText = this.params.uppercase ? text.toUpperCase() : text;
+
+    // X position: posX=0 → left edge, 0.5 → centre, 1 → right edge
+    const xOffset  = posX * width;
+    const xBase    = align === 'left' ? -width / 2 + xOffset
+                   : align === 'right' ? width / 2 - (width * (1 - this.params.posX ?? 0.5))
+                   : xOffset;
 
     ctx.save();
     ctx.globalAlpha  = VaelMath.clamp(this._alpha * this.opacity, 0, 1);
@@ -187,17 +211,26 @@ class LyricsLayer extends BaseLayer {
     };
     const _ff = _fontFamilies[this.params.fontFamily || 'system'] || _fontFamilies.system;
     ctx.font         = `bold ${fontSize}px ${_ff}`;
-    ctx.textAlign    = 'center';
+    ctx.textAlign    = align;
     ctx.textBaseline = 'middle';
 
-    // Shadow for readability over any background
-    ctx.shadowColor  = 'rgba(0,0,0,0.8)';
-    ctx.shadowBlur   = fontSize * 0.4;
+    // Shadow for readability
+    ctx.shadowColor   = 'rgba(0,0,0,0.8)';
+    ctx.shadowBlur    = fontSize * 0.35;
     ctx.shadowOffsetX = 0;
-    ctx.shadowOffsetY = fontSize * 0.05;
+    ctx.shadowOffsetY = fontSize * 0.04;
+
+    // Optional outline/stroke
+    if (this.params.outline) {
+      ctx.shadowBlur    = 0;
+      ctx.strokeStyle   = this.params.outlineColor || '#000000';
+      ctx.lineWidth     = this.params.outlineWidth || 2;
+      ctx.lineJoin      = 'round';
+      ctx.strokeText(displayText, xBase, posY);
+    }
 
     ctx.fillStyle = color;
-    ctx.fillText(text, 0, posY);
+    ctx.fillText(displayText, xBase, posY);
 
     ctx.restore();
   }

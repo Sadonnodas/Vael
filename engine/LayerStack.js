@@ -86,7 +86,7 @@ class LayerStack {
       // Apply modulation matrix — routes signals to params
       if (layer.modMatrix && layer.modMatrix.routes.length > 0) {
         // Build merged signal object: audio + video + uniforms
-        const signals = Object.assign({}, audioData, {
+        const signals = Object.assign({}, audioData, videoData, {
           iTime:   iTime,
           iBeat:   this._beatPulse,
           iBpm:    this._bpm,
@@ -97,7 +97,7 @@ class LayerStack {
       }
 
       if (typeof layer.update === 'function') {
-        layer.update(audioData, audioData, dt);
+        layer.update(audioData, videoData, dt);
       }
     });
   }

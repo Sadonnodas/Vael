@@ -11,7 +11,8 @@ const LayerPanel = (() => {
 
   let _layers, _layerFactory, _audio, _canvas;
   let _selectedLayerId = null;
-  let _multiSelect = new Set();
+  let _multiSelect  = new Set();
+  let _soloLayerId  = null;   // id of the currently soloed layer, or null
 
   // External callbacks
   let onSelect = null;          // (layerId) → show params
@@ -42,7 +43,13 @@ const LayerPanel = (() => {
     _paramsEmptyEl   = document.getElementById('params-empty');
     _paramsContentEl = document.getElementById('params-content');
 
-    _layers.onChanged = () => renderLayerList();
+    // Chain onto any existing onChanged (e.g. LFOPanel.refresh set by App.js)
+    // rather than overwriting it — LayerStack only supports one callback.
+    const _prevOnChanged = _layers.onChanged;
+    _layers.onChanged = () => {
+      renderLayerList();
+      if (typeof _prevOnChanged === 'function') _prevOnChanged();
+    };
     _wireGroupButton();
     _startThumbUpdater();
 
@@ -86,6 +93,8 @@ const LayerPanel = (() => {
 
   function selectLayer(id) {
     _selectedLayerId = id;
+    // Notify App.js so it can track the selected layer
+    if (typeof onSelect === 'function') onSelect(id);
     if (!_paramsEmptyEl || !_paramsContentEl) return;  // DOM not ready yet
 
     // Search both top-level layers and group children
@@ -105,6 +114,16 @@ const LayerPanel = (() => {
       r.style.borderColor = r.dataset.id === id ? 'var(--accent)' : 'var(--border-dim)';
     });
 
+    // Expand the selected layer row, collapse all others
+    _layers.layers.forEach(l => {
+      l._rowCollapsed = l.id !== id;
+    });
+    // Also handle group children
+    _layers.layers.forEach(l => {
+      if (l.children) l.children.forEach(c => { c._rowCollapsed = c.id !== id; });
+    });
+    renderLayerList();
+
     _paramsEmptyEl.style.display   = 'none';
     _paramsContentEl.style.display = 'block';
 
@@ -119,9 +138,25 @@ const LayerPanel = (() => {
     }
 
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-    document.querySelector('[data-tab="params"]').classList.add('active');
-    document.getElementById('tab-params').classList.add('active');
+    document.querySelectorAll('.tab-panel').forEach(p => {
+      // Leave panels that are in pop-out windows alone
+      const sidebar = document.getElementById('sidebar-content');
+      if (sidebar && !sidebar.contains(p)) return;
+      p.classList.remove('active');
+    });
+
+    const paramsPanel = document.getElementById('tab-params');
+    const paramsBtn   = document.querySelector('[data-tab="params"]');
+    const sidebar     = document.getElementById('sidebar-content');
+
+    // If PARAMS is popped out, just focus its window; don't switch sidebar tabs
+    if (paramsPanel && sidebar && !sidebar.contains(paramsPanel)) {
+      const popout = paramsPanel.closest('.vael-popout');
+      if (popout) popout.style.zIndex = '320';
+    } else {
+      paramsBtn?.classList.add('active');
+      paramsPanel?.classList.add('active');
+    }
   }
 
   // ── Multi-select state ───────────────────────────────────────
@@ -195,7 +230,8 @@ const LayerPanel = (() => {
       });
 
       // Collapsed state per layer (stored on the layer object)
-      if (layer._rowCollapsed === undefined) layer._rowCollapsed = false;
+      // Layers are collapsed by default; they open when selected
+      if (layer._rowCollapsed === undefined) layer._rowCollapsed = true;
 
       const typeName = layer.constructor.name.replace('Layer','').replace('Visualizer','Viz');
 
@@ -217,6 +253,14 @@ const LayerPanel = (() => {
                    color:${layer.visible ? 'var(--accent)' : 'var(--text-dim)'}">
             ${layer.visible ? '◉' : '○'}
           </button>
+
+          <button class="solo-btn" data-id="${layer.id}"
+            title="Solo — hide all other layers"
+            style="background:none;border:none;cursor:pointer;font-size:9px;flex-shrink:0;
+                   font-family:var(--font-mono);padding:0 2px;
+                   color:${_soloLayerId === layer.id ? '#ffd700' : 'var(--text-dim)'};
+                   opacity:${_soloLayerId === layer.id ? '1' : '0.45'};
+                   transition:opacity 0.1s,color 0.1s">S</button>
 
           <div style="flex:1;min-width:0">
             <span class="layer-name-btn" title="Click to edit · Double-click to rename"
@@ -250,6 +294,8 @@ const LayerPanel = (() => {
           `}
           <button class="layer-del" data-id="${layer.id}"
             style="background:none;border:none;cursor:pointer;color:#ff4444;font-size:11px" title="Remove">✕</button>
+          <button class="layer-reset-quick" data-id="${layer.id}"
+            style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:11px;opacity:0.5" title="Reset position, scale &amp; rotation (R)">↺</button>
         </div>
 
         <!-- Collapsible body -->
@@ -288,6 +334,18 @@ const LayerPanel = (() => {
               .join('')}
           </select>
         </div>
+        ${layer.maskLayerId ? `
+        <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+          <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);width:30px"></span>
+          <select class="mask-mode-sel" data-id="${layer.id}"
+            style="flex:1;background:var(--bg);border:1px solid color-mix(in srgb,var(--accent2) 40%,transparent);
+                   color:var(--accent2);font-family:var(--font-mono);font-size:9px;padding:3px;border-radius:3px"
+            title="Mask mode: how the mask layer controls visibility">
+            <option value="luminance" ${(layer.maskMode||'luminance')==='luminance' ? 'selected' : ''}>Luminance (bright=show)</option>
+            <option value="invert"    ${(layer.maskMode||'luminance')==='invert'    ? 'selected' : ''}>Luminance inv (dark=show)</option>
+            <option value="alpha"     ${(layer.maskMode||'luminance')==='alpha'     ? 'selected' : ''}>Alpha (shape cutout)</option>
+          </select>
+        </div>` : ''}
 
         <!-- Transform controls (collapsible) -->
         <div style="margin-top:6px">
@@ -438,6 +496,34 @@ const LayerPanel = (() => {
         });
       });
 
+      // Solo button
+      row.querySelector('.solo-btn').addEventListener('click', e => {
+        e.stopPropagation();
+        const id = e.currentTarget.dataset.id;
+
+        if (_soloLayerId === id) {
+          // Un-solo: restore all layers to their pre-solo visibility
+          _soloLayerId = null;
+          _layers.layers.forEach(l => {
+            if (l._preSoloVisible !== undefined) {
+              l.visible = l._preSoloVisible;
+              delete l._preSoloVisible;
+            }
+          });
+          Toast.info('Solo off');
+        } else {
+          // Solo: hide all others, remember their visibility
+          _layers.layers.forEach(l => {
+            l._preSoloVisible = l.visible;
+            l.visible = (l.id === id);
+          });
+          _soloLayerId = id;
+          Toast.info(`Solo: ${_layers.layers.find(l => l.id === id)?.name ?? id}`);
+        }
+
+        renderLayerList();
+      });
+
       row.querySelector('.vis-toggle').addEventListener('click', e => {
         e.stopPropagation();
         _layers.setVisible(layer.id, !layer.visible);
@@ -513,6 +599,14 @@ const LayerPanel = (() => {
           undoToast.appendChild(undoBtn);
         }
       });
+      // Quick reset button on main row
+      row.querySelector('.layer-reset-quick')?.addEventListener('click', e => {
+        e.stopPropagation();
+        layer.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+        renderLayerList();
+        Toast.info('Transform reset');
+      });
+
       row.querySelector('.opacity-sl').addEventListener('input', e => {
         const v = parseFloat(e.target.value);
         _layers.setOpacity(layer.id, v);
@@ -523,9 +617,19 @@ const LayerPanel = (() => {
       });
       row.querySelector('.mask-sel').addEventListener('change', e => {
         layer.maskLayerId = e.target.value || null;
-        if (layer.maskLayerId) Toast.info(`Mask set: ${layer.name} → ${_layers.layers.find(l=>l.id===layer.maskLayerId)?.name}`);
-        else Toast.info('Mask removed');
-        renderLayerList();
+        if (layer.maskLayerId) {
+          const maskName = _layers.layers.find(l => l.id === layer.maskLayerId)?.name;
+          Toast.info(`Mask: ${layer.name} ← ${maskName} (${layer.maskMode || 'luminance'})`);
+        } else {
+          Toast.info('Mask removed');
+        }
+        renderLayerList(); // re-render to show/hide the mode dropdown
+      });
+
+      row.querySelector('.mask-mode-sel')?.addEventListener('change', e => {
+        layer.maskMode = e.target.value;
+        const modeLabels = { luminance: 'Luminance', invert: 'Luminance (inverted)', alpha: 'Alpha cutout' };
+        Toast.info(`Mask mode: ${modeLabels[layer.maskMode] || layer.maskMode}`);
       });
 
       // Transform toggle
@@ -736,6 +840,11 @@ const LayerPanel = (() => {
 
   function showLayerPicker() {
     document.getElementById('layer-picker')?.remove();
+
+    // Separate shader types from regular types
+    const shaderTypes  = _layerTypes.filter(t => t.id.startsWith('shader-'));
+    const regularTypes = _layerTypes.filter(t => !t.id.startsWith('shader-'));
+
     const picker = document.createElement('div');
     picker.id = 'layer-picker';
     picker.style.cssText = `
@@ -743,21 +852,124 @@ const LayerPanel = (() => {
       display:flex;align-items:center;justify-content:center;
       z-index:1000;backdrop-filter:blur(4px);
     `;
-    picker.innerHTML = `
-      <div style="background:var(--bg-mid);border:1px solid var(--border);
-                  border-radius:8px;padding:20px;min-width:260px;max-width:320px">
-        <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:2px;
-                    color:var(--accent);margin-bottom:16px">ADD LAYER</div>
-        ${_layerTypes.map(t => `
-          <button class="btn" data-type="${t.id}"
-            style="width:100%;margin-bottom:8px;justify-content:flex-start;font-size:11px">
-            ${t.label}
-          </button>
-        `).join('')}
-        <button id="picker-cancel" class="btn"
-          style="width:100%;margin-top:4px;color:var(--text-dim)">Cancel</button>
-      </div>
+
+    const box = document.createElement('div');
+    box.style.cssText = `
+      background:var(--bg-mid);border:1px solid var(--border);
+      border-radius:8px;padding:20px;min-width:260px;max-width:320px;
+      position:relative;
     `;
+    box.innerHTML = `
+      <div style="font-family:var(--font-mono);font-size:11px;letter-spacing:2px;
+                  color:var(--accent);margin-bottom:16px">ADD LAYER</div>
+    `;
+
+    // Regular layer buttons
+    regularTypes.forEach(t => {
+      const btn = document.createElement('button');
+      btn.className        = 'btn';
+      btn.dataset.type     = t.id;
+      btn.style.cssText    = 'width:100%;margin-bottom:8px;justify-content:flex-start;font-size:11px';
+      btn.textContent      = t.label;
+      box.appendChild(btn);
+    });
+
+    // Shader entry with hover submenu
+    const shaderWrap = document.createElement('div');
+    shaderWrap.style.cssText = 'position:relative;margin-bottom:8px';
+
+    const shaderBtn = document.createElement('button');
+    shaderBtn.className     = 'btn';
+    shaderBtn.style.cssText = 'width:100%;justify-content:space-between;font-size:11px';
+    shaderBtn.innerHTML     = 'Shader <span style="font-size:9px;opacity:0.6">▶</span>';
+    shaderWrap.appendChild(shaderBtn);
+
+    // Submenu panel
+    const submenu = document.createElement('div');
+    submenu.style.cssText = `
+      display:none;
+      position:absolute;
+      left:calc(100% + 6px);
+      top:0;
+      background:var(--bg-mid);
+      border:1px solid var(--border);
+      border-radius:6px;
+      padding:8px;
+      min-width:200px;
+      z-index:1001;
+      box-shadow:4px 4px 20px rgba(0,0,0,0.5);
+    `;
+
+    const submenuLabel = document.createElement('div');
+    submenuLabel.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--accent);letter-spacing:1px;margin-bottom:8px;padding:0 4px';
+    submenuLabel.textContent   = 'SHADER PRESETS';
+    submenu.appendChild(submenuLabel);
+
+    shaderTypes.forEach(t => {
+      const name = t.label.replace('Shader — ', '').replace('Shader — ', '');
+      const sbtn = document.createElement('button');
+      sbtn.className       = 'btn';
+      sbtn.dataset.type    = t.id;
+      sbtn.style.cssText   = 'width:100%;margin-bottom:4px;justify-content:flex-start;font-size:10px';
+      sbtn.textContent     = name;
+      submenu.appendChild(sbtn);
+    });
+
+    shaderWrap.appendChild(submenu);
+    box.appendChild(shaderWrap);
+
+    // Show/hide submenu on hover
+    let _subHideTimer = null;
+    const showSub = () => {
+      clearTimeout(_subHideTimer);
+      submenu.style.display = 'block';
+      // After it's visible, check if it goes off the bottom of the screen
+      // and flip it upward if needed
+      requestAnimationFrame(() => {
+        const rect    = submenu.getBoundingClientRect();
+        const wrapR   = shaderWrap.getBoundingClientRect();
+        const offBottom = rect.bottom - window.innerHeight + 8;
+        if (offBottom > 0) {
+          // Flip up: anchor to bottom of shaderWrap instead of top
+          submenu.style.top  = 'auto';
+          submenu.style.bottom = '0';
+        } else {
+          submenu.style.top    = '0';
+          submenu.style.bottom = 'auto';
+        }
+        // Also check right-edge overflow and flip left if needed
+        if (rect.right > window.innerWidth - 8) {
+          submenu.style.left  = 'auto';
+          submenu.style.right = 'calc(100% + 6px)';
+        } else {
+          submenu.style.left  = 'calc(100% + 6px)';
+          submenu.style.right = 'auto';
+        }
+      });
+    };
+    const hideSub = () => {
+      _subHideTimer = setTimeout(() => { submenu.style.display = 'none'; }, 120);
+    };
+    shaderWrap.addEventListener('mouseenter', showSub);
+    shaderWrap.addEventListener('mouseleave', hideSub);
+    submenu.addEventListener('mouseenter',   showSub);
+    submenu.addEventListener('mouseleave',   hideSub);
+    // Also open on click/tap (for touch screens)
+    shaderBtn.addEventListener('click', () => {
+      submenu.style.display = submenu.style.display === 'none' ? 'block' : 'none';
+    });
+
+    // Cancel button
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className     = 'btn';
+    cancelBtn.id            = 'picker-cancel';
+    cancelBtn.style.cssText = 'width:100%;margin-top:4px;color:var(--text-dim)';
+    cancelBtn.textContent   = 'Cancel';
+    box.appendChild(cancelBtn);
+
+    picker.appendChild(box);
+
+    // Click handler — works for regular buttons and shader submenu buttons
     picker.addEventListener('click', e => {
       const typeId = e.target.closest('[data-type]')?.dataset.type;
       if (typeId) {
@@ -766,13 +978,14 @@ const LayerPanel = (() => {
           const layer = def.cls();
           if (typeof layer.init === 'function') layer.init({});
           _layers.add(layer);
-          // Auto-select and show params
           setTimeout(() => selectLayer(layer.id), 50);
         }
         picker.remove();
+        return;
       }
       if (e.target.id === 'picker-cancel' || e.target === picker) picker.remove();
     });
+
     document.body.appendChild(picker);
   }
 
@@ -870,7 +1083,7 @@ const LayerPanel = (() => {
       white-space: nowrap;
       z-index: 60;
     `;
-    hint.textContent = 'Drag to move  ·  Scroll to scale';
+    hint.textContent = 'Drag: move  ·  Scroll: scale  ·  R: reset';
     // Append to canvas-area (canvas parent)
     canvas.parentElement?.appendChild(hint);
 
@@ -918,6 +1131,11 @@ const LayerPanel = (() => {
     canvas.addEventListener('mousedown', e => {
       const layer = _getMovableLayer();
       if (!layer) return;
+
+      // If a CanvasPaintLayer is selected with drawMode on, let it handle drawing
+      const selLayer = _layers.layers.find(l => l.id === _selectedLayerId)
+        || (() => { for (const l of _layers.layers) { if (l.children) { const c = l.children.find(c => c.id === _selectedLayerId); if (c) return c; } } return null; })();
+      if (selLayer && selLayer.constructor.name === 'CanvasPaintLayer' && selLayer.params?.drawMode) return;
 
       _dragging   = true;
       _dragLayer  = layer;
@@ -975,6 +1193,28 @@ const LayerPanel = (() => {
       layer.transform.scaleX = newS;
       layer.transform.scaleY = newS;
     }, { passive: false });
+
+    // R key — reset selected layer transform to default
+    // Guard: don't fire during performance mode (R isn't used there but be safe)
+    document.addEventListener('keydown', e => {
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      if (window.vaelPerfActive) return;
+      if (e.key !== 'r' && e.key !== 'R') return;
+      const layer = _getMovableLayer();
+      if (!layer) return;
+      e.preventDefault();
+      layer.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+      // Refresh the transform panel row if it's open
+      renderLayerList();
+      // Show brief feedback
+      hint.style.opacity = '1';
+      hint.textContent   = 'Transform reset';
+      clearTimeout(_hintTimer);
+      _hintTimer = setTimeout(() => {
+        hint.style.opacity  = '0';
+        hint.textContent    = 'Drag: move  ·  Scroll: scale  ·  R: reset';
+      }, 1200);
+    });
   }
 
            return { 

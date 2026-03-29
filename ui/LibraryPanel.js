@@ -34,6 +34,10 @@ const LibraryPanel = (() => {
   const _audioFiles = new Map();
   let   _audioCounter = 0;
 
+  // Shader library — persisted in localStorage
+  const _shaders     = new Map();
+  let   _shaderCallback = null; // set by openShaderSection for picker mode
+
   // ── Init ─────────────────────────────────────────────────────
 
   function init({ videoLibrary, audioEngine, layerStack,
@@ -45,8 +49,12 @@ const LibraryPanel = (() => {
     _container        = container;
 
     // Wire file inputs ONCE — this is the only place addEventListener is called
+    _loadShadersFromStorage();
     _createFileInputs();
     _render();
+    // Restore binary assets from IndexedDB after a short delay
+    // (IndexedDB is async; we render immediately with empty state then populate)
+    _restoreFromIndexedDB();
   }
 
   function _createFileInputs() {
@@ -72,6 +80,10 @@ const LibraryPanel = (() => {
         const url = URL.createObjectURL(file);
         _images.set(id, { id, name: file.name, url, file });
         Toast.success(`Image added: ${file.name}`);
+        // Persist to IndexedDB
+        if (typeof AssetStore !== 'undefined') {
+          AssetStore.save('image', file).catch(() => {});
+        }
       });
       e.target.value = '';
       _render();
@@ -86,6 +98,10 @@ const LibraryPanel = (() => {
         const duration = await _getAudioDuration(url);
         _audioFiles.set(id, { id, name: file.name, url, file, duration });
         Toast.success(`Audio added: ${file.name}`);
+        // Persist to IndexedDB
+        if (typeof AssetStore !== 'undefined') {
+          AssetStore.save('audio', file).catch(() => {});
+        }
       }
       e.target.value = '';
       _render();
@@ -149,9 +165,10 @@ const LibraryPanel = (() => {
     tabRow.style.cssText = 'display:flex;gap:0;margin-bottom:14px;border:1px solid var(--border-dim);border-radius:5px;overflow:hidden';
 
     const tabs = [
-      { id: 'video', label: `▶ Videos (${_videoLibrary?.count ?? 0})` },
-      { id: 'image', label: `🖼 Images (${_images.size})` },
-      { id: 'audio', label: `♪ Audio (${_audioFiles.size})` },
+      { id: 'video',  label: `▶ Videos (${_videoLibrary?.count ?? 0})` },
+      { id: 'image',  label: `🖼 Images (${_images.size})` },
+      { id: 'audio',  label: `♪ Audio (${_audioFiles.size})` },
+      { id: 'shader', label: `✦ Shaders (${_shaders.size})` },
     ];
 
     tabs.forEach((tab, i) => {
@@ -169,9 +186,13 @@ const LibraryPanel = (() => {
 
     _container.appendChild(tabRow);
 
-    if      (_activeSection === 'video') _renderVideoSection();
-    else if (_activeSection === 'image') _renderImageSection();
-    else                                  _renderAudioSection();
+    // Reset picker mode if user switches tabs manually
+    if (_activeSection !== 'shader' && _shaderCallback) _shaderCallback = null;
+
+    if      (_activeSection === 'video')  _renderVideoSection();
+    else if (_activeSection === 'image')  _renderImageSection();
+    else if (_activeSection === 'audio')  _renderAudioSection();
+    else                                   _renderShaderSection();
   }
 
   // ── Video section ─────────────────────────────────────────────
@@ -271,7 +292,12 @@ const LibraryPanel = (() => {
       info.style.cssText = 'flex:1;min-width:0';
       info.innerHTML = `<div style="font-family:var(--font-mono);font-size:9px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${entry.name}</div>`;
       row.appendChild(info);
-      row.appendChild(_delBtn(() => { URL.revokeObjectURL(entry.url); _images.delete(entry.id); _render(); }));
+      row.appendChild(_delBtn(() => {
+        URL.revokeObjectURL(entry.url);
+        _images.delete(entry.id);
+        if (typeof AssetStore !== 'undefined') AssetStore.remove(entry.id).catch(() => {});
+        _render();
+      }));
       card.appendChild(row);
 
       const btnRow = document.createElement('div');
@@ -562,6 +588,213 @@ const LibraryPanel = (() => {
     }
   }
 
+  // ── Shader section ───────────────────────────────────────────
+
+  const SHADER_STORAGE_KEY = 'vael-shader-library';
+
+  // ── IndexedDB restore ─────────────────────────────────────────
+  // On init, rehydrate the library from IndexedDB so files persisted from
+  // the last session reappear without the user having to re-upload them.
+
+  async function _restoreFromIndexedDB() {
+    if (typeof AssetStore === 'undefined') return;
+    try {
+      // Restore images
+      const images = await AssetStore.list('image');
+      for (const entry of images) {
+        if (!_images.has(entry.id)) {
+          const url = URL.createObjectURL(entry.blob);
+          // Reconstruct a File-like object from the blob
+          const file = new File([entry.blob], entry.name, { type: entry.blob.type });
+          _images.set(entry.id, { id: entry.id, name: entry.name, url, file });
+          // Use a fixed counter offset so IDs don't collide with new uploads
+          _imgCounter = Math.max(_imgCounter, parseInt(entry.id.split('-')[1] || 0) + 1);
+        }
+      }
+
+      // Restore audio files
+      const audioFiles = await AssetStore.list('audio');
+      for (const entry of audioFiles) {
+        if (!_audioFiles.has(entry.id)) {
+          const url      = URL.createObjectURL(entry.blob);
+          const file     = new File([entry.blob], entry.name, { type: entry.blob.type });
+          const duration = await _getAudioDuration(url);
+          _audioFiles.set(entry.id, { id: entry.id, name: entry.name, url, file, duration });
+          _audioCounter = Math.max(_audioCounter, parseInt(entry.id.split('-')[1] || 0) + 1);
+        }
+      }
+
+      // Videos are restored via VideoLibrary — check if it supports IndexedDB loading
+      const videos = await AssetStore.list('video');
+      for (const entry of videos) {
+        if (_videoLibrary && ![..._videoLibrary.entries].find(e => e.name === entry.name)) {
+          const file = new File([entry.blob], entry.name, { type: entry.blob.type });
+          await _videoLibrary.add(file, entry.id);
+        }
+      }
+
+      if (images.length + audioFiles.length + videos.length > 0) {
+        _render();
+        Toast.info(`Restored ${images.length + audioFiles.length + videos.length} assets from last session`);
+      }
+    } catch (e) {
+      console.warn('AssetStore restore failed:', e);
+    }
+  }
+
+  function _loadShadersFromStorage() {
+    try {
+      const saved = localStorage.getItem(SHADER_STORAGE_KEY);
+      if (!saved) return;
+      const arr = JSON.parse(saved);
+      arr.forEach(entry => {
+        _shaders.set(entry.id, entry);
+      });
+    } catch {}
+  }
+
+  function _saveShadersToStorage() {
+    try {
+      localStorage.setItem(SHADER_STORAGE_KEY, JSON.stringify([..._shaders.values()]));
+    } catch {}
+  }
+
+  function _renderShaderSection() {
+    // If we're in picker mode (opened from ShaderPanel), show a header
+    if (_shaderCallback) {
+      const pickerNote = document.createElement('div');
+      pickerNote.style.cssText = 'background:color-mix(in srgb,var(--accent2) 10%,var(--bg));border:1px solid var(--accent2);border-radius:5px;padding:8px 10px;margin-bottom:12px;font-family:var(--font-mono);font-size:9px;color:var(--accent2)';
+      pickerNote.textContent   = 'Click a shader below to load it into the selected layer';
+      _container.appendChild(pickerNote);
+    }
+
+    _addIntro('Upload .glsl/.frag files or save from a Shader layer PARAMS. Shaders persist across sessions.');
+
+    // Upload .glsl / .frag file directly into library
+    const uploadBtn = _addUploadBtn('\u2191 Upload .glsl/.frag file\u2026');
+    uploadBtn.addEventListener('click', () => {
+      const input    = document.createElement('input');
+      input.type     = 'file';
+      input.accept   = '.glsl,.frag,.vert,.txt';
+      input.multiple = true;
+      input.style.cssText = 'position:fixed;opacity:0;pointer-events:none;top:-999px';
+      document.body.appendChild(input);
+      input.click();
+      input.addEventListener('change', async e => {
+        for (const file of Array.from(e.target.files)) {
+          try {
+            const glsl = await file.text();
+            const name = file.name.replace(/\.[^.]+$/, '');
+            addShader({ name, glsl });
+            Toast.success('Shader added: ' + name);
+          } catch { Toast.error('Could not read: ' + file.name); }
+        }
+        e.target.value = '';
+        input.remove();
+        _render();
+      });
+    });
+
+    if (_shaders.size === 0) {
+      _addEmpty('No shaders yet.<br>Upload a .glsl file above, or save from a Shader layer PARAMS tab.');
+      return;
+    }
+
+    _addSectionLabel(`${_shaders.size} shader${_shaders.size !== 1 ? 's' : ''}`);
+
+    _shaders.forEach(entry => {
+      const card = _card();
+
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+
+      const icon = document.createElement('div');
+      icon.style.cssText = 'width:36px;height:24px;display:flex;align-items:center;justify-content:center;background:color-mix(in srgb,var(--accent2) 10%,var(--bg));border-radius:3px;flex-shrink:0;font-size:12px;color:var(--accent2)';
+      icon.textContent   = '✦';
+      row.appendChild(icon);
+
+      const info = document.createElement('div');
+      info.style.cssText = 'flex:1;min-width:0';
+      info.innerHTML = `
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${entry.name}</div>
+        <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-top:2px">${entry.glsl.split('\n').length} lines</div>
+      `;
+      row.appendChild(info);
+
+      row.appendChild(_delBtn(() => {
+        _shaders.delete(entry.id);
+        _saveShadersToStorage();
+        _render();
+      }));
+      card.appendChild(row);
+
+      // GLSL preview (first 2 lines)
+      const preview = document.createElement('div');
+      preview.style.cssText = 'font-family:monospace;font-size:8px;color:#6a9955;background:var(--bg);border-radius:3px;padding:5px 7px;margin-bottom:8px;overflow:hidden;white-space:pre;max-height:34px';
+      preview.textContent   = entry.glsl.trim().split('\n').slice(0, 2).join('\n');
+      card.appendChild(preview);
+
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex;gap:4px';
+
+      if (_shaderCallback) {
+        const loadBtn = _smallBtn('Load into layer', 'accent');
+        loadBtn.addEventListener('click', () => {
+          _shaderCallback(entry.glsl, entry.name);
+          _shaderCallback = null;
+          document.querySelector('[data-tab="params"]')?.click();
+        });
+        btnRow.appendChild(loadBtn);
+      } else {
+        const addBtn = _smallBtn('+ Add layer', 'accent');
+        addBtn.addEventListener('click', () => {
+          if (!_layerStack) { Toast.warn('Layer stack not available'); return; }
+          const layer = new ShaderLayer('shader-' + Date.now());
+          layer.name  = entry.name || 'Custom Shader';
+          layer.init({ glsl: entry.glsl });
+          _layerStack.add(layer);
+          Toast.success('Shader layer added: ' + layer.name);
+        });
+        btnRow.appendChild(addBtn);
+
+        const loadBtn = _smallBtn('Load into selected', '');
+        loadBtn.addEventListener('click', () => {
+          window.dispatchEvent(new CustomEvent('vael:library-load-shader', {
+            detail: { glsl: entry.glsl, name: entry.name }
+          }));
+        });
+        btnRow.appendChild(loadBtn);
+      }
+
+      // Download as .glsl file
+      const dlBtn = _smallBtn('↓ Download', '');
+      dlBtn.addEventListener('click', () => {
+        const blob = new Blob([entry.glsl], { type: 'text/plain' });
+        const url  = URL.createObjectURL(blob);
+        const a    = document.createElement('a');
+        a.href     = url;
+        a.download = (entry.name.replace(/[^a-zA-Z0-9_-]/g, '_') || 'shader') + '.glsl';
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+      btnRow.appendChild(dlBtn);
+
+      // Rename
+      const renameBtn = _smallBtn('Rename', '');
+      renameBtn.addEventListener('click', () => {
+        const newName = prompt('Rename shader:', entry.name);
+        if (newName && newName.trim()) {
+          entry.name = newName.trim();
+          _saveShadersToStorage();
+          _render();
+        }
+      });
+      btnRow.appendChild(renameBtn);
+
+      card.appendChild(btnRow);
+    });
+  }
+
   // ── Video picker for ParamPanel ───────────────────────────────
 
   function buildVideoPicker(currentId, layer, paramId) {
@@ -646,6 +879,29 @@ const LibraryPanel = (() => {
 
   function getImages() { return [..._images.values()]; }
 
+  /**
+   * Add a shader to the library and persist it.
+   * Called from ShaderPanel's "Save to library" button.
+   */
+  function addShader({ name, glsl }) {
+    const id = `shdr-${Date.now()}-${Math.random().toString(36).slice(2,5)}`;
+    _shaders.set(id, { id, name: name || 'Shader', glsl });
+    _saveShadersToStorage();
+    if (_activeSection === 'shader') _render();
+    return id;
+  }
+
+  /**
+   * Open the shader library in picker mode.
+   * callback(glsl, name) is called when the user clicks a shader.
+   */
+  function openShaderSection(layer, callback) {
+    _shaderCallback = callback;
+    _activeSection  = 'shader';
+    document.querySelector('[data-tab="library"]')?.click();
+    _render();
+  }
+
   // ── Public add methods — called by AudioPanel / VideoPanel ────
   // Allows files uploaded in the AUDIO or VIDEO tabs to appear in
   // the LIBRARY without duplicating the file input listeners.
@@ -670,6 +926,8 @@ const LibraryPanel = (() => {
     showAddImagePrompt,
     getImages,
     addAudioFile,
+    addShader,
+    openShaderSection,
   };
 
 })();

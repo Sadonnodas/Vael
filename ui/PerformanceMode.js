@@ -254,8 +254,8 @@ class PerformanceMode {
       const row = document.createElement('div');
       row.style.cssText = `
         display: flex;
-        align-items: center;
-        gap: 10px;
+        flex-direction: column;
+        gap: 0;
         padding: 7px 10px;
         border-radius: 5px;
         margin-bottom: 4px;
@@ -266,20 +266,30 @@ class PerformanceMode {
 
       // Thumbnail
       const thumbHtml = entry.thumbnail
-        ? `<img src="${entry.thumbnail}" style="width:48px;height:27px;border-radius:3px;
+        ? `<img src="${entry.thumbnail}" class="sl-thumb" style="width:48px;height:27px;border-radius:3px;
              object-fit:cover;flex-shrink:0;border:1px solid rgba(255,255,255,0.1)">`
-        : `<div style="width:48px;height:27px;border-radius:3px;background:rgba(255,255,255,0.05);
+        : `<div class="sl-thumb" style="width:48px;height:27px;border-radius:3px;background:rgba(255,255,255,0.05);
              flex-shrink:0;display:flex;align-items:center;justify-content:center;
              font-size:8px;color:rgba(255,255,255,0.2)">—</div>`;
 
-      row.innerHTML = `
+      // Main row
+      const mainRow = document.createElement('div');
+      mainRow.style.cssText = 'display:flex;align-items:center;gap:10px';
+      mainRow.innerHTML = `
         <span style="font-size:9px;color:${isCurrent ? '#00d4aa' : '#454560'};
               min-width:16px;text-align:center">${i + 1}</span>
         ${thumbHtml}
-        <span style="flex:1;font-size:10px;color:${isCurrent ? '#fff' : '#d4d4e0'}">
+        <span class="sl-name" title="Double-click to rename"
+          style="flex:1;font-size:10px;color:${isCurrent ? '#fff' : '#d4d4e0'};
+                 cursor:text;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
           ${entry.name}
         </span>
         ${isCurrent ? '<span style="font-size:9px;color:#00d4aa;flex-shrink:0">▶</span>' : ''}
+        <button class="sl-update" data-index="${i}"
+          style="background:none;border:1px solid rgba(0,212,170,0.35);border-radius:3px;
+                 color:rgba(0,212,170,0.7);cursor:pointer;font-size:7px;
+                 font-family:var(--font-mono);padding:2px 5px;flex-shrink:0;white-space:nowrap"
+          title="Update this scene from the current canvas state">↻ Update</button>
         <button class="sl-goto" data-index="${i}"
           style="background:none;border:none;color:#7878a0;cursor:pointer;font-size:10px"
           title="Load this scene">→</button>
@@ -287,19 +297,102 @@ class PerformanceMode {
           style="background:none;border:none;color:#454560;cursor:pointer;font-size:10px"
           title="Remove">✕</button>
       `;
+      row.appendChild(mainRow);
 
-      row.addEventListener('dblclick', () => this._setlist.goto(i));
-      row.querySelector('.sl-goto').addEventListener('click', e => {
+      // Inline rename input (hidden by default)
+      const renameRow = document.createElement('div');
+      renameRow.style.cssText = 'display:none;margin-top:6px;padding-left:26px';
+      renameRow.innerHTML = `
+        <div style="display:flex;gap:6px;align-items:center">
+          <input class="sl-rename-input" type="text" value="${entry.name}"
+            style="flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(0,212,170,0.4);
+                   border-radius:3px;color:#fff;font-family:var(--font-mono);font-size:9px;
+                   padding:4px 7px;outline:none" />
+          <button class="sl-rename-ok"
+            style="background:rgba(0,212,170,0.15);border:1px solid rgba(0,212,170,0.4);
+                   border-radius:3px;color:#00d4aa;font-family:var(--font-mono);
+                   font-size:8px;padding:3px 8px;cursor:pointer">OK</button>
+        </div>
+      `;
+      row.appendChild(renameRow);
+
+      // ── Event wiring ──────────────────────────────────────────
+
+      // Single click → load scene
+      mainRow.querySelector('.sl-goto').addEventListener('click', e => {
         e.stopPropagation();
         this._setlist.goto(i);
         this._renderSetlistEntries();
       });
-      row.querySelector('.sl-del').addEventListener('click', e => {
+
+      // Double-click name → show rename input
+      mainRow.querySelector('.sl-name').addEventListener('dblclick', e => {
+        e.stopPropagation();
+        renameRow.style.display = renameRow.style.display === 'none' ? 'block' : 'none';
+        if (renameRow.style.display === 'block') {
+          renameRow.querySelector('.sl-rename-input').focus();
+          renameRow.querySelector('.sl-rename-input').select();
+        }
+      });
+
+      // Rename confirm
+      const doRename = () => {
+        const newName = renameRow.querySelector('.sl-rename-input').value.trim();
+        if (newName && newName !== entry.name) {
+          entry.name = newName;
+          mainRow.querySelector('.sl-name').textContent = newName;
+        }
+        renameRow.style.display = 'none';
+      };
+      renameRow.querySelector('.sl-rename-ok').addEventListener('click', doRename);
+      renameRow.querySelector('.sl-rename-input').addEventListener('keydown', e => {
+        if (e.key === 'Enter')  doRename();
+        if (e.key === 'Escape') renameRow.style.display = 'none';
+      });
+
+      // Update scene from current canvas state
+      mainRow.querySelector('.sl-update').addEventListener('click', e => {
+        e.stopPropagation();
+        // Snapshot current layers into this entry's preset
+        const layerStack = this._layerStack;
+        entry.preset = {
+          name:   entry.name,
+          layers: layerStack.layers.map(layer => ({
+            type:        layer.constructor.name,
+            id:          layer.id,
+            name:        layer.name,
+            visible:     layer.visible,
+            opacity:     layer.opacity,
+            blendMode:   layer.blendMode,
+            maskLayerId: layer.maskLayerId || null,
+            transform:   { ...layer.transform },
+            modMatrix:   layer.modMatrix?.toJSON() || [],
+            fx:          layer.fx ? layer.fx.map(f => ({ ...f, params: { ...f.params } })) : [],
+            params:      layer.params ? { ...layer.params } : {},
+          })),
+        };
+        // Also refresh thumbnail
+        try {
+          const canvas = document.getElementById('main-canvas');
+          const thumb  = document.createElement('canvas');
+          thumb.width  = 120; thumb.height = 68;
+          thumb.getContext('2d').drawImage(canvas, 0, 0, 120, 68);
+          entry.thumbnail = thumb.toDataURL('image/jpeg', 0.6);
+          // Update the thumb image in the row if it exists
+          const imgEl = mainRow.querySelector('.sl-thumb');
+          if (imgEl && imgEl.tagName === 'IMG') imgEl.src = entry.thumbnail;
+        } catch {}
+        Toast.success(`Scene ${i + 1} updated from current canvas`);
+      });
+
+      // Delete
+      mainRow.querySelector('.sl-del').addEventListener('click', e => {
         e.stopPropagation();
         this._setlist.removeEntry(i);
         this._renderSetlistEntries();
       });
 
+      row.addEventListener('dblclick', () => this._setlist.goto(i));
       container.appendChild(row);
     });
   }
@@ -398,6 +491,7 @@ class PerformanceMode {
 
   enter() {
     this._active = true;
+    window.vaelPerfActive = true;   // global flag for other modules
     document.body.classList.add('performance');
     this._hud.style.display = 'flex';
     this._showHUD();
@@ -407,6 +501,7 @@ class PerformanceMode {
 
   exit() {
     this._active = false;
+    window.vaelPerfActive = false;
     document.body.classList.remove('performance');
     this._hud.style.display = 'none';
     this._setlistPanel.style.display = 'none';

@@ -40,23 +40,28 @@ Layers (bottom to top):
 ${layerList}
 
 ## Layer Types
-- GradientLayer: params: mode(linear/radial/conic/diagonal-flow), hueA(0-360), hueB(0-360), hueC(0-360), saturation(0-1), lightness(0-0.6), speed(0-1), angle(0-360), audioReact(0-2), audioTarget(band)
-- NoiseFieldLayer: params: mode(field/flow/marble/aurora), scale(0.001-0.02), speed(0.01-1), hueA, hueB, saturation, lightness, contrast(0.3-3), audioTarget
-- ParticleLayer: params: mode(drift/fountain/orbit/pulse/fireflies), count(50-3000), size(0.5-10), speed(0.05-3), colorMode(rainbow/mono/white/accent/warm/cool/ember), audioTarget, hueShift(0-360)
-- MathVisualizer: params: constant(pi/e/phi/sqrt2), mode(path/tree/circle/chaos/spiral/walk/polar/lsystem/wave/constellation), colorMode(rainbow/digit/mono), digitCount(50-2000), angle(1-180), lineWidth(0.3-8), zoom(0.2-4), audioTarget, hueShift
-- WaveformLayer: params: mode(waveform/bars/mirror/radial/particles), color(hex), colorMode(solid/rainbow/frequency), lineWidth(0.5-8), scale(0.1-4), smoothing(0-0.99), barCount(8-256), mirror(bool), glow(bool)
-- ImageLayer: params: fitMode(contain/cover/stretch/original), tintHue(0-360), tintAmount(0-1), audioTarget, audioScale(0-1), audioRotate(0-1), pulseOnBeat(bool)
-- ShaderLayer: params: speed(0-4), intensity(0-2), scale(0.1-5), audioTarget. Builtin names: plasma, ripple, distort, bloom, chromatic
+All layers have audioReact(0-1) to control built-in audio sensitivity. Use ModMatrix routes for precise per-band control.
+- GradientLayer: params: mode(linear/radial/conic/diagonal-flow), hueA(0-360), hueB(0-360), hueC(0-360), saturation(0-1), lightness(0-0.6), speed(0-1), angle(0-360), audioReact(0-1)
+- NoiseFieldLayer: params: mode(field/flow/marble/aurora), scale(0.001-0.02), speed(0.01-1), hueA, hueB, saturation, lightness, contrast(0.3-3), audioReact(0-1)
+- ParticleLayer: params: mode(drift/fountain/orbit/pulse/fireflies/scatter/rain/vortex/trails), count(50-3000), size(0.5-10), speed(0.05-3), colorMode(rainbow/mono/white/accent/warm/cool/ember/audio), audioReact(0-1), hueShift(0-360), trailLen(0.5-0.99, trails mode), pulseSize(0.05-3, pulse mode)
+- MathVisualizer: params: constant(pi/e/phi/sqrt2), mode(path/tree/circle/chaos/spiral/walk/polar/lsystem/wave/constellation), colorMode(rainbow/digit/mono), digitCount(50-2000), angle(1-180), lineWidth(0.3-8), zoom(0.2-4), audioReact(0-1), hueShift
+- WaveformLayer: params: mode(waveform/bars/mirror/radial/particles), color(hex), colorMode(solid/rainbow/frequency), lineWidth(0.5-8), scale(0.1-4), smoothing(0-0.99), barCount(8-256, bars/radial/particles modes), mirror(bool), glow(bool)
+- ImageLayer: params: fitMode(contain/cover/stretch/original), tintHue(0-360), tintAmount(0-1), audioReact(0-1)
+- ShaderLayer: params: speed(0-4), intensity(0-2), scale(0.1-5), audioReact(0-1), param1/2/3(0-1), hueShift(0-360). Builtin names: plasma, ripple, distort, bloom, chromatic
 - LyricsLayer: params: fontSize(12-200), posY(0-1), color(hex), transition(fade/slide/typewriter/none), duration(0.5-30)
-- VideoPlayerLayer: displays a video file as a layer
-- WebcamLayer: params: flipH(bool), flipV(bool), chromaKey(bool), chromaHue(0-360), chromaRange(5-120), fitMode(cover/contain/stretch)
+- VideoPlayerLayer: params: audioReact(0-1), flipH(bool), fitMode(cover/contain/stretch)
+- WebcamLayer: params: flipH(bool), flipV(bool), chromaKey(bool), chromaHue(0-360), chromaRange(5-120), fitMode(cover/contain/stretch), audioReact(0-1)
 - GroupLayer: container for multiple layers — type="GroupLayer"
+- PatternLayer: params: pattern(star/mandala/hexgrid/circles/lissajous/spirograph/flower/grid), color(hex), color2(hex), size(0.1-4), speed(0-3), complexity(2-20), lineWidth(0.5-8), audioReact(0-1)
 
 ## Blend Modes
 normal, multiply, screen, overlay, add, softlight, difference, subtract, exclusion
 
-## Audio/Signal Sources (for mod routes and audioTarget)
-bass, mid, treble, volume, brightness(video), motion(video), edgeDensity(video), iTime, iBeat, iMouseX, iMouseY
+## Audio/Signal Sources (for ModMatrix routes)
+bass, mid, treble, volume, brightness(video), motion(video), edgeDensity(video), isBeat, bpm, beat(1-4), bar(1-4), phrase(1+)
+
+## Special ModMatrix targets (in addition to layer params)
+opacity, transform.x, transform.y, transform.scaleX, transform.scaleY, transform.rotation
 
 ## Modulation Routes (per-layer, via addModRoute)
 Each layer can have multiple routes. source drives target param. depth(0-1) controls amount, smooth(0.01=slow, 1=instant) controls response speed.
@@ -279,6 +284,8 @@ Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candleligh
       right: 24px;
       width: 380px;
       max-height: 520px;
+      min-width: 280px;
+      min-height: 200px;
       background: var(--bg-mid);
       border: 1px solid var(--border);
       border-radius: 12px;
@@ -286,8 +293,9 @@ Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candleligh
       display: none;
       flex-direction: column;
       overflow: hidden;
-      z-index: 400;
+      z-index: 401;
       font-family: var(--font-ui);
+      resize: both;
     `;
 
     _panel.innerHTML = `
@@ -347,13 +355,45 @@ Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candleligh
 
     document.body.appendChild(_panel);
 
-    // FAB button
+    // Make the panel header draggable so the chat window can be repositioned
+    let _panelDragOffX = 0, _panelDragOffY = 0, _panelDragging = false;
+    const panelHeader = _panel.querySelector('div');
+    if (panelHeader) {
+      panelHeader.style.cursor = 'move';
+      panelHeader.addEventListener('pointerdown', e => {
+        if (e.target.tagName === 'BUTTON') return;
+        _panelDragging = true;
+        const r = _panel.getBoundingClientRect();
+        _panelDragOffX = e.clientX - r.left;
+        _panelDragOffY = e.clientY - r.top;
+        _panel.style.transition = 'none';
+        panelHeader.setPointerCapture(e.pointerId);
+        e.preventDefault();
+      });
+      panelHeader.addEventListener('pointermove', e => {
+        if (!_panelDragging) return;
+        const x = Math.max(0, Math.min(window.innerWidth  - 100, e.clientX - _panelDragOffX));
+        const y = Math.max(0, Math.min(window.innerHeight - 40,  e.clientY - _panelDragOffY));
+        _panel.style.left   = x + 'px';
+        _panel.style.top    = y + 'px';
+        _panel.style.right  = 'auto';
+        _panel.style.bottom = 'auto';
+      });
+      panelHeader.addEventListener('pointerup', () => { _panelDragging = false; });
+    }
+
+    // FAB button — draggable, position saved to localStorage
     const fab = document.createElement('button');
     fab.id = 'vael-assistant-fab';
+
+    const _fabPosKey = 'vael-assistant-fab-pos';
+    const _fabSaved  = (() => {
+      try { return JSON.parse(localStorage.getItem(_fabPosKey)); } catch { return null; }
+    })();
+
     fab.style.cssText = `
       position: fixed;
-      bottom: 24px;
-      right: 24px;
+      ${_fabSaved ? `left:${_fabSaved.x}px;top:${_fabSaved.y}px;` : 'bottom:24px;right:24px;'}
       width: 48px;
       height: 48px;
       border-radius: 50%;
@@ -361,19 +401,71 @@ Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candleligh
       border: 1px solid var(--accent);
       color: var(--accent);
       font-size: 22px;
-      cursor: pointer;
+      cursor: grab;
       z-index: 400;
       display: flex;
       align-items: center;
       justify-content: center;
       box-shadow: 0 4px 16px rgba(0,212,170,0.3);
-      transition: transform 0.15s;
+      transition: transform 0.1s;
+      user-select: none;
+      touch-action: none;
     `;
     fab.innerHTML = '✦';
-    fab.title = 'Vael Assistant (AI)';
-    fab.addEventListener('click', toggle);
-    fab.addEventListener('mouseenter', () => fab.style.transform = 'scale(1.1)');
-    fab.addEventListener('mouseleave', () => fab.style.transform = 'scale(1)');
+    fab.title = 'Vael Assistant — drag to reposition, click to open';
+
+    let _fabDragging = false;
+    let _fabOffX     = 0;
+    let _fabOffY     = 0;
+    let _fabMoved    = false;
+
+    fab.addEventListener('pointerdown', e => {
+      if (e.button !== 0) return;
+      _fabDragging = true;
+      _fabMoved    = false;
+      const r = fab.getBoundingClientRect();
+      _fabOffX = e.clientX - r.left;
+      _fabOffY = e.clientY - r.top;
+      fab.style.cursor     = 'grabbing';
+      fab.style.transition = 'none';
+      fab.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+
+    fab.addEventListener('pointermove', e => {
+      if (!_fabDragging) return;
+      _fabMoved = true;
+      const x = Math.max(0, Math.min(window.innerWidth  - 48, e.clientX - _fabOffX));
+      const y = Math.max(0, Math.min(window.innerHeight - 48, e.clientY - _fabOffY));
+      fab.style.left   = x + 'px';
+      fab.style.top    = y + 'px';
+      fab.style.right  = 'auto';
+      fab.style.bottom = 'auto';
+    });
+
+    fab.addEventListener('pointerup', () => {
+      if (!_fabDragging) return;
+      _fabDragging        = false;
+      fab.style.cursor    = 'grab';
+      fab.style.transition = 'transform 0.1s';
+      if (_fabMoved) {
+        // Persist position
+        try {
+          localStorage.setItem(_fabPosKey, JSON.stringify({
+            x: parseInt(fab.style.left),
+            y: parseInt(fab.style.top),
+          }));
+        } catch {}
+        // Reposition open panel near new FAB position
+        _repositionPanel();
+      } else {
+        // No drag — treat as click
+        toggle();
+      }
+    });
+
+    fab.addEventListener('mouseenter', () => { if (!_fabDragging) fab.style.transform = 'scale(1.1)'; });
+    fab.addEventListener('mouseleave', () => { fab.style.transform = 'scale(1)'; });
     document.body.appendChild(fab);
 
     // Wire events
@@ -488,6 +580,10 @@ Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candleligh
     if (!_panel) return;
     _panel.style.display = 'flex';
     _isOpen = true;
+    // Position near FAB on first open (before user moves it manually)
+    if (!_panel.style.left || _panel.style.left === 'auto') {
+      _repositionPanel();
+    }
     setTimeout(() => _panel.querySelector('#va-input')?.focus(), 100);
   }
 
@@ -495,6 +591,25 @@ Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candleligh
     if (!_panel) return;
     _panel.style.display = 'none';
     _isOpen = false;
+  }
+
+  // Position the panel near the FAB when it opens or after the FAB is dragged
+  function _repositionPanel() {
+    if (!_panel || _panel.style.display === 'none') return;
+    const fab = document.getElementById('vael-assistant-fab');
+    if (!fab) return;
+    const fr = fab.getBoundingClientRect();
+    const pw = _panel.offsetWidth  || 380;
+    const ph = _panel.offsetHeight || 400;
+    let x = fr.left - pw + fr.width;
+    let y = fr.top  - ph - 8;
+    if (y < 8)                        y = fr.bottom + 8;
+    if (x < 8)                        x = 8;
+    if (x + pw > window.innerWidth)   x = window.innerWidth - pw - 8;
+    _panel.style.left   = x + 'px';
+    _panel.style.top    = y + 'px';
+    _panel.style.right  = 'auto';
+    _panel.style.bottom = 'auto';
   }
 
   function toggle() { _isOpen ? close() : open(); }

@@ -43,26 +43,25 @@ const LayerFXPanel = (() => {
     // Header
     const header = document.createElement('div');
     header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px';
-    header.innerHTML = `
-      <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);
-                   text-transform:uppercase;letter-spacing:1px">
-        Layer FX (${(layer.fx || []).length})
-      </span>
-      <button id="lfx-add-btn" style="background:none;border:1px solid var(--accent);
-        border-radius:3px;color:var(--accent);font-family:var(--font-mono);font-size:8px;
-        padding:2px 8px;cursor:pointer">+ Add FX</button>
-    `;
+    // Build header without IDs to avoid stale-ID collisions when switching layers
+    const fxCountSpan = document.createElement('span');
+    fxCountSpan.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px';
+    fxCountSpan.textContent   = `Layer FX (${(layer.fx || []).length})`;
+    header.appendChild(fxCountSpan);
+
+    const addFxBtn = document.createElement('button');
+    addFxBtn.style.cssText = 'background:none;border:1px solid var(--accent);border-radius:3px;color:var(--accent);font-family:var(--font-mono);font-size:8px;padding:2px 8px;cursor:pointer';
+    addFxBtn.textContent   = '+ Add FX';
+    header.appendChild(addFxBtn);
     container.appendChild(header);
 
     // FX chain list
     const fxList = document.createElement('div');
-    fxList.id = 'lfx-chain';
-    _renderChain(layer, fxList, header);
+    _renderChain(layer, fxList, fxCountSpan);
     container.appendChild(fxList);
 
     // Add form
     const form = document.createElement('div');
-    form.id = 'lfx-add-form';
     form.style.cssText = `
       display: none;
       background: var(--bg-card);
@@ -87,8 +86,8 @@ const LayerFXPanel = (() => {
     `;
     container.appendChild(form);
 
-    // Wire add button
-    header.querySelector('#lfx-add-btn').addEventListener('click', () => {
+    // Wire add button directly (no ID lookup needed)
+    addFxBtn.addEventListener('click', () => {
       form.style.display = form.style.display === 'none' ? 'block' : 'none';
     });
 
@@ -109,13 +108,12 @@ const LayerFXPanel = (() => {
     });
   }
 
-  function _renderChain(layer, container, header) {
+  function _renderChain(layer, container, countSpan) {
     container.innerHTML = '';
     const fx = layer.fx || [];
 
-    // Update count in header
-    const countEl = header.querySelector('span');
-    if (countEl) countEl.textContent = `Layer FX (${fx.length})`;
+    // Update count
+    if (countSpan) countSpan.textContent = `Layer FX (${fx.length})`;
 
     if (fx.length === 0) {
       const empty = document.createElement('div');
@@ -175,7 +173,7 @@ const LayerFXPanel = (() => {
       // Toggle
       card.querySelector('.lfx-toggle').addEventListener('click', () => {
         effect.enabled = !effect.enabled;
-        _renderChain(layer, container, header);
+        _renderChain(layer, container, countSpan);
       });
 
       // Sliders
@@ -204,7 +202,7 @@ const LayerFXPanel = (() => {
       // Delete
       card.querySelector('.lfx-del').addEventListener('click', () => {
         layer.fx.splice(idx, 1);
-        _renderChain(layer, container, header);
+        _renderChain(layer, container, countSpan);
         Toast.info('FX removed');
       });
 

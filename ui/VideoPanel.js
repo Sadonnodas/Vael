@@ -94,6 +94,10 @@ const VideoPanel = (() => {
     // Only when uploaded fresh (prebuiltUrl means it came from library already)
     if (!prebuiltUrl && window.videoLibrary) {
       window.videoLibrary.add(file).catch(() => {});
+      // Persist to IndexedDB for next session
+      if (typeof AssetStore !== 'undefined') {
+        AssetStore.save('video', file).catch(() => {});
+      }
     }
 
     // Handle audio track

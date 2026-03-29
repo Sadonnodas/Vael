@@ -90,6 +90,26 @@
       display: flex;
       flex-direction: column;
       overflow: hidden;
+      position: relative;
+      min-width: 220px;
+      max-width: 600px;
+    }
+
+    /* Drag handle on the left edge of the sidebar */
+    #sidebar-resize-handle {
+      position: absolute;
+      left: 0;
+      top: 0;
+      width: 5px;
+      height: 100%;
+      cursor: ew-resize;
+      z-index: 10;
+      background: transparent;
+      transition: background 0.15s;
+    }
+    #sidebar-resize-handle:hover,
+    #sidebar-resize-handle.dragging {
+      background: color-mix(in srgb, var(--accent) 30%, transparent);
     }
 
     /* Sidebar header */
@@ -162,6 +182,7 @@
       scrollbar-width: thin;
       scrollbar-color: var(--border) var(--bg-mid);
     }
+
 
     /* Tab panels */
     .tab-panel { display: none; }
@@ -406,6 +427,82 @@
 
     /* ── Performance mode ─────────────────────────────────────── */
     body.performance #sidebar { display: none; }
+
+    /* ── Pop-out floating panels ──────────────────────────────── */
+    .vael-popout {
+      position: fixed;
+      background: var(--bg-mid);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.7);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 300;
+      min-width: 240px;
+      min-height: 120px;
+      resize: both;
+    }
+
+    .vael-popout-header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      background: var(--bg);
+      border-bottom: 1px solid var(--border);
+      cursor: move;
+      flex-shrink: 0;
+      user-select: none;
+    }
+
+    .vael-popout-title {
+      flex: 1;
+      font-family: var(--font-mono);
+      font-size: 9px;
+      letter-spacing: 1px;
+      color: var(--accent);
+      text-transform: uppercase;
+    }
+
+    .vael-popout-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 14px 14px;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) var(--bg-mid);
+    }
+
+    /* Pop-out button — always visible on active tab, brighter on hover */
+    .tab-popout-btn {
+      position: absolute;
+      right: 2px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--text-dim);
+      cursor: pointer;
+      font-size: 8px;
+      padding: 1px 3px;
+      opacity: 0.3;
+      transition: opacity 0.15s, color 0.15s;
+      line-height: 1;
+      border-radius: 2px;
+    }
+    .tab-btn:hover .tab-popout-btn {
+      opacity: 1;
+      color: var(--accent2);
+    }
+    .tab-btn.active .tab-popout-btn {
+      opacity: 0.5;
+    }
+    .tab-btn.active:hover .tab-popout-btn {
+      opacity: 1;
+      color: var(--accent);
+    }
+
+
     body.performance #status-strip { display: none; }
 
     #perf-hud {
@@ -462,6 +559,9 @@
   <!-- ── SIDEBAR ─────────────────────────────────────────────── -->
   <div id="sidebar">
 
+    <!-- Drag handle for resizing sidebar width -->
+    <div id="sidebar-resize-handle" title="Drag to resize sidebar"></div>
+
     <div id="sidebar-header">
       <img id="vael-logo" src="Vael-logo.png" alt="Vael"
         onerror="this.style.display='none';document.getElementById('sidebar-title-fallback').style.display='block'"
@@ -480,17 +580,19 @@
 
     <div id="sidebar-tabs">
       <!-- Row 1 -->
-      <button class="tab-btn active" data-tab="layers">LAYERS</button>
-      <button class="tab-btn" data-tab="params">PARAMS</button>
-      <button class="tab-btn" data-tab="fx">FX</button>
+      <button class="tab-btn active" data-tab="layers" style="position:relative">LAYERS<span class="tab-popout-btn" data-popout="layers" title="Pop out LAYERS panel">⊞</span></button>
+      <button class="tab-btn" data-tab="params" style="position:relative">PARAMS<span class="tab-popout-btn" data-popout="params" title="Pop out PARAMS panel">⊞</span></button>
+      <button class="tab-btn" data-tab="fx" style="position:relative">FX<span class="tab-popout-btn" data-popout="fx" title="Pop out FX panel">⊞</span></button>
       <!-- Row 2 -->
-      <button class="tab-btn" data-tab="audio">AUDIO</button>
-      <button class="tab-btn" data-tab="video">VIDEO</button>
-      <button class="tab-btn" data-tab="library">LIBRARY</button>
+      <button class="tab-btn" data-tab="audio" style="position:relative">AUDIO<span class="tab-popout-btn" data-popout="audio" title="Pop out AUDIO panel">⊞</span></button>
+      <button class="tab-btn" data-tab="video" style="position:relative">VIDEO<span class="tab-popout-btn" data-popout="video" title="Pop out VIDEO panel">⊞</span></button>
+      <button class="tab-btn" data-tab="library" style="position:relative">LIBRARY<span class="tab-popout-btn" data-popout="library" title="Pop out LIBRARY panel">⊞</span></button>
       <!-- Row 3 -->
-      <button class="tab-btn" data-tab="beat">BEAT</button>
-      <button class="tab-btn" data-tab="midi">MIDI</button>
-      <button class="tab-btn" data-tab="record">REC</button>
+      <button class="tab-btn" data-tab="beat" style="position:relative">BEAT<span class="tab-popout-btn" data-popout="beat" title="Pop out BEAT panel">⊞</span></button>
+      <button class="tab-btn" data-tab="midi" style="position:relative">MIDI<span class="tab-popout-btn" data-popout="midi" title="Pop out MIDI panel">⊞</span></button>
+      <button class="tab-btn" data-tab="record" style="position:relative">REC<span class="tab-popout-btn" data-popout="record" title="Pop out REC panel">⊞</span></button>
+      <button class="tab-btn" data-tab="history" style="position:relative">HIST<span class="tab-popout-btn" data-popout="history" title="Pop out HISTORY panel">⊞</span></button>
+      <button class="tab-btn" data-tab="timeline" style="position:relative">AUTO<span class="tab-popout-btn" data-popout="timeline" title="Pop out TIMELINE panel">⊞</span></button>
     </div>
 
     <div id="sidebar-content">
@@ -841,6 +943,16 @@
 
       </div>
 
+      <!-- HISTORY TAB -->
+      <div class="tab-panel" id="tab-history">
+        <div id="history-panel-content"></div>
+      </div>
+
+      <!-- AUTOMATION TIMELINE TAB -->
+      <div class="tab-panel" id="tab-timeline">
+        <div id="timeline-panel-content"></div>
+      </div>
+
 <!-- Keyboard shortcut help overlay -->
 <div id="shortcut-overlay" style="
   display:none;position:fixed;inset:0;
@@ -854,15 +966,23 @@
       <button id="shortcut-close" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px">✕</button>
     </div>
     <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 20px;font-size:10px">
+      <span style="color:var(--accent2);font-size:8px;letter-spacing:1px;padding-top:6px">AUDIO</span><span></span>
       <span style="color:var(--accent)">Space</span><span style="color:var(--text-muted)">Play / pause audio</span>
+      <span style="color:var(--accent2);font-size:8px;letter-spacing:1px;padding-top:6px">LAYERS</span><span></span>
+      <span style="color:var(--accent)">R</span><span style="color:var(--text-muted)">Reset selected layer transform (position, scale, rotation)</span>
+      <span style="color:var(--accent)">Drag canvas</span><span style="color:var(--text-muted)">Move selected layer</span>
+      <span style="color:var(--accent)">Scroll canvas</span><span style="color:var(--text-muted)">Scale selected layer</span>
+      <span style="color:var(--accent)">Shift+scroll</span><span style="color:var(--text-muted)">Fine scale (0.01 steps)</span>
+      <span style="color:var(--accent2);font-size:8px;letter-spacing:1px;padding-top:6px">PERFORMANCE</span><span></span>
       <span style="color:var(--accent)">F</span><span style="color:var(--text-muted)">Enter / exit performance mode</span>
-      <span style="color:var(--accent)">→ / ←</span><span style="color:var(--text-muted)">Next / previous scene (crossfade)</span>
+      <span style="color:var(--accent)">→ / ←</span><span style="color:var(--text-muted)">Next / previous scene</span>
       <span style="color:var(--accent)">1 – 9</span><span style="color:var(--text-muted)">Jump to setlist scene by number</span>
       <span style="color:var(--accent)">S</span><span style="color:var(--text-muted)">Open setlist panel (performance mode)</span>
+      <span style="color:var(--accent)">Escape</span><span style="color:var(--text-muted)">Close panel / exit performance mode</span>
+      <span style="color:var(--accent2);font-size:8px;letter-spacing:1px;padding-top:6px">OTHER</span><span></span>
       <span style="color:var(--accent)">T</span><span style="color:var(--text-muted)">Tap tempo</span>
       <span style="color:var(--accent)">PageDown</span><span style="color:var(--text-muted)">Next lyrics line</span>
       <span style="color:var(--accent)">PageUp</span><span style="color:var(--text-muted)">Previous lyrics line</span>
-      <span style="color:var(--accent)">Escape</span><span style="color:var(--text-muted)">Close panel / exit performance mode</span>
       <span style="color:var(--accent)">?</span><span style="color:var(--text-muted)">Show / hide this help</span>
     </div>
     <div style="margin-top:18px;padding-top:14px;border-top:1px solid var(--border-dim);
@@ -891,6 +1011,7 @@
 <!-- Engine -->
 <script src="engine/AudioEngine.js"></script>
 <script src="engine/VideoEngine.js"></script>
+<script src="engine/AssetStore.js"></script>
 <script src="engine/VideoLibrary.js"></script>
 <script src="engine/Recorder.js"></script>
 <script src="engine/LayerStack.js"></script>
@@ -905,6 +1026,9 @@
 <script src="engine/LFO.js"></script>
 <script src="engine/ModMatrix.js"></script>
 <script src="engine/LayerFX.js"></script>
+<script src="engine/SessionManager.js"></script>
+<script src="engine/HistoryManager.js"></script>
+<script src="engine/AutomationTimeline.js"></script>
 
 <!-- Layer base class -->
 <script src="layers/_BaseLayer.js"></script>
@@ -922,6 +1046,9 @@
 <script src="layers/ImageLayer.js"></script>
 <script src="layers/WaveformLayer.js"></script>
 <script src="layers/PatternLayer.js"></script>
+<script src="layers/CanvasPaintLayer.js"></script>
+<script src="layers/FeedbackLayer.js"></script>
+<script src="layers/SVGLayer.js"></script>
 
 <!-- UI -->
 <script src="ui/Toast.js"></script>
@@ -942,6 +1069,7 @@
 <script src="ui/PostFXPanel.js"></script>
 <script src="ui/SequencerPanel.js"></script>
 <script src="ui/ScenePalette.js"></script>
+<script src="ui/TimelinePanel.js"></script>
 <script src="ui/VaelAssistant.js"></script>
 <script src="ui/App.js"></script>
 
@@ -951,6 +1079,180 @@
     50%       { opacity: 0.3; }
   }
 </style>
+
+<script>
+// ── Sidebar resize ────────────────────────────────────────────────────────
+(function() {
+  const handle  = document.getElementById('sidebar-resize-handle');
+  const sidebar = document.getElementById('sidebar');
+  if (!handle || !sidebar) return;
+
+  const LS_KEY  = 'vael-sidebar-w';
+  const saved   = parseInt(localStorage.getItem(LS_KEY));
+  if (saved && saved >= 220 && saved <= 600) {
+    sidebar.style.width = saved + 'px';
+    document.documentElement.style.setProperty('--sidebar-w', saved + 'px');
+  }
+
+  let dragging  = false;
+  let startX    = 0;
+  let startW    = 0;
+
+  handle.addEventListener('pointerdown', e => {
+    dragging = true;
+    startX   = e.clientX;
+    startW   = sidebar.offsetWidth;
+    handle.classList.add('dragging');
+    handle.setPointerCapture(e.pointerId);
+    e.preventDefault();
+  });
+
+  handle.addEventListener('pointermove', e => {
+    if (!dragging) return;
+    // Sidebar is on the right; dragging left = wider
+    const delta = startX - e.clientX;
+    const newW  = Math.max(220, Math.min(600, startW + delta));
+    sidebar.style.width = newW + 'px';
+    document.documentElement.style.setProperty('--sidebar-w', newW + 'px');
+  });
+
+  handle.addEventListener('pointerup', e => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    try { localStorage.setItem(LS_KEY, sidebar.offsetWidth); } catch {}
+  });
+})();
+
+// (UI scale removed)
+
+// ── Pop-out panels ────────────────────────────────────────────────────────
+(function() {
+  const TAB_LABELS = {
+    layers: 'Layers', params: 'Params', fx: 'FX',
+    audio:  'Audio',  video:  'Video',  library: 'Library',
+    beat:   'Beat',   midi:   'MIDI',   record:  'Record',
+  };
+
+  // Track open popouts
+  const _popouts = {};
+
+  // Default positions cascade diagonally
+  let _popoutOffset = 0;
+
+  document.querySelectorAll('.tab-popout-btn').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const tabId = btn.dataset.popout;
+      if (!tabId) return;
+
+      // If already popped out, just focus it
+      if (_popouts[tabId]) {
+        _popouts[tabId].style.zIndex = 301 + Object.keys(_popouts).length;
+        return;
+      }
+
+      const tabPanel = document.getElementById('tab-' + tabId);
+      if (!tabPanel) return;
+
+      const label = TAB_LABELS[tabId] || tabId.toUpperCase();
+
+      // Create the floating window
+      const win = document.createElement('div');
+      win.className = 'vael-popout';
+      win.style.cssText += `
+        left: ${60 + _popoutOffset * 30}px;
+        top:  ${60 + _popoutOffset * 30}px;
+        width: 340px;
+        height: 480px;
+      `;
+      _popoutOffset = (_popoutOffset + 1) % 8;
+
+      win.innerHTML = `
+        <div class="vael-popout-header">
+          <span class="vael-popout-title">${label}</span>
+          <button class="po-dock" title="Dock back to sidebar"
+            style="background:none;border:1px solid var(--border-dim);border-radius:3px;
+                   color:var(--text-dim);cursor:pointer;font-family:var(--font-mono);
+                   font-size:8px;padding:2px 6px">dock</button>
+          <button class="po-close" title="Close"
+            style="background:none;border:none;color:var(--text-dim);cursor:pointer;
+                   font-size:14px;padding:0 2px">✕</button>
+        </div>
+        <div class="vael-popout-body"></div>
+      `;
+
+      const body = win.querySelector('.vael-popout-body');
+
+      // Move the tab panel content into the pop-out body
+      // We clone the inner content (not the panel itself, which stays in DOM
+      // so the existing JS panel references still work). Instead we use a
+      // MutationObserver to mirror content changes back and forth.
+      // Simpler approach: move the actual panel element in and restore on dock.
+      body.appendChild(tabPanel);
+      tabPanel.style.display = 'block'; // ensure visible regardless of active class
+
+      // Make pop-out draggable by header
+      const header = win.querySelector('.vael-popout-header');
+      let pdx = 0, pdy = 0, pdrag = false;
+      header.addEventListener('pointerdown', ev => {
+        if (ev.target.tagName === 'BUTTON') return;
+        pdrag = true;
+        const r = win.getBoundingClientRect();
+        pdx = ev.clientX - r.left;
+        pdy = ev.clientY - r.top;
+        header.setPointerCapture(ev.pointerId);
+        win.style.transition = 'none';
+        ev.preventDefault();
+      });
+      header.addEventListener('pointermove', ev => {
+        if (!pdrag) return;
+        const x = Math.max(0, Math.min(window.innerWidth  - 80, ev.clientX - pdx));
+        const y = Math.max(0, Math.min(window.innerHeight - 40, ev.clientY - pdy));
+        win.style.left = x + 'px';
+        win.style.top  = y + 'px';
+      });
+      header.addEventListener('pointerup', () => { pdrag = false; });
+
+      // Click brings to front
+      win.addEventListener('pointerdown', () => {
+        win.style.zIndex = 301 + Object.keys(_popouts).length;
+      });
+
+      // Dock button — move the panel back into the sidebar tab
+      win.querySelector('.po-dock').addEventListener('click', () => {
+        _dockPanel(tabId, tabPanel, win);
+      });
+
+      // Close button — same as dock but also hides the panel
+      win.querySelector('.po-close').addEventListener('click', () => {
+        _dockPanel(tabId, tabPanel, win);
+      });
+
+      document.body.appendChild(win);
+      _popouts[tabId] = win;
+
+      // Visually deactivate the sidebar tab (it's now in a window)
+      document.querySelector(`.tab-btn[data-tab="${tabId}"]`)
+              ?.classList.remove('active');
+    });
+  });
+
+  function _dockPanel(tabId, tabPanel, win) {
+    // Move the panel element back to sidebar content
+    const sidebarContent = document.getElementById('sidebar-content');
+    if (sidebarContent) {
+      // Re-insert at end of sidebar content — the tab system will show/hide it
+      tabPanel.style.display = '';
+      sidebarContent.appendChild(tabPanel);
+    }
+    win.remove();
+    delete _popouts[tabId];
+    _popoutOffset = Math.max(0, _popoutOffset - 1);
+  }
+
+})();
+</script>
 
 </body>
 </html>

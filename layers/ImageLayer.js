@@ -23,7 +23,7 @@ class ImageLayer extends BaseLayer {
       { id: 'opacity',      label: 'Opacity',       type: 'float', default: 1.0, min: 0, max: 1   },
       { id: 'tintHue',      label: 'Tint hue',      type: 'float', default: 0,   min: 0, max: 360  },
       { id: 'tintAmount',   label: 'Tint amount',   type: 'float', default: 0,   min: 0, max: 1    },
-      { id: 'audioTarget',  label: 'Audio → scale', type: 'band',  default: 'bass' },
+      { id: 'audioReact',   label: 'Audio react',   type: 'float', default: 0.0, min: 0, max: 1 },
       { id: 'audioScale',   label: 'Audio scale',   type: 'float', default: 0.0, min: 0, max: 1    },
       { id: 'audioRotate',  label: 'Audio rotate',  type: 'float', default: 0.0, min: 0, max: 1    },
       { id: 'pulseOnBeat',  label: 'Pulse on beat', type: 'bool',  default: false },
@@ -37,7 +37,7 @@ class ImageLayer extends BaseLayer {
       opacity:     1.0,
       tintHue:     0,
       tintAmount:  0,
-      audioTarget: 'bass',
+      audioReact:  0.0,
       audioScale:  0.0,
       audioRotate: 0.0,
       pulseOnBeat: false,
@@ -91,7 +91,7 @@ class ImageLayer extends BaseLayer {
   // ── Update ────────────────────────────────────────────────────
 
   update(audioData, videoData, dt) {
-    const av = audioData?.isActive ? (audioData[this.params.audioTarget] ?? 0) : 0;
+    const av = audioData?.isActive ? (audioData.bass ?? 0) * (this.params.audioReact ?? 0) : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.08);
 
     if (audioData?.isBeat && this.params.pulseOnBeat) {

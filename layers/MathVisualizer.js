@@ -26,7 +26,10 @@ class MathVisualizer extends BaseLayer {
     version: '3.0',
     params: [
       { id: 'constant',    label: 'Constant',       type: 'enum',  default: 'pi',
-        options: ['pi','e','phi','sqrt2','ln2','apery','euler-mascheroni','catalan'] },
+        options: ['pi','e','phi','sqrt2','ln2','apery','euler-mascheroni','catalan','combo'] },
+      { id: 'constantB',   label: 'Constant B',     type: 'enum',  default: 'e',
+        options: ['pi','e','phi','sqrt2','ln2','apery','euler-mascheroni','catalan'],
+        showWhen: { constant: ['combo'] } },
       { id: 'mode',        label: 'Mode',           type: 'enum',  default: 'path',
         options: ['path','tree','circle','chaos','spiral','walk','polar','lsystem','wave','constellation'] },
       { id: 'colorMode',   label: 'Color mode',     type: 'enum',  default: 'rainbow',
@@ -42,6 +45,7 @@ class MathVisualizer extends BaseLayer {
       { id: 'buildMode',   label: 'Animate digits', type: 'bool',  default: false },
       { id: 'buildMin',    label: 'Start digits',   type: 'int',   default: 1,    min: 1,   max: 500  },
       { id: 'buildSpeed',  label: 'Grow speed',     type: 'float', default: 8,    min: 0.5, max: 120  },
+      { id: 'audioReact',  label: 'Audio react',    type: 'float', default: 0.5,  min: 0,    max: 1     },
       { id: 'buildLoop',   label: 'Loop mode',      type: 'enum',  default: 'restart',
         options: ['restart','bounce','once'] },
     ],
@@ -51,6 +55,7 @@ class MathVisualizer extends BaseLayer {
     super(id, 'Math Visualizer');
     this.params = {
       constant:    'pi',
+      constantB:   'e',
       mode:        'path',
       colorMode:   'rainbow',
       colorA:      '#00d4aa',
@@ -64,6 +69,7 @@ class MathVisualizer extends BaseLayer {
       buildMode:   false,
       buildMin:    1,
       buildSpeed:  8,
+      audioReact:  0.5,
       buildLoop:   'restart',
     };
     this._time        = 0;
@@ -86,7 +92,7 @@ class MathVisualizer extends BaseLayer {
 
   setParam(id, value) {
     this.params[id] = value;
-    if (id === 'constant' || id === 'mode') {
+    if (id === 'constant' || id === 'constantB' || id === 'mode') {
       this._chaosInit  = false;
       this._buildCount = 0;
       this._buildDir   = 1;
@@ -102,7 +108,8 @@ class MathVisualizer extends BaseLayer {
   update(audioData, videoData, dt) {
     this._time += dt;
 
-    const audioVal    = audioData?.isActive ? (audioData.bass ?? 0) : 0;
+    const react       = this.params.audioReact ?? 0.5;
+    const audioVal    = audioData?.isActive ? (audioData.bass ?? 0) * react : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth ?? 0, audioVal, 0.08);
 
     this._angleSmooth = VaelMath.lerp(this._angleSmooth, this.params.angle + audioVal * 25, 0.06);
@@ -176,6 +183,15 @@ class MathVisualizer extends BaseLayer {
   // ── Helpers ──────────────────────────────────────────────────
 
   _getDigits() {
+    if (this.params.constant === 'combo') {
+      // Interleave two constants — 'pi' is the default A; user picks B via constantB
+      const idA = 'pi';   // could expose as constantA in a future version
+      const idB = this.params.constantB || 'e';
+      const constA = VaelConstants.CONSTANTS.find(c => c.id === idA);
+      const constB = VaelConstants.CONSTANTS.find(c => c.id === idB);
+      if (!constA || !constB) return null;
+      return VaelConstants.buildCombo(constA, constB, this.params.digitCount);
+    }
     const c = VaelConstants.CONSTANTS.find(c => c.id === this.params.constant);
     return c ? c.digits.slice(0, this.params.digitCount) : null;
   }

@@ -41,6 +41,10 @@ const ModMatrixPanel = (() => {
     { id: 'transform.rotation', label: 'Rotation'   },
   ];
 
+  const LAYER_TARGETS = [
+    { id: 'opacity', label: 'Opacity' },
+  ];
+
   function render(layer, container) {
     if (!layer.modMatrix) return;
 
@@ -50,15 +54,16 @@ const ModMatrixPanel = (() => {
 
     const headerRow = document.createElement('div');
     headerRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px';
-    headerRow.innerHTML = `
-      <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);
-                   text-transform:uppercase;letter-spacing:1px">
-        Modulation (${layer.modMatrix.routes.length})
-      </span>
-      <button id="mod-add-btn" style="background:none;border:1px solid var(--accent2);
-        border-radius:3px;color:var(--accent2);font-family:var(--font-mono);font-size:8px;
-        padding:2px 8px;cursor:pointer">+ Add route</button>
-    `;
+
+    const modCountSpan = document.createElement('span');
+    modCountSpan.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px';
+    modCountSpan.textContent   = `Modulation (${layer.modMatrix.routes.length})`;
+    headerRow.appendChild(modCountSpan);
+
+    const addRouteBtn = document.createElement('button');
+    addRouteBtn.style.cssText = 'background:none;border:1px solid var(--accent2);border-radius:3px;color:var(--accent2);font-family:var(--font-mono);font-size:8px;padding:2px 8px;cursor:pointer';
+    addRouteBtn.textContent   = '+ Add route';
+    headerRow.appendChild(addRouteBtn);
     container.appendChild(headerRow);
 
     const routeList = document.createElement('div');
@@ -75,12 +80,12 @@ const ModMatrixPanel = (() => {
     form.innerHTML = _buildAddForm(layer);
     container.appendChild(form);
 
-    headerRow.querySelector('#mod-add-btn').addEventListener('click', () => {
+    addRouteBtn.addEventListener('click', () => {
       const open = form.style.display !== 'none';
       form.style.display = open ? 'none' : 'block';
       if (!open) {
         form.innerHTML = _buildAddForm(layer);
-        _wireForm(layer, form, routeList, headerRow);
+        _wireForm(layer, form, routeList, modCountSpan);
       }
     });
   }
@@ -99,7 +104,8 @@ const ModMatrixPanel = (() => {
       // Find the label for this target
       const paramManifest = layer.constructor?.manifest?.params?.find(p => p.id === route.target);
       const transformDef  = TRANSFORM_TARGETS.find(t => t.id === route.target);
-      const targetName    = paramManifest?.label || transformDef?.label || route.target;
+      const layerDef      = LAYER_TARGETS.find(t => t.id === route.target);
+      const targetName    = paramManifest?.label || transformDef?.label || layerDef?.label || route.target;
       const sourceName    = SOURCE_LABELS[route.source] || route.source;
       const color         = SOURCE_COLORS[route.source] || '#00d4aa';
 
@@ -196,6 +202,9 @@ const ModMatrixPanel = (() => {
     ).join('');
 
     const targetOptions = [
+      `<optgroup label="Layer">${LAYER_TARGETS.map(t =>
+        `<option value="${t.id}">${t.label}</option>`
+      ).join('')}</optgroup>`,
       paramTargetOptions ? `<optgroup label="Parameters">${paramTargetOptions}</optgroup>` : '',
       `<optgroup label="Transform">${transformTargetOptions}</optgroup>`,
     ].join('');
@@ -249,7 +258,7 @@ const ModMatrixPanel = (() => {
     `;
   }
 
-  function _wireForm(layer, form, routeList, headerRow) {
+  function _wireForm(layer, form, routeList, modCountSpan) {
     form.querySelector('#mod-depth-sl')?.addEventListener('input', e => {
       const v    = parseFloat(e.target.value);
       const sign = v < 0 ? '−' : '+';
@@ -265,12 +274,11 @@ const ModMatrixPanel = (() => {
       const smooth = parseFloat(form.querySelector('#mod-smooth-sl')?.value) || 0.1;
       if (!source || !target) return;
 
-      layer.modMatrix.addRoute({ source, target, depth, smooth });
+      layer.modMatrix.addRoute({ source, target, depth, smooth }, layer);
       form.style.display = 'none';
       _renderRoutes(layer, routeList);
 
-      const countEl = headerRow.querySelector('span');
-      if (countEl) countEl.textContent = `Modulation (${layer.modMatrix.routes.length})`;
+      modCountSpan.textContent = `Modulation (${layer.modMatrix.routes.length})`;
 
       const targetLabel = layer.constructor?.manifest?.params?.find(p => p.id === target)?.label
         || TRANSFORM_TARGETS.find(t => t.id === target)?.label

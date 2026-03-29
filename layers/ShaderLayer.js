@@ -47,10 +47,14 @@ class ShaderLayer extends BaseLayer {
       { id: 'colorA',      label: 'Color A',     type: 'color', default: '#00d4aa'               },
       { id: 'colorB',      label: 'Color B',     type: 'color', default: '#7c3ff0'               },
       { id: 'hueShift',    label: 'Hue shift',   type: 'float', default: 0,   min: 0,   max: 360 },
+      { id: 'audioReact',  label: 'Audio react', type: 'float', default: 1.0, min: 0,   max: 1,
+        // 0 = audio uniforms (iBass etc.) are always 0 in built-in shader response.
+        // 1 = full audio feeds uniforms. Shader GLSL still receives real values via
+        //     iBass/iMid/iTreble regardless — this only gates the speed/beat reaction.
+      },
       { id: 'speed',       label: 'Speed',       type: 'float', default: 1.0, min: 0,   max: 4   },
       { id: 'intensity',   label: 'Intensity',   type: 'float', default: 1.0, min: 0,   max: 2   },
       { id: 'scale',       label: 'Scale',       type: 'float', default: 1.0, min: 0.1, max: 5   },
-      { id: 'audioTarget', label: 'Audio band',  type: 'band',  default: 'bass'                  },
     ],
   };
 
@@ -67,7 +71,7 @@ class ShaderLayer extends BaseLayer {
     this.params = {
       param1: 0.5, param2: 0.5, param3: 0.5,
       colorA: '#00d4aa', colorB: '#7c3ff0', hueShift: 0,
-      speed: 1.0, intensity: 1.0, scale: 1.0, audioTarget: 'bass',
+      audioReact: 1.0, speed: 1.0, intensity: 1.0, scale: 1.0,
     };
 
     this._shaderName  = 'plasma';
@@ -189,9 +193,11 @@ class ShaderLayer extends BaseLayer {
   update(audioData, videoData, dt) {
     this._time += dt * (this.params.speed ?? 1);
     this._audioData = audioData;
-    const av = audioData?.isActive ? (audioData[this.params.audioTarget] ?? 0) : 0;
+    // Audio smoothing — gated by audioReact param (0=none, 1=full)
+    const react = this.params.audioReact ?? 1.0;
+    const av    = audioData?.isActive ? (audioData.bass ?? 0) * react : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.08);
-    if (audioData?.isBeat) this._beatPulse = 1.0;
+    if (audioData?.isBeat) this._beatPulse = react > 0 ? 1.0 : 0;
     this._beatPulse = Math.max(0, this._beatPulse - dt * 6);
   }
 
@@ -348,6 +354,108 @@ void main() {
   float g = sin(uv.x*8.+t)       * sin(uv.y*6.+t*.8);
   float b = sin((uv.x-off)*8.+t) * sin((uv.y-off)*6.+t*.8);
   gl_FragColor = vec4(r*.5+.5, g*.5+.5, b*.5+.5, .9);
+}`,
+
+  kaleidoscope: `
+void main() {
+  vec2 uv   = vUv - .5;
+  float segments = max(2., floor(iParam1 * 14.) + 2.); // 2-16 segments via param1
+  float angle     = atan(uv.y, uv.x);
+  float r         = length(uv);
+  float segAngle  = 3.14159 * 2. / segments;
+  angle = mod(angle, segAngle);
+  if (angle > segAngle * .5) angle = segAngle - angle;
+  vec2 sym = vec2(cos(angle), sin(angle)) * r;
+  sym = sym * iScale + .5;
+  float t  = iTime * iSpeed * .3;
+  float v  = sin(sym.x * 8. + t) * sin(sym.y * 8. + t * .7)
+           + sin((sym.x + sym.y) * 6. + t * 1.3 + iBass * 3.);
+  float hue = v * .25 + .5 + iBeat * .08;
+  vec3 cA = iColorA, cB = iColorB;
+  float blend = v * .5 + .5 + iBass * .15;
+  vec3 col = mix(cA, cB, clamp(blend, 0., 1.));
+  col *= iIntensity;
+  gl_FragColor = vec4(col, 1.);
+}`,
+
+  tunnel: `
+void main() {
+  vec2 uv = vUv - .5;
+  float t  = iTime * iSpeed * .4;
+  float a  = atan(uv.y, uv.x);
+  float r  = length(uv);
+  // Map to tunnel coordinates: z goes forward with time
+  vec2 tuv = vec2(a / 3.14159, .15 / r + t);
+  tuv *= iScale;
+  float bri = sin(tuv.x * 6. + t) * .5 + .5;
+  float dep = sin(tuv.y * 4.)      * .5 + .5;
+  float pulse = 1. + iBass * .3 + iBeat * .15;
+  bri *= dep * pulse;
+  // Colour from iColorA/B blended by angle
+  float blend = a / 3.14159 * .5 + .5;
+  vec3 col = mix(iColorA, iColorB, blend) * bri * iIntensity;
+  // Vignette at the mouth
+  col *= smoothstep(.5, .1, r);
+  gl_FragColor = vec4(col, 1.);
+}`,
+
+  voronoi: `
+vec2 _hash2(vec2 p) {
+  p = vec2(dot(p,vec2(127.1,311.7)), dot(p,vec2(269.5,183.3)));
+  return fract(sin(p)*43758.5453);
+}
+void main() {
+  vec2 uv   = (vUv - .5) * iScale * 4. + .5;
+  float t   = iTime * iSpeed * .15;
+  float minD = 1e9, minD2 = 1e9;
+  vec2  minP;
+  vec2  cell = floor(uv);
+  for (int y = -1; y <= 1; y++) {
+    for (int x = -1; x <= 1; x++) {
+      vec2 nb = cell + vec2(x, y);
+      vec2 pt = nb + _hash2(nb + floor(t));
+      // Animate: cells drift with time and audio
+      pt += .45 * sin(6.28 * _hash2(nb) + t + iBass * 2.);
+      float d = length(uv - pt);
+      if (d < minD) { minD2 = minD; minD = d; minP = pt; }
+      else if (d < minD2) { minD2 = d; }
+    }
+  }
+  // Edge = distance difference between nearest two cells
+  float edge  = minD2 - minD;
+  float glow  = exp(-edge * 12.) * (1. + iBeat * .5);
+  float cells = smoothstep(.45, .5, minD);
+  // Colour: cell interior from iColorA, edges from iColorB
+  vec3 col = mix(iColorA * (1. - cells * .6), iColorB, glow);
+  col *= iIntensity;
+  gl_FragColor = vec4(col, 1.);
+}`,
+
+  // Reaction-diffusion (Gray-Scott) — GPU ping-pong approximation via noise
+  // True R-D needs framebuffer ping-pong; this is a convincing one-pass fake
+  // using layered noise to mimic the characteristic spotted/striped patterns.
+  turing: `
+float _hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5); }
+float _n(vec2 p){
+  vec2 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);
+  return mix(mix(_hash(i),_hash(i+vec2(1,0)),f.x),
+             mix(_hash(i+vec2(0,1)),_hash(i+vec2(1,1)),f.x),f.y);
+}
+void main() {
+  vec2 uv  = vUv * iScale * 3.;
+  float t  = iTime * iSpeed * .08;
+  float f  = iParam1 * 0.06 + 0.01;   // feed rate proxy — controls spot/stripe balance
+  // Multi-scale noise layers to mimic activator–inhibitor separation
+  float a1 = _n(uv * 2.  + vec2(t, 0.));
+  float a2 = _n(uv * 5.  + vec2(0., t * 1.3));
+  float a3 = _n(uv * 12. + vec2(t * .7, t * .5));
+  // Activator: sharp threshold on combined layers
+  float activator = smoothstep(.45 + f, .55 + f, a1 * .5 + a2 * .3 + a3 * .2);
+  activator = mix(activator, 1. - activator, step(.5, _n(uv * .3 + t * .05)));
+  // Audio drives the threshold, making patterns shift on beats
+  activator = smoothstep(.0, 1., activator + iBass * .2 + iBeat * .1);
+  vec3 col = mix(iColorA, iColorB, activator) * iIntensity;
+  gl_FragColor = vec4(col, 1.);
 }`,
 
 };

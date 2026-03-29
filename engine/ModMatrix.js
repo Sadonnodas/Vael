@@ -40,10 +40,36 @@ class ModMatrix {
     this._baseVals = new Map();
   }
 
-  addRoute(config) {
+  addRoute(config, layer = null) {
     const route = new ModRoute(config);
     this.routes.push(route);
+
+    // Capture base values immediately from the layer's current state,
+    // so the resting position is always the value at the moment of wiring —
+    // not whatever it happens to be on the first modulated frame.
+    if (layer) {
+      this._captureBase(route.target, layer);
+    }
+
     return route;
+  }
+
+  /**
+   * Record the layer's current param/transform/opacity value as the base
+   * for a given target, unless a base has already been stored for it.
+   */
+  _captureBase(target, layer) {
+    if (this._baseVals.has(target)) return; // already set — don't overwrite
+
+    if (target.startsWith('transform.')) {
+      const key   = target.slice('transform.'.length);
+      const range = _transformRange(key);
+      this._baseVals.set(target, layer.transform?.[key] ?? range.base);
+    } else if (target === 'opacity') {
+      this._baseVals.set('opacity', layer.opacity ?? 1);
+    } else {
+      this._baseVals.set(target, layer.params?.[target] ?? 0);
+    }
   }
 
   removeRoute(id) {
@@ -94,6 +120,17 @@ class ModMatrix {
         const clamped  = Math.max(pMin, Math.min(pMax, modValue));
         if (layer.transform) layer.transform[transformKey] = clamped;
 
+      } else if (target === 'opacity') {
+        // Opacity lives directly on the layer object, not in params
+        if (!this._baseVals.has('opacity')) {
+          this._baseVals.set('opacity', layer.opacity ?? 1);
+        }
+        const base     = this._baseVals.get('opacity');
+        const pMin     = min ?? 0;
+        const pMax     = max ?? 1;
+        const modValue = base + route._smoothed * depth * (pMax - pMin);
+        layer.opacity  = Math.max(0, Math.min(1, modValue));
+
       } else {
         // Standard param target
         if (!layer.params) return;
@@ -125,8 +162,14 @@ class ModMatrix {
     return this.routes.map(r => r.toJSON());
   }
 
-  fromJSON(data) {
+  fromJSON(data, layer = null) {
+    this._baseVals.clear();
     this.routes = (data || []).map(d => new ModRoute(d));
+    // Capture base values from the layer's current state if available,
+    // so restored routes start from the correct resting position.
+    if (layer) {
+      this.routes.forEach(r => this._captureBase(r.target, layer));
+    }
   }
 }
 

@@ -19,6 +19,10 @@ class BaseLayer {
     this.opacity     = 1.0;
     this.blendMode   = 'normal';
     this.maskLayerId = null;
+    this.maskMode    = 'luminance'; // 'alpha' | 'luminance' | 'invert'
+    // alpha     — hard cutout mask (transparent areas in mask = transparent here)
+    // luminance — bright areas of mask = visible, dark = transparent (cinematic)
+    // invert    — dark areas of mask = visible, bright = transparent
 
     // Per-layer transform
     this.transform = { x: 0, y: 0, scaleX: 1.0, scaleY: 1.0, rotation: 0 };
@@ -59,6 +63,7 @@ class BaseLayer {
       opacity:     this.opacity,
       blendMode:   this.blendMode,
       maskLayerId: this.maskLayerId || null,
+      maskMode:    this.maskMode    || 'luminance',
       transform:   { ...this.transform },
       fx:          this.fx ? this.fx.map(f => ({ ...f, params: { ...f.params } })) : [],
       modMatrix:   this.modMatrix?.toJSON() || [],

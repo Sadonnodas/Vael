@@ -14,11 +14,63 @@ const ParamPanel = (() => {
 
   // Param IDs that are legacy single-band audio pickers.
   // The ModMatrix panel replaces these more clearly.
-  const LEGACY_PARAM_IDS = new Set(['audioTarget', 'audioAmount', 'audioReact']);
+  const LEGACY_PARAM_IDS = new Set([
+    'audioTarget', 'audioAmount', 'audioReact',
+    'audioScale',  'audioRotate', 'audioOpac',
+    'audioSize',   'audioHue',    'audioColor',
+  ]);
+
+  // ── Live value tracking ─────────────────────────────────────
+  // Maps paramId → { liveBar, numInput, slider, min, max, fmt }
+  // Populated by buildSlider, consumed by updateLiveValues().
+  let _liveTrackers = new Map();
+  let _trackedLayer = null;
+
+  /**
+   * Call this every frame (from App.js renderer.onFrame) when a layer
+   * is selected, to push live modulated values into the param panel.
+   */
+  function updateLiveValues(layer) {
+    if (!layer || layer !== _trackedLayer) return;
+    _liveTrackers.forEach(({ liveBar, numInput, slider, min, max, fmt, paramId }) => {
+      // Read the live value from the layer — could be modulated by ModMatrix/LFO
+      let live;
+      if (paramId === 'opacity') {
+        live = layer.opacity;
+      } else {
+        live = layer.params?.[paramId];
+      }
+      if (live === undefined || live === null) return;
+
+      const base    = parseFloat(slider.value);
+      const range   = max - min;
+      const pct     = range > 0 ? Math.max(0, Math.min(1, (live - min) / range)) : 0;
+      const basePct = range > 0 ? Math.max(0, Math.min(1, (base - min) / range)) : 0;
+
+      // Show the live bar only when the value differs meaningfully from the base
+      const isDriven = Math.abs(live - base) > 0.005;
+      liveBar.style.opacity = isDriven ? '1' : '0';
+      liveBar.style.width   = `${pct * 100}%`;
+
+      // Show live value in the number input when it's not focused and is driven
+      if (isDriven && document.activeElement !== numInput) {
+        numInput.style.color = 'var(--accent2)';
+        numInput.value       = fmt(live);
+      } else if (!isDriven) {
+        numInput.style.color = 'var(--accent)';
+        // Restore base value when not driven and not focused
+        if (document.activeElement !== numInput) {
+          numInput.value = fmt(base);
+        }
+      }
+    });
+  }
 
   // ── Public API ───────────────────────────────────────────────
 
   function render(layer, container, audioEngine) {
+    _liveTrackers.clear();
+    _trackedLayer = layer;
     container.innerHTML = '';
 
     const manifest = layer.constructor.manifest;
@@ -38,6 +90,16 @@ const ParamPanel = (() => {
       // Hide legacy single-band audio pickers — ModMatrix replaces these.
       // Also hide any param explicitly marked legacy: true in the manifest.
       if (LEGACY_PARAM_IDS.has(param.id) || param.legacy === true) return;
+
+      // showWhen: { paramId: [allowedValues] } — hide param unless condition met.
+      // Example: showWhen: { mode: ['trails'] } hides the param for all other modes.
+      if (param.showWhen) {
+        const visible = Object.entries(param.showWhen).every(([key, allowed]) => {
+          const val = layer.params?.[key];
+          return Array.isArray(allowed) ? allowed.includes(val) : val === allowed;
+        });
+        if (!visible) return;
+      }
 
       const current = layer.params?.[param.id] ?? param.default;
       const el = buildControl(param, current, layer);
@@ -128,7 +190,6 @@ const ParamPanel = (() => {
     slider.step  = step;
     slider.value = current;
     slider.style.cssText = 'width:100%;accent-color:var(--accent);cursor:pointer';
-    wrap.appendChild(slider);
 
     // Shared apply function
     const apply = (v) => {
@@ -138,6 +199,8 @@ const ParamPanel = (() => {
       numInput.value = display;
       if (layer.params) layer.params[param.id] = clamped;
       if (typeof layer.setParam === 'function') layer.setParam(param.id, clamped);
+      // Debounced history snapshot
+      if (window._vaelHistory) window._vaelHistory.onParamChange(param.label, layer);
     };
 
     // Slider drives number input
@@ -157,6 +220,30 @@ const ParamPanel = (() => {
       if (e.key === 'Escape') { numInput.value = fmt(parseFloat(slider.value)); numInput.blur(); }
       // Arrow keys on the number input work natively for step increment
     });
+
+    // Live modulation indicator — thin bar that tracks the actual current value
+    // (which may differ from slider/base when driven by ModMatrix or LFO)
+    const liveBar = document.createElement('div');
+    liveBar.style.cssText = `
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      height: 2px;
+      background: var(--accent2);
+      border-radius: 1px;
+      opacity: 0;
+      transition: width 0.05s, opacity 0.2s;
+      pointer-events: none;
+    `;
+    // Wrap slider in a relative container so the bar can be positioned under it
+    const sliderWrap = document.createElement('div');
+    sliderWrap.style.cssText = 'position:relative;padding-bottom:2px';
+    sliderWrap.appendChild(slider);
+    sliderWrap.appendChild(liveBar);
+    wrap.appendChild(sliderWrap);
+
+    // Register in live tracker (replaces the earlier direct wrap.appendChild(slider))
+    _liveTrackers.set(param.id, { liveBar, numInput, slider, min, max, fmt, paramId: param.id });
 
     return wrap;
   }
@@ -192,6 +279,11 @@ const ParamPanel = (() => {
     wrap.querySelector('select').addEventListener('change', e => {
       if (layer.params) layer.params[param.id] = e.target.value;
       if (typeof layer.setParam === 'function') layer.setParam(param.id, e.target.value);
+      // If this param controls which other params are visible, re-render the panel.
+      if (param.triggersRefresh) {
+        const cont = wrap.closest('[id="params-content"]');
+        if (cont) render(layer, cont);
+      }
     });
 
     return wrap;
@@ -237,6 +329,11 @@ const ParamPanel = (() => {
       knob.style.background = state ? 'var(--bg)' : 'var(--text-dim)';
       if (layer.params) layer.params[param.id] = state;
       if (typeof layer.setParam === 'function') layer.setParam(param.id, state);
+      // If this bool controls showWhen visibility of other params, re-render
+      if (param.triggersRefresh) {
+        const cont = wrap.closest('[id="params-content"]');
+        if (cont) render(layer, cont);
+      }
     });
 
     return wrap;
@@ -331,6 +428,11 @@ const ParamPanel = (() => {
     wrap.querySelector('select').addEventListener('change', e => {
       if (layer.params) layer.params[param.id] = e.target.value;
       if (typeof layer.setParam === 'function') layer.setParam(param.id, e.target.value);
+      // If this param controls which other params are visible, re-render the panel.
+      if (param.triggersRefresh) {
+        const cont = wrap.closest('[id="params-content"]');
+        if (cont) render(layer, cont);
+      }
     });
 
     return wrap;
@@ -427,6 +529,49 @@ const ParamPanel = (() => {
         if (e.key === 'Escape') { input.value = layer.name; input.blur(); }
       });
     });
+
+    // Reset to defaults button
+    const resetRow = document.createElement('div');
+    resetRow.style.cssText = 'display:flex;justify-content:flex-end;margin-top:6px';
+    const resetBtn = document.createElement('button');
+    resetBtn.style.cssText = `
+      background: none;
+      border: 1px solid var(--border-dim);
+      border-radius: 3px;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+      font-size: 8px;
+      padding: 2px 7px;
+      cursor: pointer;
+      transition: border-color 0.1s, color 0.1s;
+    `;
+    resetBtn.textContent = '↺ Reset params';
+    resetBtn.title       = 'Reset all parameters to their default values';
+    resetBtn.addEventListener('mouseenter', () => {
+      resetBtn.style.borderColor = 'var(--accent2)';
+      resetBtn.style.color       = 'var(--accent2)';
+    });
+    resetBtn.addEventListener('mouseleave', () => {
+      resetBtn.style.borderColor = 'var(--border-dim)';
+      resetBtn.style.color       = 'var(--text-dim)';
+    });
+    resetBtn.addEventListener('click', () => {
+      const manifest = layer.constructor?.manifest;
+      if (!manifest?.params) return;
+      // Re-apply all manifest defaults
+      const defaults = {};
+      manifest.params.forEach(p => { if (p.default !== undefined) defaults[p.id] = p.default; });
+      if (layer.params) Object.assign(layer.params, defaults);
+      if (typeof layer.init === 'function') layer.init(defaults);
+      // Re-render the params panel
+      const cont = resetBtn.closest('#params-content');
+      if (cont) render(layer, cont);
+      // Snapshot history
+      if (window._vaelHistory) window._vaelHistory.snapshot(`Reset ${layer.name} params`);
+      Toast.info(`Params reset to defaults`);
+    });
+    resetRow.appendChild(resetBtn);
+    wrap.appendChild(resetRow);
 
     return wrap;
   }

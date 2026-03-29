@@ -16,8 +16,7 @@ class WebcamLayer extends BaseLayer {
       { id: 'chromaKey',   label: 'Chroma key',      type: 'bool',  default: false },
       { id: 'chromaHue',   label: 'Chroma hue',      type: 'float', default: 120, min: 0,   max: 360 },
       { id: 'chromaRange', label: 'Chroma range',    type: 'float', default: 40,  min: 5,   max: 120 },
-      { id: 'audioTarget', label: 'Audio → opacity', type: 'band',  default: 'volume' },
-      { id: 'audioAmount', label: 'Audio amount',    type: 'float', default: 0.0, min: 0,   max: 1   },
+      { id: 'audioReact',  label: 'Audio react',     type: 'float', default: 0.0, min: 0,   max: 1   },
       { id: 'fitMode',     label: 'Fit',             type: 'enum',  default: 'cover',
         options: ['cover', 'contain', 'stretch'] },
     ],
@@ -31,8 +30,7 @@ class WebcamLayer extends BaseLayer {
       chromaKey:   false,
       chromaHue:   120,
       chromaRange: 40,
-      audioTarget: 'volume',
-      audioAmount: 0.0,
+      audioReact:  0.0,
       fitMode:     'cover',
     };
 
@@ -76,7 +74,7 @@ class WebcamLayer extends BaseLayer {
   }
 
   update(audioData, videoData, dt) {
-    const av = audioData?.isActive ? (audioData[this.params.audioTarget] ?? 0) : 0;
+    const av = audioData?.isActive ? (audioData.volume ?? 0) * (this.params.audioReact ?? 0) : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.08);
   }
 
@@ -104,8 +102,7 @@ class WebcamLayer extends BaseLayer {
     ctx.save();
 
     // Audio-driven opacity
-    const audioOpacity = 1 - this.params.audioAmount + this._audioSmooth * this.params.audioAmount;
-    ctx.globalAlpha = VaelMath.clamp(this.opacity * audioOpacity, 0, 1);
+    ctx.globalAlpha = VaelMath.clamp(this.opacity * (1 - this._audioSmooth * 0.5), 0, 1);
 
     // Flip transforms
     const scaleX = this.params.flipH ? -1 : 1;

@@ -1,17 +1,33 @@
 /**
  * ui/LFOPanel.js
- * Renders the LFO modulator panel.
- * Shows active LFOs and lets you add new ones to any layer parameter.
- * Rendered inside the PARAMS tab when the LFO button is clicked.
+ *
+ * CHANGES:
+ * - Each LFO card now has an Edit button that expands an inline form
+ *   pre-filled with current values. Changes apply live on "Update".
+ * - Special targets: Opacity, Position X/Y, Scale X/Y, Rotation.
+ *   These are grouped separately from layer params in the target dropdown.
+ * - Param dropdown filters to float/int types only (unchanged).
  */
 
 const LFOPanel = (() => {
 
-  let _lfoManager  = null;
-  let _layerStack  = null;
-  let _container   = null;
+  let _lfoManager = null;
+  let _layerStack = null;
+  let _container  = null;
 
   const SHAPES = ['sine', 'triangle', 'square', 'saw', 'random'];
+
+  // Special targets that write to layer properties outside layer.params
+  const SPECIAL_TARGETS = [
+    { id: 'opacity',            label: 'Opacity',     min: 0,    max: 1,    group: 'Layer'     },
+    { id: 'transform.x',        label: 'Position X',  min: -500, max: 500,  group: 'Transform' },
+    { id: 'transform.y',        label: 'Position Y',  min: -500, max: 500,  group: 'Transform' },
+    { id: 'transform.scaleX',   label: 'Scale X',     min: 0.1,  max: 4,    group: 'Transform' },
+    { id: 'transform.scaleY',   label: 'Scale Y',     min: 0.1,  max: 4,    group: 'Transform' },
+    { id: 'transform.rotation', label: 'Rotation',    min: -180, max: 180,  group: 'Transform' },
+  ];
+
+  const WAVE_ICONS = { sine: '∿', triangle: '⋀', square: '⊓', saw: '⟋', random: '≈' };
 
   function init(lfoManager, layerStack, container) {
     _lfoManager = lfoManager;
@@ -22,60 +38,25 @@ const LFOPanel = (() => {
 
   function refresh() { _render(); }
 
+  // ── Main render ───────────────────────────────────────────────
+
   function _render() {
     if (!_container) return;
     _container.innerHTML = '';
 
     const intro = document.createElement('p');
     intro.style.cssText = 'font-size:10px;color:var(--text-muted);line-height:1.6;margin-bottom:14px';
-    intro.textContent   = 'LFOs animate layer parameters over time. Rate is in Hz (cycles/sec) or beats if BPM sync is on.';
+    intro.textContent   = 'LFOs animate layer parameters automatically over time, independent of audio.';
     _container.appendChild(intro);
 
     // Active LFOs
     if (_lfoManager.lfos.length > 0) {
-      const activeLabel = document.createElement('div');
-      activeLabel.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px';
-      activeLabel.textContent   = `Active (${_lfoManager.lfos.length})`;
-      _container.appendChild(activeLabel);
+      const label = document.createElement('div');
+      label.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-bottom:8px;text-transform:uppercase;letter-spacing:1px';
+      label.textContent   = `Active (${_lfoManager.lfos.length})`;
+      _container.appendChild(label);
 
-      _lfoManager.lfos.forEach(lfo => {
-        const layer = _layerStack.layers.find(l => l.id === lfo.layerId);
-        const card  = document.createElement('div');
-        card.style.cssText = `
-          background: var(--bg-card);
-          border: 1px solid var(--border-dim);
-          border-radius: 5px;
-          padding: 8px 10px;
-          margin-bottom: 6px;
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        `;
-
-        // Shape visualisation — tiny ASCII wave
-        const waveIcons = { sine: '∿', triangle: '⋀', square: '⊓', saw: '⟋', random: '≈' };
-
-        card.innerHTML = `
-          <span style="font-size:14px;color:var(--accent2)">${waveIcons[lfo.shape] || '∿'}</span>
-          <div style="flex:1;min-width:0">
-            <div style="font-family:var(--font-mono);font-size:9px;color:var(--text)">
-              ${layer?.name ?? lfo.layerId} · ${lfo.paramId}
-            </div>
-            <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
-              ${lfo.shape} · ${lfo.rate}${lfo.syncToBpm ? ' beats' : 'Hz'} · depth ${lfo.depth.toFixed(2)}
-            </div>
-          </div>
-          <button class="lfo-del" data-id="${lfo.id}"
-            style="background:none;border:none;color:#454560;cursor:pointer;font-size:11px">✕</button>
-        `;
-
-        card.querySelector('.lfo-del').addEventListener('click', () => {
-          _lfoManager.remove(lfo.id);
-          _render();
-        });
-
-        _container.appendChild(card);
-      });
+      _lfoManager.lfos.forEach(lfo => _renderLFOCard(lfo));
 
       const clearBtn = document.createElement('button');
       clearBtn.className   = 'btn';
@@ -100,94 +81,285 @@ const LFOPanel = (() => {
     if (layers.length === 0) {
       const msg = document.createElement('p');
       msg.style.cssText = 'font-size:10px;color:var(--text-dim);text-align:center;padding:12px 0';
-      msg.textContent   = 'Add some layers first, then come back here to assign LFOs to their parameters.';
+      msg.textContent   = 'Add some layers first.';
       _container.appendChild(msg);
       return;
     }
 
-    // Layer picker
-    _container.appendChild(_row('Layer', `
-      <select id="lfo-layer" style="width:100%;background:var(--bg);border:1px solid var(--border);
+    _container.appendChild(_buildForm(null));
+  }
+
+  // ── LFO card (collapsed + expandable edit) ────────────────────
+
+  function _renderLFOCard(lfo) {
+    const layer = _layerStack.layers.find(l => l.id === lfo.layerId);
+    const targetLabel = _targetLabel(layer, lfo.paramId);
+
+    const card = document.createElement('div');
+    card.style.cssText = `
+      background: var(--bg-card);
+      border: 1px solid var(--border-dim);
+      border-radius: 5px;
+      padding: 8px 10px;
+      margin-bottom: 6px;
+    `;
+
+    // ── Collapsed header row ──────────────────────────────────
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;gap:8px';
+
+    header.innerHTML = `
+      <span style="font-size:14px;color:var(--accent2);flex-shrink:0">${WAVE_ICONS[lfo.shape] || '∿'}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${layer?.name ?? lfo.layerId} · ${targetLabel}
+        </div>
+        <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
+          ${lfo.shape} · ${lfo.rate}${lfo.syncToBpm ? ' beats' : ' Hz'} · depth ${lfo.depth.toFixed(2)}
+        </div>
+      </div>
+    `;
+
+    const editBtn = document.createElement('button');
+    editBtn.style.cssText = 'background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);cursor:pointer;font-family:var(--font-mono);font-size:8px;padding:2px 6px;flex-shrink:0';
+    editBtn.textContent = 'Edit';
+
+    const delBtn = document.createElement('button');
+    delBtn.style.cssText = 'background:none;border:none;color:#454560;cursor:pointer;font-size:11px;flex-shrink:0';
+    delBtn.textContent = '✕';
+    delBtn.addEventListener('click', () => { _lfoManager.remove(lfo.id); _render(); });
+
+    header.appendChild(editBtn);
+    header.appendChild(delBtn);
+    card.appendChild(header);
+
+    // ── Expandable edit form ──────────────────────────────────
+    const editPanel = document.createElement('div');
+    editPanel.style.cssText = 'display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--border-dim)';
+
+    let isOpen = false;
+    editBtn.addEventListener('click', () => {
+      isOpen = !isOpen;
+      editPanel.style.display = isOpen ? 'block' : 'none';
+      editBtn.textContent = isOpen ? 'Close' : 'Edit';
+      editBtn.style.color = isOpen ? 'var(--accent)' : 'var(--text-dim)';
+      editBtn.style.borderColor = isOpen ? 'var(--accent)' : 'var(--border-dim)';
+
+      if (isOpen && !editPanel.hasChildNodes()) {
+        editPanel.appendChild(_buildForm(lfo, card, header));
+      }
+    });
+
+    card.appendChild(editPanel);
+    _container.appendChild(card);
+  }
+
+  // ── Form builder (shared by Add and Edit) ─────────────────────
+
+  function _buildForm(existingLfo, card, header) {
+    const isEdit = !!existingLfo;
+    const wrap   = document.createElement('div');
+    const layers = _layerStack?.layers || [];
+
+    // IDs are unique per form to avoid conflicts when multiple edit panels are open
+    const uid = existingLfo?.id ?? `new-${Date.now()}`;
+    const idLayer  = `lfo-layer-${uid}`;
+    const idParam  = `lfo-param-${uid}`;
+    const idShape  = `lfo-shape-${uid}`;
+    const idRate   = `lfo-rate-${uid}`;
+    const idSync   = `lfo-sync-${uid}`;
+    const idDepth  = `lfo-depth-${uid}`;
+    const idOffset  = `lfo-offset-${uid}`;
+    const idBipolar = `lfo-bipolar-${uid}`;
+
+    const sel = (id, inner, value) => `
+      <select id="${id}" style="width:100%;background:var(--bg);border:1px solid var(--border);
         border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:10px;padding:5px 8px">
-        ${layers.map(l => `<option value="${l.id}">${l.name} (${l.constructor.name.replace('Layer','').replace('Visualizer','Viz')})</option>`).join('')}
-      </select>
-    `));
+        ${inner}
+      </select>`;
 
-    // Param picker (updates when layer changes)
-    _container.appendChild(_row('Param', `
-      <select id="lfo-param" style="width:100%;background:var(--bg);border:1px solid var(--border);
-        border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:10px;padding:5px 8px">
-      </select>
-    `));
+    // Layer dropdown
+    const layerOptions = layers.map(l =>
+      `<option value="${l.id}" ${isEdit && l.id === existingLfo.layerId ? 'selected' : ''}>
+        ${l.name} (${l.constructor.name.replace('Layer','').replace('Visualizer','Viz')})
+      </option>`
+    ).join('');
 
-    const updateParams = () => {
-      const layerId = document.getElementById('lfo-layer')?.value;
-      const layer   = _layerStack.layers.find(l => l.id === layerId);
-      const sel     = document.getElementById('lfo-param');
-      if (!sel) return;
-      const params  = layer?.constructor?.manifest?.params?.filter(p => p.type === 'float' || p.type === 'int') || [];
-      sel.innerHTML = params.map(p => `<option value="${p.id}">${p.label}</option>`).join('');
-    };
+    wrap.appendChild(_row('Layer', sel(idLayer, layerOptions)));
 
-    document.getElementById('lfo-layer')?.addEventListener('change', updateParams);
-    updateParams();
+    // Target dropdown (special + params)
+    const paramRow = _row('Target', `<select id="${idParam}" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:10px;padding:5px 8px"></select>`);
+    wrap.appendChild(paramRow);
 
     // Shape
-    _container.appendChild(_row('Shape', `
-      <select id="lfo-shape" style="width:100%;background:var(--bg);border:1px solid var(--border);
-        border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:10px;padding:5px 8px">
-        ${SHAPES.map(s => `<option value="${s}">${s}</option>`).join('')}
-      </select>
-    `));
+    const shapeOptions = SHAPES.map(s =>
+      `<option value="${s}" ${isEdit && s === existingLfo.shape ? 'selected' : ''}>${s}</option>`
+    ).join('');
+    wrap.appendChild(_row('Shape', sel(idShape, shapeOptions)));
 
     // Rate
-    _container.appendChild(_row('Rate', `
+    wrap.appendChild(_row('Rate', `
       <div style="display:flex;gap:6px;align-items:center">
-        <input type="number" id="lfo-rate" value="0.25" min="0.01" max="20" step="0.05"
+        <input type="number" id="${idRate}" value="${isEdit ? existingLfo.rate : 0.25}" min="0.01" max="32" step="0.05"
           style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:4px;
                  color:var(--text);font-family:var(--font-mono);font-size:10px;padding:5px 8px" />
-        <label style="display:flex;align-items:center;gap:4px;font-family:var(--font-mono);font-size:9px;color:var(--text-muted);white-space:nowrap">
-          <input type="checkbox" id="lfo-sync" /> BPM sync
+        <label style="display:flex;align-items:center;gap:4px;font-family:var(--font-mono);font-size:9px;color:var(--text-muted);white-space:nowrap;cursor:pointer">
+          <input type="checkbox" id="${idSync}" ${isEdit && existingLfo.syncToBpm ? 'checked' : ''} /> BPM sync
         </label>
       </div>
     `));
 
-    // Depth + offset
-    _container.appendChild(_row('Depth', `
-      <input type="range" id="lfo-depth" min="0" max="1" step="0.01" value="0.5"
-        style="width:100%;accent-color:var(--accent2)" />
-    `));
-    _container.appendChild(_row('Offset', `
-      <input type="range" id="lfo-offset" min="0" max="1" step="0.01" value="0.5"
-        style="width:100%;accent-color:var(--accent)" />
+    // Depth
+    const depthVal = isEdit ? existingLfo.depth.toFixed(2) : '0.50';
+    wrap.appendChild(_row('Depth', `
+      <div style="display:flex;align-items:center;gap:8px">
+        <input type="range" id="${idDepth}" min="0" max="1" step="0.01" value="${depthVal}"
+          style="flex:1;accent-color:var(--accent2)" />
+        <span id="${idDepth}-val" style="font-family:var(--font-mono);font-size:9px;color:var(--accent2);width:28px;text-align:right">${depthVal}</span>
+      </div>
     `));
 
-    const addBtn = document.createElement('button');
-    addBtn.className   = 'btn accent';
-    addBtn.style.width = '100%';
-    addBtn.style.marginTop = '8px';
-    addBtn.textContent = '+ Add LFO';
-    addBtn.addEventListener('click', () => {
-      const layerId = document.getElementById('lfo-layer')?.value;
-      const paramId = document.getElementById('lfo-param')?.value;
-      if (!layerId || !paramId) { Toast.warn('Select a layer and parameter'); return; }
+    // Bipolar toggle — must come before offset so offset range can react to it
+    const isBipolarDefault = isEdit ? (existingLfo.bipolar ?? false) : false;
+    wrap.appendChild(_row('Bipolar', `
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-mono);font-size:9px;color:var(--text-muted)">
+        <input type="checkbox" id="${idBipolar}" ${isBipolarDefault ? 'checked' : ''} />
+        Output range: <span id="${idBipolar}-label">${isBipolarDefault ? '−1 to +1' : '0 to 1'}</span>
+      </label>
+    `));
 
-      const lfo = new LFO({
-        layerId,
-        paramId,
-        shape:      document.getElementById('lfo-shape')?.value  || 'sine',
-        rate:       parseFloat(document.getElementById('lfo-rate')?.value) || 0.25,
-        depth:      parseFloat(document.getElementById('lfo-depth')?.value) || 0.5,
-        offset:     parseFloat(document.getElementById('lfo-offset')?.value) || 0.5,
-        syncToBpm:  document.getElementById('lfo-sync')?.checked || false,
-        bipolar:    false,
+    // Offset — centre point. Range 0..1 for unipolar, -1..1 for bipolar.
+    const offsetVal = isEdit ? existingLfo.offset.toFixed(2) : (isBipolarDefault ? '0.00' : '0.50');
+    const offMin    = isBipolarDefault ? -1 : 0;
+    wrap.appendChild(_row('Centre', `
+      <div style="display:flex;align-items:center;gap:8px">
+        <input type="range" id="${idOffset}" min="${offMin}" max="1" step="0.01" value="${offsetVal}"
+          style="flex:1;accent-color:var(--accent)" />
+        <span id="${idOffset}-val" style="font-family:var(--font-mono);font-size:9px;color:var(--accent);width:36px;text-align:right">${offsetVal}</span>
+      </div>
+    `));
+
+    // Submit button
+    const submitBtn = document.createElement('button');
+    submitBtn.className   = 'btn accent';
+    submitBtn.style.cssText = 'width:100%;margin-top:8px';
+    submitBtn.textContent = isEdit ? 'Update LFO' : '+ Add LFO';
+    wrap.appendChild(submitBtn);
+
+    // ── Wire up ───────────────────────────────────────────────
+
+    const getEl = id => wrap.querySelector(`#${id}`) ?? document.getElementById(id);
+
+    const updateTargetDropdown = () => {
+      const layerId = getEl(idLayer)?.value;
+      const layer   = _layerStack.layers.find(l => l.id === layerId);
+      const sel     = getEl(idParam);
+      if (!sel) return;
+
+      // Group 1: Layer-level special targets
+      const layerGroup = SPECIAL_TARGETS.filter(t => t.group === 'Layer');
+      // Group 2: Layer manifest params (float/int only)
+      const paramTargets = (layer?.constructor?.manifest?.params ?? [])
+        .filter(p => p.type === 'float' || p.type === 'int');
+      // Group 3: Transform special targets
+      const transformGroup = SPECIAL_TARGETS.filter(t => t.group === 'Transform');
+
+      const cur = isEdit ? existingLfo.paramId : null;
+
+      sel.innerHTML = [
+        `<optgroup label="Layer">${layerGroup.map(t =>
+          `<option value="${t.id}" ${cur === t.id ? 'selected' : ''}>${t.label}</option>`
+        ).join('')}</optgroup>`,
+        paramTargets.length ? `<optgroup label="Parameters">${paramTargets.map(p =>
+          `<option value="${p.id}" ${cur === p.id ? 'selected' : ''}>${p.label}</option>`
+        ).join('')}</optgroup>` : '',
+        `<optgroup label="Transform">${transformGroup.map(t =>
+          `<option value="${t.id}" ${cur === t.id ? 'selected' : ''}>${t.label}</option>`
+        ).join('')}</optgroup>`,
+      ].join('');
+    };
+
+    // Wire layer change → refresh target dropdown
+    setTimeout(() => {
+      const layerEl  = getEl(idLayer);
+      const depthEl  = getEl(idDepth);
+      const offsetEl = getEl(idOffset);
+      const depthValEl  = wrap.querySelector(`#${idDepth}-val`);
+      const offsetValEl = wrap.querySelector(`#${idOffset}-val`);
+
+      layerEl?.addEventListener('change', updateTargetDropdown);
+      updateTargetDropdown();
+
+      // Wire bipolar toggle to update offset slider range live
+      const bipolarEl  = getEl(idBipolar);
+      const bipolarLbl = wrap.querySelector(`#${idBipolar}-label`);
+      bipolarEl?.addEventListener('change', () => {
+        const isBip = bipolarEl.checked;
+        const offEl = getEl(idOffset);
+        const valEl = wrap.querySelector(`#${idOffset}-val`);
+        if (offEl) {
+          offEl.min   = isBip ? -1 : 0;
+          // Reset to sensible default when switching modes
+          const newVal = isBip ? 0 : 0.5;
+          offEl.value = newVal;
+          if (valEl) valEl.textContent = newVal.toFixed(2);
+        }
+        if (bipolarLbl) bipolarLbl.textContent = isBip ? '−1 to +1' : '0 to 1';
       });
 
-      _lfoManager.add(lfo);
-      Toast.success(`LFO added: ${paramId}`);
-      _render();
-    });
-    _container.appendChild(addBtn);
+      depthEl?.addEventListener('input', () => {
+        if (depthValEl) depthValEl.textContent = parseFloat(depthEl.value).toFixed(2);
+      });
+      offsetEl?.addEventListener('input', () => {
+        if (offsetValEl) offsetValEl.textContent = parseFloat(offsetEl.value).toFixed(2);
+      });
+
+      submitBtn.addEventListener('click', () => {
+        const layerId = getEl(idLayer)?.value;
+        const paramId = getEl(idParam)?.value;
+        if (!layerId || !paramId) { Toast.warn('Select a layer and target'); return; }
+
+        const props = {
+          layerId,
+          paramId,
+          shape:     getEl(idShape)?.value    || 'sine',
+          rate:      parseFloat(getEl(idRate)?.value)   || 0.25,
+          depth:     parseFloat(getEl(idDepth)?.value)  || 0.5,
+          offset:    parseFloat(getEl(idOffset)?.value) || 0.5,
+          syncToBpm: getEl(idSync)?.checked   || false,
+          bipolar:   getEl(idBipolar)?.checked || false,
+        };
+
+        if (isEdit) {
+          // Apply to existing LFO in-place
+          Object.assign(existingLfo, props);
+          // Rebuild collapsed header
+          if (header) {
+            const tLabel = _targetLabel(_layerStack.layers.find(l => l.id === layerId), paramId);
+            const nameDiv = header.querySelector('div > div:first-child');
+            const infoDiv = header.querySelector('div > div:last-child');
+            if (nameDiv) nameDiv.textContent = `${_layerStack.layers.find(l=>l.id===layerId)?.name} · ${tLabel}`;
+            if (infoDiv) infoDiv.textContent = `${props.shape} · ${props.rate}${props.syncToBpm ? ' beats' : ' Hz'} · depth ${props.depth.toFixed(2)}`;
+          }
+          Toast.success('LFO updated');
+        } else {
+          _lfoManager.add(new LFO(props));
+          Toast.success(`LFO added: ${paramId}`);
+          _render();
+        }
+      });
+    }, 0);
+
+    return wrap;
+  }
+
+  // ── Helpers ───────────────────────────────────────────────────
+
+  function _targetLabel(layer, paramId) {
+    const special = SPECIAL_TARGETS.find(t => t.id === paramId);
+    if (special) return special.label;
+    const manifest = layer?.constructor?.manifest?.params?.find(p => p.id === paramId);
+    return manifest?.label || paramId;
   }
 
   function _row(label, html) {

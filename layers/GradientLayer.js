@@ -18,8 +18,7 @@ class GradientLayer extends BaseLayer {
       { id: 'lightness',   label: 'Lightness',     type: 'float', default: 0.12, min: 0,  max: 0.6 },
       { id: 'speed',       label: 'Rotate speed',  type: 'float', default: 0.06, min: 0,  max: 1   },
       { id: 'angle',       label: 'Angle (deg)',   type: 'float', default: 135, min: 0,   max: 360 },
-      { id: 'audioReact',  label: 'Audio react',   type: 'float', default: 0.5, min: 0,   max: 2   },
-      { id: 'audioTarget', label: 'Audio band',    type: 'band',  default: 'bass' },
+      { id: 'audioReact',  label: 'Audio react',   type: 'float', default: 0.5, min: 0,   max: 1   },
     ],
   };
 
@@ -35,7 +34,6 @@ class GradientLayer extends BaseLayer {
       speed:       0.06,
       angle:       135,
       audioReact:  0.5,
-      audioTarget: 'bass',
     };
     this._time        = 0;
     this._hueOffset   = 0;
@@ -47,12 +45,12 @@ class GradientLayer extends BaseLayer {
 
   update(audioData, videoData, dt) {
     this._time += dt;
-    const av = audioData?.isActive ? (audioData[this.params.audioTarget] ?? 0) : 0;
+    const av = audioData?.isActive ? (audioData.bass ?? 0) * (this.params.audioReact ?? 0.5) : 0;
     this._audioSmooth  = VaelMath.lerp(this._audioSmooth, av, 0.06);
     this._hueOffset   += dt * this.params.speed * 20;
     this._angleSmooth  = VaelMath.lerp(
       this._angleSmooth,
-      this.params.angle + this._audioSmooth * 15 * this.params.audioReact,
+      this.params.angle + this._audioSmooth * 15,
       0.04
     );
   }
@@ -61,8 +59,8 @@ class GradientLayer extends BaseLayer {
     const { mode, hueA, hueB, hueC, saturation, audioReact } = this.params;
     const off = this._hueOffset;
     const a   = this._audioSmooth;
-    const lit = this.params.lightness + a * 0.10 * audioReact;
-    const sat = VaelMath.clamp(saturation + a * 0.15 * audioReact, 0, 1);
+    const lit = this.params.lightness + a * 0.10;
+    const sat = VaelMath.clamp(saturation + a * 0.15, 0, 1);
 
     const cA = VaelColor.hsl((hueA + off) % 360, sat, lit);
     const cB = VaelColor.hsl((hueB + off) % 360, sat, lit * 0.7);

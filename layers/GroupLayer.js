@@ -70,19 +70,41 @@ class GroupLayer extends BaseLayer {
     // Composite children onto group canvas
     this.children.forEach(child => {
       if (!child.visible) return;
-      gc.save();
-      gc.globalAlpha = VaelMath.clamp(child.opacity ?? 1, 0, 1);
-      gc.globalCompositeOperation = _blendMode(child.blendMode);
+
+      // Each child gets its own temporary offscreen canvas so LayerFX
+      // can be applied per-child before compositing onto the group canvas.
+      if (!child._groupOff || child._groupOff.width !== width || child._groupOff.height !== height) {
+        child._groupOff    = document.createElement('canvas');
+        child._groupOff.width  = width;
+        child._groupOff.height = height;
+        child._groupOffCtx = child._groupOff.getContext('2d', { willReadFrequently: false });
+      }
+
+      const cc = child._groupOffCtx;
+      cc.clearRect(0, 0, width, height);
+      cc.save();
 
       // Apply child transform
       const t = child.transform || {};
-      gc.translate(width / 2 + (t.x || 0), height / 2 + (t.y || 0));
-      if (t.rotation) gc.rotate(t.rotation * Math.PI / 180);
+      cc.translate(width / 2 + (t.x || 0), height / 2 + (t.y || 0));
+      if (t.rotation) cc.rotate(t.rotation * Math.PI / 180);
       if (t.scaleX !== undefined || t.scaleY !== undefined) {
-        gc.scale(t.scaleX ?? 1, t.scaleY ?? 1);
+        cc.scale(t.scaleX ?? 1, t.scaleY ?? 1);
       }
 
-      if (typeof child.render === 'function') child.render(gc, width, height);
+      if (typeof child.render === 'function') child.render(cc, width, height);
+      cc.restore();
+
+      // Apply per-child FX chain (blur, glow, chromatic, etc.)
+      if (child.fx && child.fx.length > 0 && typeof LayerFX !== 'undefined') {
+        LayerFX.apply(child, child._groupOff, child._groupOffCtx, width, height, null);
+      }
+
+      // Composite the child (with FX applied) onto the group canvas
+      gc.save();
+      gc.globalAlpha = VaelMath.clamp(child.opacity ?? 1, 0, 1);
+      gc.globalCompositeOperation = _blendMode(child.blendMode);
+      gc.drawImage(child._groupOff, 0, 0);
       gc.restore();
     });
 
@@ -94,7 +116,11 @@ class GroupLayer extends BaseLayer {
   }
 
   dispose() {
-    this.children.forEach(c => { if (typeof c.dispose === 'function') c.dispose(); });
+    this.children.forEach(c => {
+      if (typeof c.dispose === 'function') c.dispose();
+      // Clean up any per-child offscreen canvas allocated during render
+      if (c._groupOff) { c._groupOff = null; c._groupOffCtx = null; }
+    });
     this.children = [];
   }
 
