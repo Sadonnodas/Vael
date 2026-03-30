@@ -6,17 +6,9 @@
 (function () {
   'use strict';
 
-  // ── Dirty flag — hoisted so markDirty() is safe to call anywhere ─────────
-  // var (not let) avoids the temporal dead zone; markDirty() can be called
-  // from layers.onChanged which fires during initialisation before the
-  // autosave block further down is reached.
-  var _isDirty      = false;
-  var _lastSaveTime = 0;
-  const AUTOSAVE_DEBOUNCE_MS = 30_000;
-  function markDirty() { _isDirty = true; }
-
   const canvas   = document.getElementById('main-canvas');
   const renderer = new Renderer(canvas);
+  window._vaelRenderer = renderer;  // exposes .width/.height (logical CSS px) to layers
   const audio    = new AudioEngine();
   const video    = new VideoEngine();
   const recorder = new Recorder();
@@ -32,41 +24,9 @@
 
   let _selectedLayerId = null;
 
-  // ── Layer plugin registry ───────────────────────────────────────
-  // Layers self-register via LayerRegistry.register(ClassName).
-  // layerFactory() looks them up by class name — no hardcoded switch needed.
-  // To add a new layer: create the class, call LayerRegistry.register(MyLayer)
-  // at the bottom of its file, add a script tag in index.html. Done.
-  const LayerRegistry = {
-    _map: new Map(),
-    register(cls) {
-      this._map.set(cls.name, cls);
-      // Also register under manifest name for display
-      if (cls.manifest?.name) this._map.set(cls.manifest.name, cls);
-    },
-    get(name) { return this._map.get(name) || null; },
-    all() { return Array.from(this._map.values()).filter((v, i, a) => a.indexOf(v) === i); },
-  };
-
-  // Register all built-in layer types
-  [
-    GradientLayer, MathVisualizer, ParticleLayer, NoiseFieldLayer,
-    VideoPlayerLayer, ShaderLayer, LyricsLayer, WebcamLayer,
-    WaveformLayer, PatternLayer, ImageLayer, GroupLayer,
-    CanvasPaintLayer, FeedbackLayer, SVGLayer,
-  ].forEach(cls => LayerRegistry.register(cls));
-
-  // Expose globally so external layers can self-register
-  window.LayerRegistry = LayerRegistry;
-
+  // ── Layer factory ────────────────────────────────────────────
   function layerFactory(typeName, id) {
     const uid = id || `${typeName}-${Date.now()}`;
-    // Try registry first (covers all registered layers including external plugins)
-    const RegCls = LayerRegistry.get(typeName);
-    if (RegCls) {
-      try { return new RegCls(uid); } catch (e) { console.warn('LayerRegistry: could not instantiate', typeName, e); }
-    }
-    // Fallback switch for special construction cases
     switch (typeName) {
       case 'GradientLayer':    return new GradientLayer(uid);
       case 'MathVisualizer':   return new MathVisualizer(uid);
@@ -80,15 +40,10 @@
       case 'PatternLayer':     return new PatternLayer(uid);
       case 'ImageLayer':       return new ImageLayer(uid);
       case 'GroupLayer':       return new GroupLayer(uid);
-      case 'CanvasPaintLayer':   return new CanvasPaintLayer(uid);
-      case 'FeedbackLayer':      return new FeedbackLayer(uid);
-      case 'SVGLayer':           return new SVGLayer(uid);
-      default:
-        // Try registry one more time (handles plugins registered after startup)
-        const dynCls = LayerRegistry.get(typeName);
-        if (dynCls) { try { return new dynCls(uid); } catch {} }
-        console.warn('Unknown layer type:', typeName);
-        return null;
+      case 'CanvasPaintLayer': return new CanvasPaintLayer(uid);
+      case 'SVGLayer':         return new SVGLayer(uid);
+      case 'FeedbackLayer':    return new FeedbackLayer(uid);
+      default: console.warn('Unknown layer type:', typeName); return null;
     }
   }
 
@@ -145,14 +100,10 @@
     if (!_selectedLayerId) return;
     const layer = layers.layers.find(l => l.id === _selectedLayerId);
     if (!layer) return;
-    if (layer instanceof ImageLayer)       _renderImageLayerPanel(layer, paramsContent);
+    if (layer instanceof ImageLayer)  _renderImageLayerPanel(layer, paramsContent);
     else if (layer instanceof ShaderLayer) ShaderPanel.render(layer, paramsContent);
     else if (layer instanceof LyricsLayer) LyricsPanel.render(layer, paramsContent);
-    else {
-      ParamPanel.render(layer, paramsContent, audio);
-      if (layer instanceof CanvasPaintLayer) _injectPaintClearBtn(layer, paramsContent);
-      if (layer instanceof SVGLayer)         _injectSVGLoadBtn(layer, paramsContent);
-    }
+    else ParamPanel.render(layer, paramsContent, audio);
   });
 
   // ── MathVisualizer restart button ─────────────────────────────
@@ -170,17 +121,153 @@
     else            container.appendChild(restartBtn);
   }
 
-  // ── Preset browser ───────────────────────────────────────────
+  // ── Preset browser — inline grid in SCENES tab ──────────────
+  // Initialise the engine (IndexedDB storage, save/load logic)
   PresetBrowser.init(layers, layerFactory, (preset) => {
     const nameEl = document.getElementById('preset-name');
     if (nameEl && preset.name) nameEl.value = preset.name;
     _selectedLayerId = null;
     LayerPanel.setSelectedId(null);
-    document.getElementById('params-content').innerHTML = '';
-    document.getElementById('params-empty').style.display = 'block';
+    const pc = document.getElementById('params-content');
+    const pe = document.getElementById('params-empty');
+    if (pc) pc.innerHTML = '';
+    if (pe) pe.style.display = 'block';
+    _renderInlinePresetGrid();
   });
 
-  document.getElementById('btn-preset-library')?.addEventListener('click', () => PresetBrowser.toggle());
+  // Render inline preset grid in the SCENES tab
+  function _renderInlinePresetGrid() {
+    const grid    = document.getElementById('pb-inline-grid');
+    const countEl = document.getElementById('pb-inline-count');
+    const searchEl = document.getElementById('pb-inline-search');
+    const sortEl   = document.getElementById('pb-inline-sort');
+    if (!grid) return;
+
+    let presets = PresetBrowser._getAll ? PresetBrowser._getAll() : [];
+
+    // Search filter
+    const query = (searchEl?.value || '').trim().toLowerCase();
+    if (query) {
+      presets = presets.filter(p =>
+        p.name.toLowerCase().includes(query) ||
+        (p.layers || []).some(l => (l.type || '').toLowerCase().includes(query))
+      );
+    }
+
+    // Sort
+    const sort = sortEl?.value || 'recent';
+    if (sort === 'name')   presets.sort((a, b) => a.name.localeCompare(b.name));
+    if (sort === 'layers') presets.sort((a, b) => (b.layers?.length ?? 0) - (a.layers?.length ?? 0));
+
+    if (countEl) countEl.textContent = query
+      ? `${presets.length} result${presets.length !== 1 ? 's' : ''}`
+      : `${presets.length} preset${presets.length !== 1 ? 's' : ''} saved`;
+
+    grid.innerHTML = '';
+
+    if (presets.length === 0 && query) {
+      grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:16px;
+        font-family:var(--font-mono);font-size:9px;color:var(--text-dim)">
+        No presets matching "${query}"</div>`;
+      return;
+    }
+
+    if (presets.length === 0) {
+      grid.innerHTML = `<div style="grid-column:1/-1;text-align:center;padding:16px;
+        font-family:var(--font-mono);font-size:9px;color:var(--text-dim);line-height:1.8">
+        No saved presets yet.<br>
+        <span style="color:var(--accent)">↓ Save scene</span> above to create one.</div>`;
+      return;
+    }
+
+    presets.forEach(preset => {
+      const card = document.createElement('div');
+      card.style.cssText = `
+        background: var(--bg-card);
+        border: 1px solid var(--border-dim);
+        border-radius: 6px;
+        overflow: hidden;
+        cursor: pointer;
+        transition: border-color 0.15s, transform 0.1s;
+        position: relative;
+      `;
+
+      const layerTypes = [...new Set((preset.layers || []).map(l =>
+        (l.type || '').replace('Layer','').replace('Visualizer','Math') || '?'
+      ))].slice(0, 3);
+
+      const savedDate = preset.saved
+        ? new Date(preset.saved).toLocaleDateString(undefined, { month:'short', day:'numeric' })
+        : '';
+
+      card.innerHTML = `
+        ${preset.thumbnail
+          ? `<img src="${preset.thumbnail}" style="width:100%;aspect-ratio:16/9;
+               object-fit:cover;display:block;border-bottom:1px solid var(--border-dim)">`
+          : `<div style="width:100%;aspect-ratio:16/9;background:var(--bg);
+               display:flex;align-items:center;justify-content:center;
+               font-size:18px;border-bottom:1px solid var(--border-dim);color:var(--text-dim)">◈</div>`
+        }
+        <div style="padding:5px 7px">
+          <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);
+                      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px">
+            ${preset.name}
+          </div>
+          <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:3px">
+            ${layerTypes.map(t =>
+              `<span style="font-family:var(--font-mono);font-size:7px;background:rgba(255,255,255,0.06);
+                            border-radius:2px;padding:1px 3px;color:var(--text-dim)">${t}</span>`
+            ).join('')}
+          </div>
+          <div style="display:flex;justify-content:space-between">
+            <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim)">
+              ${preset.layers?.length ?? 0} layers
+            </span>
+            <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim);opacity:0.6">
+              ${savedDate}
+            </span>
+          </div>
+        </div>
+        <button class="pb-inline-del" style="position:absolute;top:3px;right:3px;
+          background:rgba(0,0,0,0.6);border:none;border-radius:2px;color:#ff4444;
+          cursor:pointer;font-size:9px;padding:1px 4px;opacity:0;transition:opacity 0.15s">✕</button>
+      `;
+
+      card.addEventListener('mouseenter', () => {
+        card.style.borderColor = 'var(--accent)';
+        card.style.transform   = 'scale(1.02)';
+        card.querySelector('.pb-inline-del').style.opacity = '1';
+      });
+      card.addEventListener('mouseleave', () => {
+        card.style.borderColor = 'var(--border-dim)';
+        card.style.transform   = 'scale(1)';
+        card.querySelector('.pb-inline-del').style.opacity = '0';
+      });
+
+      card.addEventListener('click', e => {
+        if (e.target.closest('.pb-inline-del')) return;
+        PresetBrowser._applyPreset(preset);
+        Toast.success(`Loaded: ${preset.name}`);
+        _renderInlinePresetGrid();
+      });
+
+      card.querySelector('.pb-inline-del').addEventListener('click', e => {
+        e.stopPropagation();
+        PresetBrowser.remove(preset.name);
+        _renderInlinePresetGrid();
+        Toast.info(`Deleted "${preset.name}"`);
+      });
+
+      grid.appendChild(card);
+    });
+  }
+
+  // Wire search + sort live filtering
+  document.getElementById('pb-inline-search')?.addEventListener('input',  _renderInlinePresetGrid);
+  document.getElementById('pb-inline-sort')?.addEventListener('change',   _renderInlinePresetGrid);
+
+  // Initial render (IDB loads async so also re-render when data arrives)
+  _renderInlinePresetGrid();
 
   // ── Setlist + performance mode ───────────────────────────────
   const setlist  = new SetlistManager(layers, layerFactory);
@@ -196,6 +283,7 @@
 
   // ── MIDI ──────────────────────────────────────────────────────
   const midi = new MidiEngine(layers);
+  window._vaelMidi = midi;
   midi.init().then(() => MidiPanel.init(midi, layers, document.getElementById('midi-panel-content')));
 
   // ── OSC ──────────────────────────────────────────────────────
@@ -204,41 +292,8 @@
 
   // ── LFO ──────────────────────────────────────────────────────
   const lfoManager = new LFOManager();
-  // Wrap LFOManager mutations to trigger dirty flag
-  const _origLfoAdd    = lfoManager.add.bind(lfoManager);
-  const _origLfoRemove = lfoManager.remove.bind(lfoManager);
-  const _origLfoClear  = lfoManager.clear.bind(lfoManager);
-  lfoManager.add    = (...a) => { _origLfoAdd(...a);    markDirty(); setTimeout(() => history.snapshot('Added LFO'), 50); };
-  lfoManager.remove = (...a) => { _origLfoRemove(...a); markDirty(); setTimeout(() => history.snapshot('Removed LFO'), 50); };
-  lfoManager.clear  = (...a) => { _origLfoClear(...a);  markDirty(); };
-
   LFOPanel.init(lfoManager, layers, document.getElementById('lfo-panel-content'));
-  // ── History manager ──────────────────────────────────────────
-  const history = new HistoryManager({
-    layers, lfoManager, layerFactory, maxEntries: 60,
-  });
-  history.mountPanel(document.getElementById('history-panel-content'));
-  window._vaelHistory = history;
-
-  // ── Automation timeline ───────────────────────────────────────
-  const timeline = new AutomationTimeline({ layerStack: layers });
-  TimelinePanel.init(timeline, layers, document.getElementById('timeline-panel-content'));
-  history.onJump = () => {
-    // After restoring a state, refresh all panels
-    renderLayerList();
-    LFOPanel.refresh();
-    _selectedLayerId = null;
-    LayerPanel.setSelectedId(null);
-    if (paramsContent) paramsContent.innerHTML = '';
-    if (paramsEmpty) paramsEmpty.style.display = 'block';
-    markDirty();
-  };
-
-  layers.onChanged = () => {
-    renderLayerList();
-    LFOPanel.refresh();
-    markDirty();
-  };
+  layers.onChanged = () => { renderLayerList(); LFOPanel.refresh(); };
 
   // ── Post FX ──────────────────────────────────────────────────
   PostFXPanel.init(renderer, document.getElementById('fx-panel-content'));
@@ -275,6 +330,9 @@
     if (e.key === 't' || e.key === 'T') { e.preventDefault(); seq.tapTempo(); }
   });
 
+  // Performance mode TAP button fires this event (no direct seq ref in PerformanceMode)
+  window.addEventListener('vael:tap-tempo', () => seq.tapTempo());
+
   // ── MIDI learn ───────────────────────────────────────────────
   window.addEventListener('vael:midi-learn-requested', () => {
     if (!_selectedLayerId) { alert('Select a layer first.'); return; }
@@ -288,9 +346,6 @@
   });
 
   // ── Layer types ───────────────────────────────────────────────
-  // LAYER_TYPES drives the "Add layer" picker.
-  // Manually curated for UX — controls label, grouping, and factory function.
-  // External plugins can push entries here after registering with LayerRegistry.
   const LAYER_TYPES = [
     { id: 'gradient',         label: 'Gradient',              cls: () => new GradientLayer(`gradient-${Date.now()}`) },
     { id: 'noise',            label: 'Noise Field',            cls: () => new NoiseFieldLayer(`noise-${Date.now()}`) },
@@ -302,20 +357,16 @@
     { id: 'image',            label: 'Image (PNG/JPG/SVG)',    cls: () => new ImageLayer(`image-${Date.now()}`) },
     { id: 'video',            label: 'Video file',             cls: () => new VideoPlayerLayer(`video-${Date.now()}`, video.videoElement) },
     { id: 'webcam',           label: 'Webcam',                 cls: () => new WebcamLayer(`webcam-${Date.now()}`) },
+    { id: 'canvas-paint',     label: 'Canvas Paint',           cls: () => new CanvasPaintLayer(`canvas-paint-${Date.now()}`) },
+    { id: 'svg',              label: 'SVG',                    cls: () => new SVGLayer(`svg-${Date.now()}`) },
+    { id: 'feedback',         label: 'Feedback',               cls: () => new FeedbackLayer(`feedback-${Date.now()}`) },
     { id: 'group',            label: 'Group (empty)',           cls: () => { const g = new GroupLayer(`group-${Date.now()}`); g.name = 'Group'; return g; } },
     { id: 'shader-custom',    label: 'Shader — Custom (blank)', cls: () => { const s = new ShaderLayer(`shader-${Date.now()}`); s._shaderName = 'custom'; s._customGLSL = ''; s.name = 'Custom Shader'; return s; } },
-    { id: 'shader-plasma',         label: 'Shader — Plasma',          cls: () => ShaderLayer.fromBuiltin('plasma') },
-    { id: 'shader-ripple',         label: 'Shader — Ripple',          cls: () => ShaderLayer.fromBuiltin('ripple') },
-    { id: 'shader-distort',        label: 'Shader — Distort',         cls: () => ShaderLayer.fromBuiltin('distort') },
-    { id: 'shader-bloom',          label: 'Shader — Bloom',           cls: () => ShaderLayer.fromBuiltin('bloom') },
-    { id: 'shader-chromatic',      label: 'Shader — Chromatic',       cls: () => ShaderLayer.fromBuiltin('chromatic') },
-    { id: 'shader-kaleidoscope',   label: 'Shader — Kaleidoscope',    cls: () => ShaderLayer.fromBuiltin('kaleidoscope') },
-    { id: 'shader-tunnel',         label: 'Shader — Tunnel',          cls: () => ShaderLayer.fromBuiltin('tunnel') },
-    { id: 'shader-voronoi',        label: 'Shader — Voronoi',         cls: () => ShaderLayer.fromBuiltin('voronoi') },
-    { id: 'shader-turing',         label: 'Shader — Turing patterns', cls: () => ShaderLayer.fromBuiltin('turing') },
-    { id: 'canvaspaint',          label: 'Canvas Paint',             cls: () => new CanvasPaintLayer(`paint-${Date.now()}`) },
-    { id: 'feedback',            label: 'Feedback',                 cls: () => new FeedbackLayer(`feedback-${Date.now()}`) },
-    { id: 'svg',                 label: 'SVG file',                 cls: () => { const l = new SVGLayer(`svg-${Date.now()}`); return l; } },
+    { id: 'shader-plasma',    label: 'Shader — Plasma',        cls: () => ShaderLayer.fromBuiltin('plasma') },
+    { id: 'shader-ripple',    label: 'Shader — Ripple',        cls: () => ShaderLayer.fromBuiltin('ripple') },
+    { id: 'shader-distort',   label: 'Shader — Distort',       cls: () => ShaderLayer.fromBuiltin('distort') },
+    { id: 'shader-bloom',     label: 'Shader — Bloom',         cls: () => ShaderLayer.fromBuiltin('bloom') },
+    { id: 'shader-chromatic', label: 'Shader — Chromatic',     cls: () => ShaderLayer.fromBuiltin('chromatic') },
   ];
 
   const BLEND_MODES = ['normal','multiply','screen','overlay','add','softlight','difference','luminosity','subtract','exclusion'];
@@ -329,6 +380,7 @@
     blendModes:            BLEND_MODES,
     layerTypes:            LAYER_TYPES,
     renderImageLayerPanel: _renderImageLayerPanel,
+    videoLibrary:          videoLibrary,
     onSelectLayer: (id) => {
       _selectedLayerId = id;
       LayerPanel.setSelectedId(id);
@@ -340,7 +392,7 @@
   // Wire canvas drag — hold Alt to drag/scroll selected layer
   LayerPanel._initCanvasDrag(canvas);
 
-  // Hook selectLayer to inject action buttons for special layer types
+  // Hook selectLayer to inject Restart button for MathVisualizer
   const _origSelectLayer = LayerPanel.selectLayer.bind(LayerPanel);
   LayerPanel.selectLayer = (id) => {
     _origSelectLayer(id);
@@ -348,67 +400,38 @@
     if (layer instanceof MathVisualizer) {
       setTimeout(() => _injectMathRestartBtn(layer, paramsContent), 15);
     }
-    if (layer instanceof CanvasPaintLayer) {
-      setTimeout(() => _injectPaintClearBtn(layer, paramsContent), 15);
-    }
-    if (layer instanceof SVGLayer) {
-      setTimeout(() => _injectSVGLoadBtn(layer, paramsContent), 15);
-    }
   };
 
   // When an ImageLayer is added, show the library/upload prompt
-  // Wrap setParam on a layer so automation can record it
-  function _wrapLayerSetParam(layer) {
-    if (layer._setParamWrapped) return;
-    const origSetParam = layer.setParam.bind(layer);
-    layer.setParam = (id, value) => {
-      origSetParam(id, value);
-      // Feed into automation recorder if active
-      if (timeline.isRecording) {
-        const manifest = layer.constructor?.manifest?.params?.find(p => p.id === id);
-        timeline.recordPoint(layer.id, id, value, manifest);
-      }
-    };
-    layer._setParamWrapped = true;
-  }
-
   const _origLayersAdd = layers.add.bind(layers);
   layers.add = (layer) => {
     _origLayersAdd(layer);
-    _wrapLayerSetParam(layer);
     if (layer instanceof ImageLayer) {
       setTimeout(() => LibraryPanel.showAddImagePrompt(layer), 100);
-    }
-    // Auto-prompt file load for media layers
-    if (layer instanceof SVGLayer) {
-      setTimeout(() => layer.promptLoad(), 100);
-    }
-    // Snapshot after add (timeout lets the layer finish initialising)
-    if (!history._jumping) {
-      setTimeout(() => history.snapshot(`Added ${layer.name}`), 50);
     }
   };
 
   function renderLayerList() { LayerPanel.renderLayerList(); }
 
-  function _loadDefaultScene() {
-    const noiseLayer = new NoiseFieldLayer('noise-default');
-    noiseLayer.init({ mode: 'field', hueA: 210, hueB: 260, speed: 0.08, lightness: 0.08, saturation: 0.6 });
-    noiseLayer.opacity   = 1.0;
-    noiseLayer.blendMode = 'normal';
+  // ── Default scene — clean slate, just noise + particles ──────
+  const noiseLayer = new NoiseFieldLayer('noise-default');
+  noiseLayer.init({ mode: 'field', hueA: 210, hueB: 260, speed: 0.08, lightness: 0.08, saturation: 0.6 });
+  noiseLayer.opacity   = 1.0;
+  noiseLayer.blendMode = 'normal';
 
-    const particleLayer = new ParticleLayer('particles-default');
-    particleLayer.init({ mode: 'drift', count: 300, size: 1.5, speed: 0.25, colorMode: 'cool' });
-    particleLayer.opacity   = 0.5;
-    particleLayer.blendMode = 'add';
+  const particleLayer = new ParticleLayer('particles-default');
+  particleLayer.init({ mode: 'drift', count: 300, size: 1.5, speed: 0.25, colorMode: 'cool' });
+  particleLayer.opacity   = 0.5;
+  particleLayer.blendMode = 'add';
 
-    _origLayersAdd(noiseLayer);
-    _origLayersAdd(particleLayer);
-    LFOPanel.refresh();
-  }
+  _origLayersAdd(noiseLayer);
+  _origLayersAdd(particleLayer);
+
+  // Refresh panels that rendered before layers were added
+  LFOPanel.refresh();
 
   renderer.start();
-  setTimeout(() => _showStartupDialog(), 150);
+  setTimeout(() => _restoreAutoSave(), 100);
 
   // ── Preset save / load ────────────────────────────────────────
   document.getElementById('btn-preset-save').addEventListener('click', () => {
@@ -421,16 +444,16 @@
       thumb = t.toDataURL('image/jpeg', 0.6);
     } catch {}
     PresetBrowser.save(layers, name, thumb);
+    setTimeout(_renderInlinePresetGrid, 100);
     const preset = PresetManager.save(layers, name);
     PresetManager.storeRecent(preset);
     Toast.success(`Scene "${name}" saved`);
   });
 
-  document.getElementById('btn-preset-library')?.addEventListener('click', () => PresetBrowser.toggle());
+
 
   document.getElementById('btn-scene-new')?.addEventListener('click', () => {
     _autoSave();
-    history.snapshot('New scene');
     [...layers.layers].forEach(l => layers.remove(l.id));
     _selectedLayerId = null; LayerPanel.setSelectedId(null);
     paramsContent.innerHTML   = '';
@@ -453,8 +476,6 @@
       _selectedLayerId = null; LayerPanel.setSelectedId(null);
       paramsContent.innerHTML   = '';
       paramsEmpty.style.display = 'block';
-      markDirty();
-      history.snapshot(`Loaded preset: ${preset.name || file.name}`);
       Toast.success(`Scene "${preset.name || file.name}" loaded`);
     } catch (err) { Toast.error(`Could not load preset: ${err.message}`); }
     e.target.value = '';
@@ -506,21 +527,12 @@
     }
 
     seq.tick(dt);
-    lfoManager.tick(dt, beat.bpm || seq.bpm, layers);
-    timeline.tick(dt);
+    lfoManager.tick(dt, beat.bpm || seq.bpm, layers, beat.isDownbeat);
     setlist.tick(dt);
     perfMode.tick(dt);
     AudioPanel.tick(audio.smoothed);
     VideoPanel.tick();
     dotAudio.classList.toggle('inactive', !audio.smoothed.isActive);
-
-    // Push live modulated values into the params panel sliders
-    if (_selectedLayerId) {
-      const sel = layers.layers.find(l => l.id === _selectedLayerId);
-      if (sel && typeof ParamPanel.updateLiveValues === 'function') {
-        ParamPanel.updateLiveValues(sel);
-      }
-    }
   };
 
   // ── Scene Palette ─────────────────────────────────────────────
@@ -531,11 +543,7 @@
   // ── Autosave ──────────────────────────────────────────────────
   const AUTOSAVE_KEY = 'vael-autosave';
 
-  // _isDirty, _lastSaveTime, AUTOSAVE_DEBOUNCE_MS and markDirty()
-  // are declared at the top of this IIFE to avoid temporal dead zone issues.
-
   function _autoSave() {
-    if (!_isDirty && (Date.now() - _lastSaveTime) < 5 * 60 * 1000) return;
     try {
       const preset = {
         vael:   '1.0',
@@ -552,121 +560,113 @@
           }
         ),
         lfos: lfoManager.toJSON(),
-        timeline: timeline.toJSON(),
       };
       localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(preset));
-      _isDirty      = false;
-      _lastSaveTime = Date.now();
     } catch (e) { console.warn('Auto-save failed:', e); }
   }
 
   function _restoreAutoSave() {
     try {
       const saved = localStorage.getItem(AUTOSAVE_KEY);
-      if (!saved) return false;
+      if (!saved) return;
       const preset = JSON.parse(saved);
-      if (!preset.layers?.length) return false;
-      PresetManager._applyRaw(preset, layers, layerFactory);
-      if (preset.lfos?.length) lfoManager.fromJSON(preset.lfos, layers);
-      if (preset.timeline)    { timeline.fromJSON(preset.timeline); TimelinePanel.refresh(); }
-      LFOPanel.refresh();
-      return true;
-    } catch { return false; }
+      if (!preset.layers?.length || layers.count > 0) return;
+
+      // Show startup dialog instead of silently restoring
+      const savedDate = preset.saved
+        ? new Date(preset.saved).toLocaleString(undefined, {
+            month: 'short', day: 'numeric',
+            hour: '2-digit', minute: '2-digit'
+          })
+        : 'unknown time';
+
+      const overlay = document.createElement('div');
+      overlay.style.cssText = `
+        position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:10000;
+        display:flex;align-items:center;justify-content:center;
+        font-family:'JetBrains Mono',monospace;
+      `;
+
+      overlay.innerHTML = `
+        <div style="
+          background:var(--bg-mid,#12121e);border:1px solid rgba(0,212,170,0.3);
+          border-radius:12px;padding:28px 32px;width:360px;
+          box-shadow:0 24px 64px rgba(0,0,0,0.6);
+        ">
+          <div style="color:#00d4aa;font-size:11px;letter-spacing:2px;
+                      text-transform:uppercase;margin-bottom:6px">Vael</div>
+          <div style="color:rgba(255,255,255,0.85);font-size:14px;
+                      font-weight:600;margin-bottom:6px">
+            Resume previous work?
+          </div>
+          <div style="color:rgba(255,255,255,0.35);font-size:9px;margin-bottom:24px">
+            "${preset.name}" · ${savedDate} · ${preset.layers.length} layer${preset.layers.length !== 1 ? 's' : ''}
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <button id="sd-resume" style="
+              background:rgba(0,212,170,0.15);border:1px solid rgba(0,212,170,0.5);
+              border-radius:6px;color:#00d4aa;font-family:inherit;font-size:10px;
+              padding:10px 16px;cursor:pointer;text-align:left;
+              transition:background 0.15s;
+            ">
+              ↩  Resume — restore my last session
+            </button>
+            <button id="sd-fresh" style="
+              background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
+              border-radius:6px;color:rgba(255,255,255,0.55);font-family:inherit;font-size:10px;
+              padding:10px 16px;cursor:pointer;text-align:left;
+              transition:background 0.15s;
+            ">
+              ✦  Start fresh — empty canvas
+            </button>
+            <button id="sd-load" style="
+              background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);
+              border-radius:6px;color:rgba(255,255,255,0.55);font-family:inherit;font-size:10px;
+              padding:10px 16px;cursor:pointer;text-align:left;
+              transition:background 0.15s;
+            ">
+              ↑  Load a saved project file
+            </button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(overlay);
+
+      // Hover effects
+      ['sd-resume','sd-fresh','sd-load'].forEach(id => {
+        const btn = overlay.querySelector(`#${id}`);
+        btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(1.2)');
+        btn.addEventListener('mouseleave', () => btn.style.filter = '');
+      });
+
+      // Resume
+      overlay.querySelector('#sd-resume').addEventListener('click', () => {
+        overlay.remove();
+        PresetManager._applyRaw(preset, layers, layerFactory);
+        if (preset.lfos?.length) { lfoManager.fromJSON(preset.lfos, layers); LFOPanel.refresh(); }
+        Toast.success(`Resumed: "${preset.name}"`);
+      });
+
+      // Fresh start — discard autosave
+      overlay.querySelector('#sd-fresh').addEventListener('click', () => {
+        overlay.remove();
+        localStorage.removeItem(AUTOSAVE_KEY);
+        Toast.info('Starting fresh');
+      });
+
+      // Load from file
+      overlay.querySelector('#sd-load').addEventListener('click', () => {
+        overlay.remove();
+        document.getElementById('btn-preset-load')?.click();
+      });
+
+    } catch { /* corrupted autosave — just skip silently */ }
   }
 
-  function _showStartupDialog() {
-    // Check if there's anything to restore
-    let savedPreset = null;
-    try {
-      const raw = localStorage.getItem(AUTOSAVE_KEY);
-      if (raw) {
-        const p = JSON.parse(raw);
-        if (p.layers?.length) savedPreset = p;
-      }
-    } catch {}
-
-    // If no autosave exists, just load the default scene silently
-    if (!savedPreset) {
-      _loadDefaultScene();
-      return;
-    }
-
-    // Build startup dialog
-    const overlay = document.createElement('div');
-    overlay.style.cssText = `
-      position: fixed; inset: 0;
-      background: rgba(0,0,0,0.88);
-      display: flex; align-items: center; justify-content: center;
-      z-index: 2000; backdrop-filter: blur(12px);
-    `;
-
-    const savedDate = savedPreset.saved
-      ? new Date(savedPreset.saved).toLocaleString(undefined, { dateStyle: 'short', timeStyle: 'short' })
-      : 'unknown';
-
-    const box = document.createElement('div');
-    box.style.cssText = `
-      background: var(--bg-mid);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 32px 32px 28px;
-      max-width: 400px;
-      width: 90%;
-      font-family: var(--font-mono);
-      text-align: center;
-    `;
-
-    box.innerHTML = `
-      <div style="font-size:28px;margin-bottom:12px">✦</div>
-      <div style="font-size:13px;letter-spacing:2px;color:var(--accent);margin-bottom:8px">VAEL</div>
-      <div style="font-size:10px;color:var(--text-muted);margin-bottom:24px;line-height:1.7">
-        Last session: <span style="color:var(--text)">${savedPreset.name}</span><br>
-        <span style="color:var(--text-dim);font-size:9px">${savedDate}</span>
-      </div>
-      <div style="display:flex;flex-direction:column;gap:10px">
-        <button id="startup-restore" class="btn accent" style="font-size:11px;padding:12px">
-          ↺ Restore last session
-        </button>
-        <button id="startup-new" class="btn" style="font-size:11px;padding:12px">
-          ✦ Start new scene
-        </button>
-        <button id="startup-load" class="btn" style="font-size:11px;padding:12px;color:var(--text-dim)">
-          ↑ Load a file…
-        </button>
-      </div>
-    `;
-
-    overlay.appendChild(box);
-    document.body.appendChild(overlay);
-
-    const dismiss = () => overlay.remove();
-
-    box.querySelector('#startup-restore').addEventListener('click', () => {
-      dismiss();
-      const ok = _restoreAutoSave();
-      if (ok) {
-        Toast.info(`Restored: "${savedPreset.name}"`);
-      } else {
-        _loadDefaultScene();
-        Toast.warn('Could not restore — starting fresh');
-      }
-    });
-
-    box.querySelector('#startup-new').addEventListener('click', () => {
-      dismiss();
-      _loadDefaultScene();
-    });
-
-    box.querySelector('#startup-load').addEventListener('click', () => {
-      dismiss();
-      _loadDefaultScene();
-      // Small delay then trigger the preset load dialog
-      setTimeout(() => document.getElementById('btn-preset-load')?.click(), 200);
-    });
-  }
-
-  setInterval(_autoSave, AUTOSAVE_DEBOUNCE_MS);
-  window.addEventListener('beforeunload', () => { _isDirty = true; _autoSave(); });
+  setInterval(_autoSave, 5 * 60 * 1000);
+  window.addEventListener('beforeunload', _autoSave);
 
   // ── Panel init ────────────────────────────────────────────────
   AudioPanel.init(audio, dotAudio, labelAudio);
@@ -674,38 +674,13 @@
   RecordPanel.init(recorder, audio, canvas, renderer);
 
   // ── Tab switching ─────────────────────────────────────────────
-  // Skips any tab panel that has been moved into a pop-out floating window
-  // (detected by checking whether it still lives inside #sidebar-content).
-  const _sidebarContent = document.getElementById('sidebar-content');
-
   document.querySelectorAll('.tab-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const target = btn.dataset.tab;
-
-      // Only deactivate tab buttons for panels still in the sidebar
       document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      document.querySelectorAll('.tab-panel').forEach(p => {
-        // If the panel is inside a pop-out window, leave it alone
-        if (_sidebarContent && !_sidebarContent.contains(p)) return;
-        p.classList.remove('active');
-      });
-
-      const panel = document.getElementById(`tab-${target}`);
-      if (!panel) return;
-
-      // If this tab is in a pop-out, just focus that window instead of activating in sidebar
-      if (_sidebarContent && !_sidebarContent.contains(panel)) {
-        // Find and bring the pop-out to front
-        const popout = panel.closest('.vael-popout');
-        if (popout) {
-          popout.style.zIndex = String(320);
-          popout.style.boxShadow = '0 8px 40px rgba(0,212,170,0.2)';
-        }
-        return;
-      }
-
+      document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
       btn.classList.add('active');
-      panel.classList.add('active');
+      document.getElementById(`tab-${target}`)?.classList.add('active');
     });
   });
 
@@ -726,14 +701,6 @@
       if (audio.isPlaying) { audio.pause(); if (btnPlay) btnPlay.textContent = '▶'; }
       else                 { audio.play();  if (btnPlay) btnPlay.textContent = '⏸'; }
     }
-    if ((e.ctrlKey || e.metaKey) && e.key === 'z' && !e.shiftKey) {
-      e.preventDefault();
-      history.undo();
-    }
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || (e.key === 'z' && e.shiftKey))) {
-      e.preventDefault();
-      history.redo();
-    }
     if (e.key === '?') { e.preventDefault(); toggleShortcuts(); }
     if (e.key === 'PageDown' || e.key === 'PageUp') {
       e.preventDefault();
@@ -750,5 +717,8 @@
     'color:#00d4aa;font-weight:bold;font-size:18px;letter-spacing:4px',
     'color:#7878a0;font-size:12px');
   setTimeout(() => Toast.info('Vael ready — press ? for shortcuts'), 800);
+
+  // Discover locally installed fonts for LyricsLayer (Chrome 103+, graceful fallback)
+  LyricsLayer.discoverFonts().catch(() => {});
 
 })();

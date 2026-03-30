@@ -25,9 +25,10 @@ const LayerPanel = (() => {
   let _blendModes    = ['normal','multiply','screen','overlay','add','softlight','difference','luminosity','subtract','exclusion'];
   let _layerTypes    = [];
   let _renderImageFn = null;
+  let _videoLibrary  = null;   // set via init(); used by _promptVideoSource
 
   function init({ layers, layerFactory, audio, canvas, onSelectLayer,
-                  blendModes, layerTypes, renderImageLayerPanel }) {
+                  blendModes, layerTypes, renderImageLayerPanel, videoLibrary }) {
     _layers       = layers;
     _layerFactory = layerFactory;
     _audio        = audio;
@@ -36,6 +37,7 @@ const LayerPanel = (() => {
     if (blendModes)    _blendModes = blendModes;
     if (layerTypes)    _layerTypes = layerTypes;
     if (renderImageLayerPanel) _renderImageFn = renderImageLayerPanel;
+    if (videoLibrary)  _videoLibrary = videoLibrary;
 
     // DOM lookups deferred to after DOMContentLoaded
     _layerListEl     = document.getElementById('layer-list');
@@ -838,6 +840,130 @@ const LayerPanel = (() => {
 
   // ── Standalone event wirings (moved to init) ─────────────────
 
+  /**
+   * Called immediately after a VideoPlayerLayer is added.
+   * Shows a modal overlay that lets the user:
+   *   a) pick an existing video from the library, or
+   *   b) upload a new file (which also adds it to the library).
+   * If the user dismisses without picking, the layer stays empty
+   * (they can choose later via the PARAMS tab picker).
+   */
+  function _promptVideoSource(layer) {
+    // If no library is wired up, fall back to a simple file picker
+    if (!_videoLibrary) {
+      const input = document.createElement('input');
+      input.type  = 'file';
+      input.accept = 'video/*';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+      input.click();
+      input.addEventListener('change', async e => {
+        const file = e.target.files[0];
+        if (file) {
+          const id = await _videoLibrary?.add(file);
+          const el = _videoLibrary?.getElement(id);
+          if (el) layer.setVideoElement(el);
+          layer.name = file.name.replace(/\.[^.]+$/, '');
+        }
+        input.remove();
+      });
+      return;
+    }
+
+    // Build overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = `
+      position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9000;
+      display:flex;align-items:center;justify-content:center;
+      font-family:'JetBrains Mono',monospace;
+    `;
+
+    const entries = _videoLibrary.entries;
+    const listHtml = entries.length === 0 ? `
+      <div style="font-size:9px;color:var(--text-dim);text-align:center;padding:12px 0">
+        No videos in library yet — upload one below.
+      </div>` : entries.map(e => `
+      <div class="vpick" data-id="${e.id}" style="
+        display:flex;align-items:center;gap:10px;padding:7px 10px;
+        border:1px solid var(--border-dim);border-radius:5px;
+        cursor:pointer;transition:border-color 0.1s;margin-bottom:5px;
+      ">
+        <video src="${e.url}" muted style="width:52px;height:32px;object-fit:cover;border-radius:3px;flex-shrink:0;background:#000"></video>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:9px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.name}</div>
+          <div style="font-size:8px;color:var(--text-dim);margin-top:1px">${VaelMath.formatTime(e.duration)}</div>
+        </div>
+        <div style="font-size:9px;color:var(--accent)">Select</div>
+      </div>`).join('');
+
+    overlay.innerHTML = `
+      <div style="
+        background:var(--bg-card);border:1px solid var(--border);border-radius:10px;
+        padding:20px;width:340px;max-height:70vh;display:flex;flex-direction:column;gap:12px;
+      ">
+        <div style="font-size:10px;color:var(--accent);letter-spacing:1.5px;text-transform:uppercase">
+          Choose video source
+        </div>
+        <div style="flex:1;overflow-y:auto;max-height:320px">${listHtml}</div>
+        <div style="display:flex;gap:8px">
+          <button id="vpick-upload" class="btn accent" style="flex:1;font-size:9px">↑ Upload new file</button>
+          <button id="vpick-cancel" class="btn" style="font-size:9px;padding:6px 12px">Cancel</button>
+        </div>
+      </div>`;
+
+    document.body.appendChild(overlay);
+
+    // Play previews on hover
+    overlay.querySelectorAll('video').forEach(v => {
+      v.addEventListener('mouseenter', () => v.play().catch(() => {}));
+      v.addEventListener('mouseleave', () => { v.pause(); v.currentTime = 0; });
+    });
+
+    // Hover highlight
+    overlay.querySelectorAll('.vpick').forEach(row => {
+      row.addEventListener('mouseenter', () => row.style.borderColor = 'var(--accent)');
+      row.addEventListener('mouseleave', () => row.style.borderColor = 'var(--border-dim)');
+      row.addEventListener('click', () => {
+        const id = row.dataset.id;
+        const el = _videoLibrary.getElement(id);
+        const entry = _videoLibrary.entries.find(e => e.id === id);
+        if (el) layer.setVideoElement(el);
+        if (entry) layer.name = entry.name.replace(/\.[^.]+$/, '');
+        if (layer.params) layer.params.videoId = id;
+        overlay.remove();
+        Toast.success(`Video set: ${entry?.name || id}`);
+      });
+    });
+
+    // Upload new
+    overlay.querySelector('#vpick-upload').addEventListener('click', () => {
+      const input = document.createElement('input');
+      input.type   = 'file';
+      input.accept = 'video/*';
+      input.style.display = 'none';
+      document.body.appendChild(input);
+      input.click();
+      input.addEventListener('change', async e => {
+        const file = e.target.files[0];
+        if (file && _videoLibrary) {
+          try {
+            const id = await _videoLibrary.add(file);
+            const el = _videoLibrary.getElement(id);
+            if (el) layer.setVideoElement(el);
+            layer.name = file.name.replace(/\.[^.]+$/, '');
+            if (layer.params) layer.params.videoId = id;
+            Toast.success(`Video loaded: ${file.name}`);
+          } catch { Toast.error(`Could not load: ${file.name}`); }
+        }
+        input.remove();
+        overlay.remove();
+      });
+    });
+
+    overlay.querySelector('#vpick-cancel').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  }
+
   function showLayerPicker() {
     document.getElementById('layer-picker')?.remove();
 
@@ -979,6 +1105,12 @@ const LayerPanel = (() => {
           if (typeof layer.init === 'function') layer.init({});
           _layers.add(layer);
           setTimeout(() => selectLayer(layer.id), 50);
+
+          // Video layer: immediately prompt user to pick/upload a video so
+          // the layer is never silently empty after creation.
+          if (typeId === 'video') {
+            setTimeout(() => _promptVideoSource(layer), 80);
+          }
         }
         picker.remove();
         return;

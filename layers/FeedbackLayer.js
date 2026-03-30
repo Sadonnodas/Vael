@@ -65,9 +65,11 @@ class FeedbackLayer extends BaseLayer {
   }
 
   update(audioData, videoData, dt) {
-    const av = audioData?.isActive ? (audioData.bass ?? 0) : 0;
+    const react = this.params.audioReact ?? 0.4;
+    const av = audioData?.isActive ? (audioData.bass ?? 0) * react : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.1);
-    if (audioData?.isBeat) this._beatPulse = 1.0;
+    // Gate beat pulse on audioReact — at 0 there should be no beat-driven rotation
+    if (audioData?.isBeat && react > 0) this._beatPulse = 1.0;
     this._beatPulse = Math.max(0, this._beatPulse - dt * 6);
     this._hueAccum += this.params.hueShift * dt * 60;
   }

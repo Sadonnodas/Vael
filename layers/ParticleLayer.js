@@ -1,16 +1,24 @@
 /**
  * layers/ParticleLayer.js
  *
- * FIXES:
- * - Drift flocking: each particle now adds its own stable per-particle offset
- *   to the noise coordinates, so nearby particles sample different parts of
- *   the noise field and don't clump together.
- * - Audio reactivity: replaced the harsh `1 + audio * 1.5` multiplier with
- *   a sqrt curve that gives smooth, proportional response across the full
- *   0–1 audio range. Beat pulse only affects size, not position.
+ * FIXES (v2.1):
+ * - Full-canvas init: particles now spawn across the full W×H canvas in all
+ *   modes, not just a sub-region.
+ * - Drift/trails direction fix: per-particle noiseOx/noiseOy offsets are now
+ *   spread across a much wider range (0–8000) so they sample genuinely
+ *   independent, well-distributed regions of the Perlin field. Previously the
+ *   narrow range (0–1000) meant all particles ended up in a correlated zone
+ *   that had a net directional bias toward negative x/y (top-left).
+ *   Particles also receive a randomised initial velocity so they start moving
+ *   in varied directions rather than all accelerating the same way.
+ * - Clustering fix: drift damping tightened (0.96 → 0.94) to prevent
+ *   sustained co-alignment. audioForce gain reduced so high audio levels
+ *   no longer compress particles into a streak.
+ * - Audio reactivity: audioReact=0 now fully stops all audio-driven motion
+ *   including beat pulse. Beat pulse gating already respected audioReact>0.
  * - audioTarget param removed — use ModMatrix to route specific bands.
  *
- * MODES (9 total):
+ * MODES (10 total):
  *   drift      — noise-field flow (fixed: no more clumping)
  *   fountain   — gravity-based upward spray
  *   orbit      — circular orbits at varied radii
@@ -100,19 +108,23 @@ class ParticleLayer extends BaseLayer {
     const rnd  = () => Math.random();
     const rng  = (a, b) => a + rnd() * (b - a);
 
+    // Each particle gets a large, unique noise offset so it samples a
+    // genuinely independent region of the Perlin field. The narrow 0–1000
+    // range in v2.0 put all particles in a correlated zone that had a net
+    // bias toward negative x/y. Spreading across 0–8000 eliminates that.
     const p = {
       x:         rng(-w/2, w/2),
       y:         rng(-h/2, h/2),
-      vx:        0,
-      vy:        0,
+      // Randomised initial velocity — particles start moving in varied
+      // directions rather than all being at rest and then drifting the
+      // same way as the first noise sample pushes them.
+      vx:        rng(-0.8, 0.8),
+      vy:        rng(-0.8, 0.8),
       life:      rng(0, 1),
       maxLife:   rng(0.5, 1),
       size:      rng(0.5, 1.5),
-      // Per-particle noise offset — THIS is the fix for drift clumping.
-      // Each particle samples a different region of the noise field even when
-      // two particles are at the same spatial position.
-      noiseOx:   rng(0, 500),
-      noiseOy:   rng(500, 1000),
+      noiseOx:   rng(0, 8000),
+      noiseOy:   rng(0, 8000),
       hue:       (i / total) * 360 + rng(-15, 15),
       angle:     rng(0, Math.PI * 2),
     };
@@ -172,8 +184,8 @@ class ParticleLayer extends BaseLayer {
         break;
 
       case 'trails':
-        p.vx = rng(-1.5, 1.5);
-        p.vy = rng(-1.5, 1.5);
+        p.vx = rng(-0.8, 0.8);
+        p.vy = rng(-0.8, 0.8);
         break;
 
       case 'magnet':
@@ -238,15 +250,16 @@ class ParticleLayer extends BaseLayer {
       switch (mode) {
 
         case 'drift': {
-          // Per-particle offsets prevent clumping — each particle samples
-          // a different region of the noise field
-          const nx  = VaelMath.noise2D((p.x + p.noiseOx) * 0.004, this._time * 0.25) - 0.5;
-          const ny  = VaelMath.noise2D((p.y + p.noiseOy) * 0.004, this._time * 0.25) - 0.5;
-          // Audio adds energy to the field without multiplying speed chaotically
-          const audioForce = 0.12 + audio * 0.25;
+          // Per-particle offsets (0–8000 range) prevent clumping — each
+          // particle samples a genuinely independent noise region
+          const nx  = VaelMath.noise2D((p.x + p.noiseOx) * 0.003, this._time * 0.2) - 0.5;
+          const ny  = VaelMath.noise2D((p.y + p.noiseOy) * 0.003, this._time * 0.2) - 0.5;
+          // Gentler audio force — prevents high audio from compressing particles
+          const audioForce = 0.10 + audio * 0.18;
           p.vx += nx * audioForce * speed;
           p.vy += ny * audioForce * speed;
-          p.vx  *= 0.96; p.vy *= 0.96;
+          // Tighter damping prevents sustained co-alignment
+          p.vx  *= 0.94; p.vy *= 0.94;
           p.x   += p.vx; p.y  += p.vy;
           const hw = width/2, hh = height/2;
           if (p.x >  hw) p.x = -hw;
@@ -373,11 +386,11 @@ class ParticleLayer extends BaseLayer {
 
         case 'trails': {
           // Smooth noise-driven motion, renders to a persistent trail canvas
-          const nx = VaelMath.noise2D((p.x + p.noiseOx) * 0.004, this._time * 0.2) - 0.5;
-          const ny = VaelMath.noise2D((p.y + p.noiseOy) * 0.004, this._time * 0.2) - 0.5;
-          p.vx += nx * (0.15 + audio * 0.3) * speed;
-          p.vy += ny * (0.15 + audio * 0.3) * speed;
-          p.vx  *= 0.95; p.vy *= 0.95;
+          const nx = VaelMath.noise2D((p.x + p.noiseOx) * 0.003, this._time * 0.15) - 0.5;
+          const ny = VaelMath.noise2D((p.y + p.noiseOy) * 0.003, this._time * 0.15) - 0.5;
+          p.vx += nx * (0.12 + audio * 0.22) * speed;
+          p.vy += ny * (0.12 + audio * 0.22) * speed;
+          p.vx  *= 0.94; p.vy *= 0.94;
           p.x   += p.vx;  p.y  += p.vy;
           const hw = width/2, hh = height/2;
           if (p.x >  hw) p.x = -hw;

@@ -179,6 +179,8 @@ const SequencerPanel = (() => {
       legend.appendChild(item);
     });
     _container.appendChild(legend);
+    _renderSensitivitySection();
+    _renderSignalMeters();
   }
 
   // Animate active step highlight
@@ -197,6 +199,163 @@ const SequencerPanel = (() => {
     _rafId = requestAnimationFrame(loop);
   }
 
-  return { init };
+  // ── Beat detector sensitivity controls ──────────────────────
+
+  function _renderSensitivitySection() {
+    if (!_container || !_beat) return;
+
+    const section = document.createElement('div');
+    section.style.cssText = 'margin-top:18px';
+
+    const label = document.createElement('div');
+    label.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px';
+    label.textContent = 'Beat detector sensitivity';
+    section.appendChild(label);
+
+    // Helper: build a labelled slider row wired to a BeatDetector property
+    function _sliderRow(lbl, min, max, step, getValue, setValue) {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:7px';
+
+      const nameEl = document.createElement('span');
+      nameEl.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:96px';
+      nameEl.textContent = lbl;
+
+      const slider = document.createElement('input');
+      slider.type  = 'range';
+      slider.min   = min; slider.max = max; slider.step = step;
+      slider.value = getValue();
+      slider.style.cssText = 'flex:1;accent-color:var(--accent2)';
+
+      const valEl = document.createElement('span');
+      valEl.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--accent2);min-width:36px;text-align:right';
+      valEl.textContent = parseFloat(getValue()).toFixed(step < 1 ? 2 : 0);
+
+      slider.addEventListener('input', () => {
+        const v = parseFloat(slider.value);
+        setValue(v);
+        valEl.textContent = v.toFixed(step < 1 ? 2 : 0);
+      });
+
+      row.append(nameEl, slider, valEl);
+      return row;
+    }
+
+    section.appendChild(_sliderRow(
+      'Flux sensitivity', 1.0, 4.0, 0.05,
+      () => _beat.fluxMult,
+      v  => { _beat.fluxMult = v; }
+    ));
+    section.appendChild(_sliderRow(
+      'Min interval (ms)', 50, 600, 10,
+      () => _beat.minInterval,
+      v  => { _beat.minInterval = v; }
+    ));
+    section.appendChild(_sliderRow(
+      'Kick threshold', 1.0, 3.5, 0.05,
+      () => _beat._kick?.mult ?? 1.8,
+      v  => { if (_beat._kick) _beat._kick.mult = v; }
+    ));
+    section.appendChild(_sliderRow(
+      'Snare threshold', 1.0, 3.5, 0.05,
+      () => _beat._snare?.mult ?? 1.6,
+      v  => { if (_beat._snare) _beat._snare.mult = v; }
+    ));
+    section.appendChild(_sliderRow(
+      'Hi-hat threshold', 1.0, 3.5, 0.05,
+      () => _beat._hihat?.mult ?? 1.7,
+      v  => { if (_beat._hihat) _beat._hihat.mult = v; }
+    ));
+
+    // Reset to defaults button
+    const resetBtn = document.createElement('button');
+    resetBtn.className   = 'btn';
+    resetBtn.style.cssText = 'width:100%;font-size:9px;margin-top:4px;color:var(--text-dim)';
+    resetBtn.textContent = 'Reset to defaults';
+    resetBtn.addEventListener('click', () => {
+      _beat.fluxMult    = 1.5;
+      _beat.minInterval = 250;
+      if (_beat._kick)  _beat._kick.mult  = 1.8;
+      if (_beat._snare) _beat._snare.mult = 1.6;
+      if (_beat._hihat) _beat._hihat.mult = 1.7;
+      _render();
+      Toast.info('Beat detector reset to defaults');
+    });
+    section.appendChild(resetBtn);
+
+    _container.appendChild(section);
+  }
+
+  // ── Signal meters — live readout of all new audio signals ───
+
+  function _renderSignalMeters() {
+    if (!_container) return;
+
+    const section = document.createElement('div');
+    section.style.cssText = 'margin-top:16px';
+
+    const label = document.createElement('div');
+    label.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px';
+    label.textContent   = 'Live signal meters';
+    section.appendChild(label);
+
+    // Signal rows: [id, label, color]
+    const signals = [
+      // Beat booleans shown as flash indicators
+      ['isBeat',          'Beat',          '#ffffff'],
+      ['isKick',          'Kick',          '#ff4757'],
+      ['isSnare',         'Snare',         '#ffa502'],
+      ['isHihat',         'Hi-hat',        '#2ed573'],
+      // Continuous band energy
+      ['kickEnergy',      'Kick energy',   '#ff6b6b'],
+      ['snareEnergy',     'Snare energy',  '#ffd700'],
+      ['hihatEnergy',     'Hi-hat energy', '#00d4aa'],
+      ['rms',             'RMS',           '#ff9f43'],
+      // Spectral
+      ['spectralCentroid','Centroid',      '#54a0ff'],
+      ['spectralSpread',  'Spread',        '#5f27cd'],
+      ['spectralFlux',    'Flux',          '#ff6348'],
+    ];
+
+    signals.forEach(([id, lbl, color]) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:5px';
+      row.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);
+                     min-width:88px;text-align:right">${lbl}</span>
+        <div style="flex:1;height:6px;background:var(--bg);border-radius:3px;overflow:hidden">
+          <div class="sig-bar" data-id="${id}"
+            style="height:100%;width:0%;background:${color};border-radius:3px;
+                   transition:width 0.05s linear"></div>
+        </div>
+        <span class="sig-val" data-id="${id}"
+          style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);
+                 min-width:28px;text-align:right">0</span>
+      `;
+      section.appendChild(row);
+    });
+
+    _container.appendChild(section);
+
+    // Animate meters each frame
+    const animate = () => {
+      const ad = window._vaelAudioData;
+      if (!ad) { requestAnimationFrame(animate); return; }
+
+      signals.forEach(([id]) => {
+        const raw = ad[id];
+        const v   = typeof raw === 'boolean' ? (raw ? 1 : 0) : (raw || 0);
+        const bar = _container.querySelector(`.sig-bar[data-id="${id}"]`);
+        const val = _container.querySelector(`.sig-val[data-id="${id}"]`);
+        if (bar) bar.style.width = Math.min(100, v * 100).toFixed(1) + '%';
+        if (val) val.textContent = typeof raw === 'boolean' ? (raw ? '●' : '○') : v.toFixed(2);
+      });
+
+      requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
+  }
+
+  return { init, renderSignalMeters: _renderSignalMeters };
 
 })();

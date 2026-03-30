@@ -1,196 +1,247 @@
 /**
- * engine/BeatDetector.js
- * Energy-based onset detection with bar and phrase tracking.
+ * engine/BeatDetector.js  — v2
+ * Full-spectrum audio analysis with spectral flux onset detection,
+ * per-band beat tracking, adaptive threshold, spectral centroid, RMS.
  *
- * NEW — phrase/bar tracking:
- * Once BPM is established (confidence > 0.5), beats are counted into bars
- * (4 beats = 1 bar) and bars into phrases (4 bars = 1 phrase).
+ * New output signals (all merged into audioData by App.js):
+ *   isKick / isSnare / isHihat   — per-band one-shot beat flags
+ *   kickEnergy / snareEnergy / hihatEnergy  — continuous 0-1 band levels
+ *   spectralCentroid  0-1  "brightness" of the sound
+ *   spectralSpread    0-1  how wide the energy is spread
+ *   spectralFlux      0-1  rate of change this frame (smoothed)
+ *   rms               0-1  true RMS energy (smoother than peak)
+ *   confidence        0-1  BPM tracking confidence
  *
- * New output properties:
- *   bd.beat      — 1-4, which beat within the current bar
- *   bd.bar       — 1-4, which bar within the current phrase
- *   bd.phrase    — 1+, which phrase since tracking started
- *   bd.isDownbeat  — true on beat 1 of each bar
- *   bd.isBarOne    — true on bar 1 of each phrase
- *
- * These are available on audioData in App.js as audioData.beat etc.,
- * and can be used in ModMatrix routes and layer update() methods.
- *
- * Usage (unchanged):
- *   bd.update(audioEngine.smoothed, audioEngine._dataArray);
+ * Phrase tracking unchanged: beat 1-4, bar 1-4, phrase 1+,
+ * isDownbeat, isBarOne.
  */
 
 class BeatDetector {
 
   constructor() {
-    // Config
-    this.threshold   = 1.35;
-    this.minInterval = 280;
-    this.historySize = 43;
+    this.minInterval   = 250;
+    this.historySize   = 60;
+    this.fluxMult      = 1.5;
+    this.smoothing     = 0.3;
 
-    // State
-    this._energyHistory = [];
+    this._prevSpectrum  = null;
+    this._fluxHistory   = [];
     this._lastBeatMs    = 0;
     this._beatIntervals = [];
-    this._maxIntervals  = 8;
+    this._maxIntervals  = 12;
 
-    // Beat output
-    this.bpm        = 0;
-    this.confidence = 0;
-    this.isBeat     = false;
+    this._kick  = this._makeBand(1.8);
+    this._snare = this._makeBand(1.6);
+    this._hihat = this._makeBand(1.7);
 
-    // ── Phrase tracking ────────────────────────────────────────
-    // Beat position within current bar (1–4)
-    this.beat      = 1;
-    // Bar position within current phrase (1–4)
-    this.bar       = 1;
-    // Current phrase number (increments every 4 bars)
-    this.phrase    = 1;
-    // Convenience flags
-    this.isDownbeat = false;  // true on beat 1 of any bar
-    this.isBarOne   = false;  // true on bar 1 of each phrase (the "1" of the phrase)
+    this.isBeat  = false;
+    this.isKick  = false;
+    this.isSnare = false;
+    this.isHihat = false;
 
-    this._beatCount  = 0;   // total beats since tracking started
-    this._barCount   = 0;   // total bars since tracking started
-    this._tracking   = false; // whether we have enough confidence to phrase-track
+    this.bpm              = 0;
+    this.confidence       = 0;
+    this.spectralCentroid = 0;
+    this.spectralSpread   = 0;
+    this.spectralFlux     = 0;
+    this.rms              = 0;
+    this.kickEnergy       = 0;
+    this.snareEnergy      = 0;
+    this.hihatEnergy      = 0;
 
-    // Callback
+    this.beat       = 1;
+    this.bar        = 1;
+    this.phrase     = 1;
+    this.isDownbeat = false;
+    this.isBarOne   = false;
+    this._beatCount = 0;
+    this._barCount  = 0;
+
     this.onBeat = null;
   }
 
-  // ── Per-frame update ─────────────────────────────────────────
+  _makeBand(mult) {
+    return { prevBins: null, fluxHistory: [], lastBeatMs: 0, mult: mult ?? 1.8 };
+  }
 
-  update(smoothed, fftData) {
-    this.isBeat     = false;
-    this.isDownbeat = false;
-    this.isBarOne   = false;
+  update(smoothed, fftData, sampleRate) {
+    sampleRate = sampleRate || 44100;
+    this.isBeat  = false;
+    this.isKick  = false;
+    this.isSnare = false;
+    this.isHihat = false;
 
-    if (!smoothed?.isActive) return;
+    if (!smoothed || !smoothed.isActive || !fftData || fftData.length === 0) return;
 
-    let energy;
-    if (fftData && fftData.length > 0) {
-      energy = this._rawBassEnergy(fftData);
-    } else {
-      energy = smoothed.bass * 0.7 + smoothed.mid * 0.3;
+    const N         = fftData.length;
+    const nyq       = sampleRate / 2;
+    const hzPerBin  = nyq / N;
+
+    // Normalise FFT to 0-1 floats
+    const spectrum = new Float32Array(N);
+    for (var i = 0; i < N; i++) spectrum[i] = fftData[i] / 255;
+
+    // RMS
+    var sumSq = 0;
+    for (var i = 0; i < N; i++) sumSq += spectrum[i] * spectrum[i];
+    this.rms = this._lerp(this.rms, Math.sqrt(sumSq / N), this.smoothing);
+
+    // Spectral centroid
+    var weightedSum = 0, totalEnergy = 0;
+    for (var i = 0; i < N; i++) {
+      weightedSum += i * spectrum[i];
+      totalEnergy += spectrum[i];
     }
+    var centroidBin   = totalEnergy > 0 ? weightedSum / totalEnergy : 0;
+    var rawCentroid   = centroidBin / N;
+    this.spectralCentroid = this._lerp(this.spectralCentroid, rawCentroid, this.smoothing);
 
-    this._energyHistory.push(energy);
-    if (this._energyHistory.length > this.historySize) {
-      this._energyHistory.shift();
+    // Spectral spread
+    var spreadSum = 0;
+    for (var i = 0; i < N; i++) {
+      var diff = (i / N) - rawCentroid;
+      spreadSum += diff * diff * spectrum[i];
     }
+    var rawSpread = totalEnergy > 0 ? Math.sqrt(spreadSum / totalEnergy) : 0;
+    this.spectralSpread = this._lerp(this.spectralSpread, rawSpread * 4, this.smoothing);
 
-    if (this._energyHistory.length < 10) return;
+    // Full-spectrum flux (half-wave rectified)
+    var flux = 0;
+    if (this._prevSpectrum) {
+      for (var i = 0; i < N; i++) {
+        var d = spectrum[i] - this._prevSpectrum[i];
+        if (d > 0) flux += d;
+      }
+      flux /= N;
+    }
+    this._prevSpectrum = spectrum;
+    this.spectralFlux = this._lerp(this.spectralFlux, flux, 0.4);
 
-    const avg      = this._energyHistory.reduce((a, b) => a + b, 0) / this._energyHistory.length;
-    const now      = performance.now();
-    const elapsed  = now - this._lastBeatMs;
-    const isBeat   = energy > avg * this.threshold && elapsed > this.minInterval && avg > 0.02;
-
-    if (isBeat) {
-      this.isBeat = true;
-
+    // Full-spectrum beat
+    var now = performance.now();
+    this.isBeat = this._detectOnset(
+      this._fluxHistory, flux, now, this._lastBeatMs, this.minInterval, this.fluxMult
+    );
+    if (this.isBeat) {
       if (this._lastBeatMs > 0) {
-        this._beatIntervals.push(elapsed);
-        if (this._beatIntervals.length > this._maxIntervals) {
-          this._beatIntervals.shift();
-        }
+        this._beatIntervals.push(now - this._lastBeatMs);
+        if (this._beatIntervals.length > this._maxIntervals) this._beatIntervals.shift();
         this._updateBPM();
       }
-
       this._lastBeatMs = now;
       this._advancePhrase();
-
-      if (typeof this.onBeat === 'function') {
-        this.onBeat({
-          bpm:       this.bpm,
-          confidence: this.confidence,
-          energy,
-          beat:      this.beat,
-          bar:       this.bar,
-          phrase:    this.phrase,
-          isDownbeat: this.isDownbeat,
-          isBarOne:   this.isBarOne,
-        });
-      }
+      if (typeof this.onBeat === 'function') this.onBeat(this._beatPayload());
     }
+
+    // Per-band ranges
+    var kickStart  = Math.floor(20   / hzPerBin);
+    var kickEnd    = Math.floor(200  / hzPerBin);
+    var snareStart = Math.floor(200  / hzPerBin);
+    var snareEnd   = Math.floor(2000 / hzPerBin);
+    var hihatStart = Math.floor(2000 / hzPerBin);
+    var hihatEnd   = Math.min(N - 1, Math.floor(16000 / hzPerBin));
+
+    this.isKick  = this._updateBand(this._kick,  spectrum, kickStart,  kickEnd,  now, this._kick.mult);
+    this.isSnare = this._updateBand(this._snare, spectrum, snareStart, snareEnd, now, this._snare.mult);
+    this.isHihat = this._updateBand(this._hihat, spectrum, hihatStart, hihatEnd, now, this._hihat.mult);
+
+    this.kickEnergy  = this._lerp(this.kickEnergy,  this._bandEnergy(spectrum, kickStart,  kickEnd),  0.15);
+    this.snareEnergy = this._lerp(this.snareEnergy, this._bandEnergy(spectrum, snareStart, snareEnd), 0.15);
+    this.hihatEnergy = this._lerp(this.hihatEnergy, this._bandEnergy(spectrum, hihatStart, hihatEnd), 0.15);
   }
 
-  // ── Phrase tracking ──────────────────────────────────────────
-
-  _advancePhrase() {
-    // Only phrase-track when BPM is reasonably confident
-    if (this.confidence < 0.4 || this.bpm === 0) {
-      // Still count beats but don't advance bar/phrase until locked
-      this._beatCount++;
-      this.beat = ((this._beatCount - 1) % 4) + 1;
-      this.isDownbeat = this.beat === 1;
-      return;
-    }
-
-    this._tracking = true;
-    this._beatCount++;
-
-    // Beat 1-4 within bar
-    this.beat = ((this._beatCount - 1) % 4) + 1;
-    this.isDownbeat = this.beat === 1;
-
-    // On each downbeat, advance bar counter
-    if (this.isDownbeat) {
-      this._barCount++;
-      this.bar = ((this._barCount - 1) % 4) + 1;
-      this.isBarOne = this.bar === 1;
-
-      // On bar 1 (start of new phrase), advance phrase counter
-      if (this.isBarOne) {
-        if (this._barCount > 1) this.phrase++; // don't increment on very first bar
-      }
-    }
+  _detectOnset(history, flux, now, lastBeatMs, minInterval, mult) {
+    history.push(flux);
+    if (history.length > this.historySize) history.shift();
+    if (history.length < 8) return false;
+    if (now - lastBeatMs < minInterval) return false;
+    var median = this._median(history);
+    return flux > median * mult && flux > 0.002;
   }
 
-  // ── BPM calculation ──────────────────────────────────────────
+  _updateBand(band, spectrum, startBin, endBin, now, mult) {
+    var flux = 0;
+    if (band.prevBins) {
+      for (var i = startBin; i < endBin; i++) {
+        var d = spectrum[i] - band.prevBins[i];
+        if (d > 0) flux += d;
+      }
+      flux /= Math.max(1, endBin - startBin);
+    }
+    band.prevBins = spectrum.slice(startBin, endBin);
+    if (this._detectOnset(band.fluxHistory, flux, now, band.lastBeatMs, this.minInterval, mult)) {
+      band.lastBeatMs = now;
+      return true;
+    }
+    return false;
+  }
+
+  _bandEnergy(spectrum, startBin, endBin) {
+    var sum = 0;
+    var count = Math.max(1, endBin - startBin);
+    for (var i = startBin; i < endBin; i++) sum += spectrum[i];
+    return sum / count;
+  }
 
   _updateBPM() {
-    if (this._beatIntervals.length < 2) return;
-
-    const avg    = this._beatIntervals.reduce((a, b) => a + b, 0) / this._beatIntervals.length;
-    const rawBpm = 60000 / avg;
-
-    let bpm = rawBpm;
-    while (bpm > 200) bpm /= 2;
-    while (bpm < 50)  bpm *= 2;
-
-    this.bpm = Math.round(bpm);
-
-    const variance   = this._beatIntervals.reduce((acc, v) => acc + Math.pow(v - avg, 2), 0) / this._beatIntervals.length;
-    const stdDev     = Math.sqrt(variance);
-    this.confidence  = VaelMath.clamp(1 - (stdDev / avg) * 2, 0, 1);
+    if (this._beatIntervals.length < 3) return;
+    var avg = this._beatIntervals.reduce(function(a, b) { return a + b; }, 0) / this._beatIntervals.length;
+    var rawBpm = 60000 / avg;
+    while (rawBpm > 200) rawBpm /= 2;
+    while (rawBpm < 50)  rawBpm *= 2;
+    this.bpm = Math.round(rawBpm);
+    var variance = this._beatIntervals.reduce(function(a, v) { return a + (v - avg) * (v - avg); }, 0) / this._beatIntervals.length;
+    this.confidence = Math.max(0, Math.min(1, 1 - Math.sqrt(variance) / avg * 2));
   }
 
-  // ── Raw FFT bass energy ──────────────────────────────────────
-
-  _rawBassEnergy(fftData) {
-    const end = Math.floor(fftData.length * 0.1);
-    let sum = 0;
-    for (let i = 0; i < end; i++) sum += fftData[i];
-    return sum / (end * 255);
+  _advancePhrase() {
+    this._beatCount++;
+    this.beat       = ((this._beatCount - 1) % 4) + 1;
+    this.isDownbeat = this.beat === 1;
+    if (this.confidence < 0.4) return;
+    if (this.isDownbeat) {
+      this._barCount++;
+      this.bar      = ((this._barCount - 1) % 4) + 1;
+      this.isBarOne = this.bar === 1;
+      if (this.isBarOne && this._barCount > 1) this.phrase++;
+    }
   }
 
-  // ── Reset ────────────────────────────────────────────────────
+  _beatPayload() {
+    return {
+      bpm: this.bpm, confidence: this.confidence,
+      beat: this.beat, bar: this.bar, phrase: this.phrase,
+      isDownbeat: this.isDownbeat, isBarOne: this.isBarOne,
+      isKick: this.isKick, isSnare: this.isSnare, isHihat: this.isHihat,
+      spectralCentroid: this.spectralCentroid, rms: this.rms,
+    };
+  }
+
+  _median(arr) {
+    var sorted = arr.slice().sort(function(a, b) { return a - b; });
+    var m = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[m] : (sorted[m - 1] + sorted[m]) / 2;
+  }
+
+  _lerp(a, b, t) { return a + (b - a) * t; }
 
   reset() {
-    this._energyHistory = [];
+    this._prevSpectrum  = null;
+    this._fluxHistory   = [];
     this._beatIntervals = [];
     this._lastBeatMs    = 0;
-    this.bpm            = 0;
-    this.confidence     = 0;
-    this.isBeat         = false;
-    this._beatCount     = 0;
-    this._barCount      = 0;
-    this._tracking      = false;
-    this.beat           = 1;
-    this.bar            = 1;
-    this.phrase         = 1;
-    this.isDownbeat     = false;
-    this.isBarOne       = false;
+    const kickMult  = this._kick?.mult  ?? 1.8;
+    const snareMult = this._snare?.mult ?? 1.6;
+    const hihatMult = this._hihat?.mult ?? 1.7;
+    this._kick   = this._makeBand(kickMult);
+    this._snare  = this._makeBand(snareMult);
+    this._hihat  = this._makeBand(hihatMult);
+    this.bpm = this.confidence = this.spectralCentroid = 0;
+    this.spectralSpread = this.spectralFlux = this.rms = 0;
+    this.kickEnergy = this.snareEnergy = this.hihatEnergy = 0;
+    this.isBeat = this.isKick = this.isSnare = this.isHihat = false;
+    this.beat = this.bar = this.phrase = 1;
+    this.isDownbeat = this.isBarOne = false;
+    this._beatCount = this._barCount = 0;
   }
 }

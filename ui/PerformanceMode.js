@@ -14,10 +14,16 @@ class PerformanceMode {
     this._layers       = layerStack;
     this._active       = false;
     this._hudTimeout   = null;
-    this._beatFlash    = 0;   // 0–1 flash value that decays each frame
+    this._beatFlash    = 0;
+    this._kickFlash    = 0;
+    this._snareFlash   = 0;
+    this._hihatFlash   = 0;
+    this._beatQuantise = false;   // wait for next bar before switching
+    this._pendingScene = -1;      // scene queued for beat-quantised switch
 
     this._buildHUD();
     this._buildSetlistPanel();
+    this._buildSceneGrid();
     this._bindKeys();
 
     // React to scene changes
@@ -53,7 +59,7 @@ class PerformanceMode {
       gap: 16px;
       white-space: nowrap;
       transition: opacity 0.4s;
-      pointer-events: none;
+      pointer-events: auto;
     `;
 
     hud.innerHTML = `
@@ -87,15 +93,37 @@ class PerformanceMode {
         </div>
       </div>
 
-      <!-- Hint -->
+      <!-- Hint + TAP button -->
       <div style="font-size:8px;opacity:0.2;border-left:1px solid rgba(255,255,255,0.1);
-                  padding-left:14px;line-height:1.8">
-        ← → scene<br>S setlist<br>F exit
+                  padding-left:14px;line-height:1.8;display:flex;flex-direction:column;gap:6px">
+        <span>← → scene<br>S setlist<br>F exit</span>
+        <button id="phud-tap" style="
+          background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);
+          border-radius:5px;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;
+          font-size:8px;letter-spacing:1.5px;padding:5px 10px;cursor:pointer;
+          transition:background 0.08s,transform 0.08s;user-select:none;opacity:1
+        ">T · TAP</button>
       </div>
     `;
 
     document.body.appendChild(hud);
     this._hud = hud;
+
+    // Wire TAP button — dispatches the same event that App.js seq.tapTempo() uses
+    const tapBtn = document.getElementById('phud-tap');
+    if (tapBtn) {
+      tapBtn.addEventListener('pointerdown', () => {
+        tapBtn.style.background = 'rgba(0,212,170,0.3)';
+        tapBtn.style.transform  = 'scale(0.94)';
+        // Dispatch tap event — App.js listens for T key but we can reuse it
+        // by firing the same keydown simulation, or via custom event
+        window.dispatchEvent(new CustomEvent('vael:tap-tempo'));
+      });
+      tapBtn.addEventListener('pointerup', () => {
+        tapBtn.style.background = 'rgba(255,255,255,0.07)';
+        tapBtn.style.transform  = 'scale(1)';
+      });
+    }
   }
 
   _updateHUD() {
@@ -123,26 +151,62 @@ class PerformanceMode {
       }
     }
     if (nextBlock) nextBlock.style.display = total > 1 ? 'flex' : 'none';
-    if (document.getElementById('phud-bpm')) {
-      document.getElementById('phud-bpm').textContent =
-        this._beat.bpm > 0 ? `${this._beat.bpm} bpm` : '— bpm';
+    const bpmEl  = document.getElementById('phud-bpm');
+    const confEl = document.getElementById('phud-conf');
+    if (bpmEl)  bpmEl.textContent  = this._beat.bpm > 0 ? `${this._beat.bpm} bpm` : '— bpm';
+    if (confEl) confEl.textContent = this._beat.confidence > 0.5
+      ? `${Math.round(this._beat.confidence * 100)}%` : '';
+
+    // Wire beat-quantise checkbox
+    const qEl = document.getElementById('phud-quantise');
+    if (qEl && !qEl._wired) {
+      qEl._wired = true;
+      qEl.addEventListener('change', () => { this._beatQuantise = qEl.checked; });
     }
   }
 
   tick(dt) {
     if (!this._active) return;
 
+    // Beat-quantised pending switch — fire on next downbeat
+    if (this._beatQuantise && this._pendingScene >= 0 && this._beat.isDownbeat) {
+      this._setlist.goto(this._pendingScene);
+      this._pendingScene = -1;
+      const pendEl = document.getElementById('phud-pending');
+      if (pendEl) pendEl.style.display = 'none';
+      this._showHUD();
+    }
+
+    // Per-band flash values
+    if (this._beat.isKick)  this._kickFlash  = 1;
+    if (this._beat.isSnare) this._snareFlash = 1;
+    if (this._beat.isHihat) this._hihatFlash = 1;
+    if (this._beat.isBeat)  this._beatFlash  = 1;
+
+    this._kickFlash  = Math.max(0, this._kickFlash  - dt * 8);
+    this._snareFlash = Math.max(0, this._snareFlash - dt * 10);
+    this._hihatFlash = Math.max(0, this._hihatFlash - dt * 14);
+    this._beatFlash  = Math.max(0, this._beatFlash  - dt * 5);
+
+    const kickEl  = document.getElementById('phud-kick');
+    const snareEl = document.getElementById('phud-snare');
+    const hihatEl = document.getElementById('phud-hihat');
+    if (kickEl)  kickEl.style.opacity  = this._kickFlash.toFixed(2);
+    if (snareEl) snareEl.style.opacity = this._snareFlash.toFixed(2);
+    if (hihatEl) hihatEl.style.opacity = this._hihatFlash.toFixed(2);
+
+    // Beat position indicator  e.g. "2.3" = bar 2, beat 3
+    const beatPosEl = document.getElementById('phud-beat-pos');
+    if (beatPosEl && this._beat.bpm > 0) {
+      beatPosEl.textContent = `${this._beat.bar}.${this._beat.beat}`;
+      beatPosEl.style.color = this._beat.isDownbeat
+        ? 'rgba(0,212,170,0.9)' : 'rgba(255,255,255,0.25)';
+    }
+
+    // Update BPM live
     if (this._beat.isBeat) {
-      this._beatFlash = 1;
       const bpmEl = document.getElementById('phud-bpm');
       if (bpmEl) bpmEl.textContent = this._beat.bpm > 0 ? `${this._beat.bpm} bpm` : '— bpm';
-    }
-    this._beatFlash = Math.max(0, this._beatFlash - dt * 5);
-
-    const beatEl = document.getElementById('phud-beat');
-    if (beatEl) {
-      beatEl.style.opacity = this._beatFlash.toFixed(2);
-      beatEl.style.color   = `hsl(${160 + this._beatFlash * 30}, 80%, 65%)`;
     }
 
     // Audio time
@@ -226,6 +290,13 @@ class PerformanceMode {
             <option value="blur">Blur</option>
             <option value="cut">Cut (instant)</option>
           </select>
+        </div>
+        <div style="margin-top:8px;display:flex;align-items:center;gap:8px">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none">
+            <input type="checkbox" id="sl-auto-thumb" style="accent-color:#00d4aa"
+              ${this._setlist.autoCaptureThumbnails ? 'checked' : ''} />
+            <span style="font-size:9px;color:#7878a0">Auto-capture thumbnail on scene switch</span>
+          </label>
         </div>
         <input type="file" id="sl-load-input" accept=".json" style="display:none" />
       </div>
@@ -470,6 +541,20 @@ class PerformanceMode {
       });
     }
 
+    // Auto-capture thumbnail checkbox
+    const autoThumbEl = document.getElementById('sl-auto-thumb');
+    if (autoThumbEl) {
+      // Ensure canvas reference is set on the setlist manager
+      if (!this._setlist._captureCanvas) {
+        this._setlist._captureCanvas = document.getElementById('main-canvas');
+      }
+      autoThumbEl.addEventListener('change', () => {
+        this._setlist.autoCaptureThumbnails = autoThumbEl.checked;
+      });
+      // Wire the thumb-update callback so the setlist panel refreshes
+      this._setlist.onThumbUpdate = () => this._renderSetlistEntries();
+    }
+
     document.getElementById('sl-load-input').addEventListener('change', async e => {
       const file = e.target.files[0];
       if (!file) return;
@@ -485,6 +570,216 @@ class PerformanceMode {
       }
       e.target.value = '';
     });
+  }
+
+  // ── Scene grid (G key) ───────────────────────────────────────
+
+  _buildSceneGrid() {
+    document.getElementById('vael-scene-grid')?.remove();
+
+    const grid = document.createElement('div');
+    grid.id = 'vael-scene-grid';
+    grid.style.cssText = `
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.88);
+      backdrop-filter: blur(20px);
+      z-index: 350;
+      padding: 40px;
+      overflow-y: auto;
+    `;
+
+    document.body.appendChild(grid);
+    this._sceneGrid = grid;
+
+    grid.addEventListener('click', e => {
+      if (e.target === grid) this._hideSceneGrid();
+    });
+  }
+
+  _showSceneGrid() {
+    if (!this._sceneGrid) return;
+    this._renderSceneGrid();
+    this._sceneGrid.style.display = 'block';
+  }
+
+  _hideSceneGrid() {
+    if (this._sceneGrid) this._sceneGrid.style.display = 'none';
+  }
+
+  _renderSceneGrid() {
+    const grid = this._sceneGrid;
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    // Header
+    const header = document.createElement('div');
+    header.style.cssText = `
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 28px;
+    `;
+    header.innerHTML = `
+      <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:3px;
+                   color:var(--accent)">SCENE GRID</span>
+      <div style="display:flex;align-items:center;gap:16px">
+        <span style="font-family:var(--font-mono);font-size:9px;color:rgba(255,255,255,0.25)">
+          Click to load · Double-click to load &amp; close · Esc to close
+        </span>
+        <button id="sg-close" style="background:none;border:none;color:rgba(255,255,255,0.4);
+          cursor:pointer;font-size:20px;line-height:1">✕</button>
+      </div>
+    `;
+    grid.appendChild(header);
+    header.querySelector('#sg-close').addEventListener('click', () => this._hideSceneGrid());
+
+    if (this._setlist.count === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'text-align:center;padding:60px;font-family:var(--font-mono);font-size:11px;color:rgba(255,255,255,0.2)';
+      empty.textContent = 'No scenes in setlist yet. Add scenes from the setlist panel (S key).';
+      grid.appendChild(empty);
+      return;
+    }
+
+    // Scene tiles
+    const tileGrid = document.createElement('div');
+    tileGrid.style.cssText = `
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: 16px;
+    `;
+    grid.appendChild(tileGrid);
+
+    this._setlist.entries.forEach((entry, i) => {
+      const isCurrent = i === this._setlist.currentIndex;
+      const isPending = i === this._pendingScene;
+
+      const tile = document.createElement('div');
+      tile.style.cssText = `
+        position: relative;
+        border-radius: 8px;
+        overflow: hidden;
+        cursor: pointer;
+        border: 2px solid ${isCurrent ? 'var(--accent)' : isPending ? '#ffa502' : 'rgba(255,255,255,0.08)'};
+        transition: border-color 0.15s, transform 0.1s;
+        background: rgba(255,255,255,0.04);
+      `;
+
+      // Thumbnail or placeholder
+      if (entry.thumbnail) {
+        const img = document.createElement('img');
+        img.src = entry.thumbnail;
+        img.style.cssText = 'width:100%;aspect-ratio:16/9;object-fit:cover;display:block';
+        tile.appendChild(img);
+      } else {
+        const ph = document.createElement('div');
+        ph.style.cssText = 'width:100%;aspect-ratio:16/9;background:rgba(255,255,255,0.03);display:flex;align-items:center;justify-content:center;font-size:24px;opacity:0.2';
+        ph.textContent = '✦';
+        tile.appendChild(ph);
+      }
+
+      // Label bar
+      const label = document.createElement('div');
+      label.style.cssText = `
+        padding: 8px 10px;
+        background: rgba(0,0,0,0.6);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      `;
+      label.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:9px;
+                     color:rgba(255,255,255,0.35);min-width:16px">${i + 1}</span>
+        <span style="font-family:var(--font-mono);font-size:10px;
+                     color:${isCurrent ? 'var(--accent)' : 'rgba(255,255,255,0.8)'};
+                     flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+          ${entry.name}
+        </span>
+        ${isCurrent ? '<span style="color:var(--accent);font-size:9px">▶</span>' : ''}
+        ${isPending ? '<span style="color:#ffa502;font-size:9px">⏱</span>' : ''}
+      `;
+      tile.appendChild(label);
+
+      // Hover
+      tile.addEventListener('mouseenter', () => {
+        tile.style.transform = 'scale(1.03)';
+        tile.style.borderColor = isCurrent ? 'var(--accent)' : 'rgba(255,255,255,0.3)';
+      });
+      tile.addEventListener('mouseleave', () => {
+        tile.style.transform = 'scale(1)';
+        tile.style.borderColor = isCurrent ? 'var(--accent)' : isPending ? '#ffa502' : 'rgba(255,255,255,0.08)';
+      });
+
+      // Single click — load scene (or queue for beat-quantise)
+      tile.addEventListener('click', () => {
+        if (this._beatQuantise && this._beat.bpm > 0) {
+          this._pendingScene = i;
+          const pendEl = document.getElementById('phud-pending');
+          if (pendEl) pendEl.style.display = 'block';
+          this._renderSceneGrid();  // refresh to show pending indicator
+          Toast.info(`Scene "${entry.name}" queued — fires on next downbeat`);
+        } else {
+          this._setlist.goto(i);
+          this._renderSceneGrid();
+          this._showHUD();
+        }
+      });
+
+      // Double-click — load and close grid
+      tile.addEventListener('dblclick', () => {
+        if (this._beatQuantise && this._beat.bpm > 0) return; // single-click handles queueing
+        this._setlist.goto(i);
+        this._hideSceneGrid();
+        this._showHUD();
+      });
+
+      tileGrid.appendChild(tile);
+    });
+
+    // Layer visibility toggles at bottom
+    const layerSection = document.createElement('div');
+    layerSection.style.cssText = 'margin-top:32px;padding-top:20px;border-top:1px solid rgba(255,255,255,0.08)';
+    layerSection.innerHTML = `
+      <div style="font-family:var(--font-mono);font-size:9px;letter-spacing:1px;
+                  color:rgba(255,255,255,0.25);margin-bottom:12px;text-transform:uppercase">
+        Layer visibility
+      </div>
+    `;
+
+    const layerRow = document.createElement('div');
+    layerRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:8px';
+
+    this._layers.layers.forEach(layer => {
+      const btn = document.createElement('button');
+      btn.style.cssText = `
+        background: ${layer.visible ? 'rgba(0,212,170,0.15)' : 'rgba(255,255,255,0.05)'};
+        border: 1px solid ${layer.visible ? 'rgba(0,212,170,0.4)' : 'rgba(255,255,255,0.1)'};
+        border-radius: 4px;
+        color: ${layer.visible ? '#00d4aa' : 'rgba(255,255,255,0.3)'};
+        font-family: var(--font-mono);
+        font-size: 9px;
+        padding: 5px 10px;
+        cursor: pointer;
+        transition: all 0.15s;
+      `;
+      btn.textContent = layer.name;
+      btn.title = layer.visible ? 'Click to hide' : 'Click to show';
+
+      btn.addEventListener('click', () => {
+        layer.visible = !layer.visible;
+        btn.style.background = layer.visible ? 'rgba(0,212,170,0.15)' : 'rgba(255,255,255,0.05)';
+        btn.style.borderColor = layer.visible ? 'rgba(0,212,170,0.4)' : 'rgba(255,255,255,0.1)';
+        btn.style.color       = layer.visible ? '#00d4aa' : 'rgba(255,255,255,0.3)';
+        btn.title = layer.visible ? 'Click to hide' : 'Click to show';
+      });
+
+      layerRow.appendChild(btn);
+    });
+
+    layerSection.appendChild(layerRow);
+    grid.appendChild(layerSection);
   }
 
   // ── Toggle ───────────────────────────────────────────────────
@@ -535,6 +830,22 @@ class PerformanceMode {
 
   // ── Keyboard ─────────────────────────────────────────────────
 
+  _queueOrGoto(idx) {
+    const count = this._setlist.count;
+    if (count === 0) return;
+    const clamped = Math.max(0, Math.min(count - 1, idx));
+    if (this._beatQuantise && this._beat.bpm > 0) {
+      this._pendingScene = clamped;
+      const pendEl = document.getElementById('phud-pending');
+      if (pendEl) pendEl.style.display = 'block';
+      Toast.info(`Scene ${clamped + 1} queued — fires on next downbeat`);
+    } else {
+      this._pendingScene = -1;
+      this._setlist.goto(clamped);
+      this._showHUD();
+    }
+  }
+
   _bindKeys() {
     document.addEventListener('mousemove', () => this._onMouseMove());
 
@@ -552,16 +863,14 @@ class PerformanceMode {
         case 'ArrowRight':
           if (this._active) {
             e.preventDefault();
-            this._setlist.next();
-            this._showHUD();
+            this._queueOrGoto(this._setlist.currentIndex + 1);
           }
           break;
 
         case 'ArrowLeft':
           if (this._active) {
             e.preventDefault();
-            this._setlist.prev();
-            this._showHUD();
+            this._queueOrGoto(this._setlist.currentIndex - 1);
           }
           break;
 
@@ -575,8 +884,20 @@ class PerformanceMode {
           }
           break;
 
+        case 'g':
+        case 'G':
+          if (this._active) {
+            e.preventDefault();
+            const gridVisible = this._sceneGrid?.style.display !== 'none';
+            if (gridVisible) this._hideSceneGrid();
+            else             this._showSceneGrid();
+          }
+          break;
+
         case 'Escape':
-          if (this._setlistPanel.style.display !== 'none') {
+          if (this._sceneGrid?.style.display !== 'none') {
+            this._hideSceneGrid();
+          } else if (this._setlistPanel.style.display !== 'none') {
             this._setlistPanel.style.display = 'none';
           } else if (this._active) {
             this.exit();
@@ -587,8 +908,7 @@ class PerformanceMode {
         default:
           if (this._active && e.key >= '1' && e.key <= '9') {
             const idx = parseInt(e.key) - 1;
-            this._setlist.goto(idx);
-            this._showHUD();
+            this._queueOrGoto(idx);
           }
       }
     });

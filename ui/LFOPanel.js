@@ -115,7 +115,7 @@ const LFOPanel = (() => {
           ${layer?.name ?? lfo.layerId} · ${targetLabel}
         </div>
         <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
-          ${lfo.shape} · ${lfo.rate}${lfo.syncToBpm ? ' beats' : ' Hz'} · depth ${lfo.depth.toFixed(2)}
+          ${lfo.shape} · ${lfo.syncToBpm ? (lfo.division || '1/4') + ' bar' : lfo.rate + ' Hz'} · depth ${lfo.depth.toFixed(2)}
         </div>
       </div>
     `;
@@ -163,12 +163,13 @@ const LFOPanel = (() => {
 
     // IDs are unique per form to avoid conflicts when multiple edit panels are open
     const uid = existingLfo?.id ?? `new-${Date.now()}`;
-    const idLayer  = `lfo-layer-${uid}`;
-    const idParam  = `lfo-param-${uid}`;
-    const idShape  = `lfo-shape-${uid}`;
-    const idRate   = `lfo-rate-${uid}`;
-    const idSync   = `lfo-sync-${uid}`;
-    const idDepth  = `lfo-depth-${uid}`;
+    const idLayer   = `lfo-layer-${uid}`;
+    const idParam   = `lfo-param-${uid}`;
+    const idShape   = `lfo-shape-${uid}`;
+    const idRate    = `lfo-rate-${uid}`;
+    const idSync    = `lfo-sync-${uid}`;
+    const idDiv     = `lfo-div-${uid}`;
+    const idDepth   = `lfo-depth-${uid}`;
     const idOffset  = `lfo-offset-${uid}`;
     const idBipolar = `lfo-bipolar-${uid}`;
 
@@ -197,15 +198,32 @@ const LFOPanel = (() => {
     ).join('');
     wrap.appendChild(_row('Shape', sel(idShape, shapeOptions)));
 
-    // Rate
+    // Rate / Division
+    const DIVISIONS = ['1/32','1/16','1/8','1/4','1/2','1','2','4'];
+    const currentDiv  = isEdit ? (existingLfo.division || '1/4') : '1/4';
+    const divOptions  = DIVISIONS.map(d => `<option value="${d}" ${d === currentDiv ? 'selected' : ''}>${d} bar${d === '1' ? '' : 's'.replace('1s','')}</option>`).join('');
+    const isSynced    = isEdit ? (existingLfo.syncToBpm || false) : false;
+
     wrap.appendChild(_row('Rate', `
-      <div style="display:flex;gap:6px;align-items:center">
-        <input type="number" id="${idRate}" value="${isEdit ? existingLfo.rate : 0.25}" min="0.01" max="32" step="0.05"
-          style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:4px;
-                 color:var(--text);font-family:var(--font-mono);font-size:10px;padding:5px 8px" />
-        <label style="display:flex;align-items:center;gap:4px;font-family:var(--font-mono);font-size:9px;color:var(--text-muted);white-space:nowrap;cursor:pointer">
-          <input type="checkbox" id="${idSync}" ${isEdit && existingLfo.syncToBpm ? 'checked' : ''} /> BPM sync
-        </label>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;gap:6px;align-items:center">
+          <input type="number" id="${idRate}" value="${isEdit ? existingLfo.rate : 0.25}" min="0.01" max="32" step="0.05"
+            style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:4px;
+                   color:var(--text);font-family:var(--font-mono);font-size:10px;padding:5px 8px;
+                   display:${isSynced ? 'none' : 'block'}" />
+          <select id="${idDiv}"
+            style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:4px;
+                   color:var(--accent2);font-family:var(--font-mono);font-size:10px;padding:5px 8px;
+                   display:${isSynced ? 'block' : 'none'}">
+            ${divOptions}
+          </select>
+          <label style="display:flex;align-items:center;gap:4px;font-family:var(--font-mono);font-size:9px;color:var(--text-muted);white-space:nowrap;cursor:pointer">
+            <input type="checkbox" id="${idSync}" ${isSynced ? 'checked' : ''} /> BPM sync
+          </label>
+        </div>
+        <div id="${idDiv}-hint" style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);display:${isSynced ? 'block' : 'none'}">
+          Phase resets on each downbeat
+        </div>
       </div>
     `));
 
@@ -290,6 +308,18 @@ const LFOPanel = (() => {
       layerEl?.addEventListener('change', updateTargetDropdown);
       updateTargetDropdown();
 
+      // Wire BPM sync toggle: show division selector OR Hz rate input
+      const syncEl   = getEl(idSync);
+      const rateEl   = getEl(idRate);
+      const divEl    = getEl(idDiv);
+      const divHint  = wrap.querySelector(`#${idDiv}-hint`);
+      syncEl?.addEventListener('change', () => {
+        const synced = syncEl.checked;
+        if (rateEl)  rateEl.style.display  = synced ? 'none' : 'block';
+        if (divEl)   divEl.style.display   = synced ? 'block' : 'none';
+        if (divHint) divHint.style.display = synced ? 'block' : 'none';
+      });
+
       // Wire bipolar toggle to update offset slider range live
       const bipolarEl  = getEl(idBipolar);
       const bipolarLbl = wrap.querySelector(`#${idBipolar}-label`);
@@ -327,6 +357,7 @@ const LFOPanel = (() => {
           depth:     parseFloat(getEl(idDepth)?.value)  || 0.5,
           offset:    parseFloat(getEl(idOffset)?.value) || 0.5,
           syncToBpm: getEl(idSync)?.checked   || false,
+          division:  getEl(idDiv)?.value      || '1/4',
           bipolar:   getEl(idBipolar)?.checked || false,
         };
 
@@ -339,7 +370,8 @@ const LFOPanel = (() => {
             const nameDiv = header.querySelector('div > div:first-child');
             const infoDiv = header.querySelector('div > div:last-child');
             if (nameDiv) nameDiv.textContent = `${_layerStack.layers.find(l=>l.id===layerId)?.name} · ${tLabel}`;
-            if (infoDiv) infoDiv.textContent = `${props.shape} · ${props.rate}${props.syncToBpm ? ' beats' : ' Hz'} · depth ${props.depth.toFixed(2)}`;
+            const rateStr = props.syncToBpm ? `${props.division} bar` : `${props.rate} Hz`;
+            if (infoDiv) infoDiv.textContent = `${props.shape} · ${rateStr} · depth ${props.depth.toFixed(2)}`;
           }
           Toast.success('LFO updated');
         } else {

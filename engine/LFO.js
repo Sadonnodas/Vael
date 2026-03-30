@@ -13,44 +13,53 @@
 
 class LFO {
   constructor({ layerId, paramId, shape = 'sine', rate = 1.0,
-                depth = 0.5, offset = 0, bipolar = false, syncToBpm = false }) {
+                depth = 0.5, offset = 0, bipolar = false,
+                syncToBpm = false, division = '1/4' }) {
     this.id        = `lfo-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
     this.layerId   = layerId;
     this.paramId   = paramId;
-    this.shape     = shape;      // 'sine' | 'triangle' | 'square' | 'saw' | 'random'
-    this.rate      = rate;       // cycles per second (Hz), or beats if syncToBpm
-    this.depth     = depth;      // 0–1, how much to modulate
-    this.offset    = offset;     // base value offset
-    this.bipolar   = bipolar;    // true = output -1..+1, false = 0..1
-    this.syncToBpm = syncToBpm;  // true = rate is in beats, not Hz
+    this.shape     = shape;
+    this.rate      = rate;       // Hz (when syncToBpm=false)
+    this.depth     = depth;
+    this.offset    = offset;
+    this.bipolar   = bipolar;
+    this.syncToBpm = syncToBpm;
+    // Musical division (used when syncToBpm=true).
+    // Replaces the raw 'rate in beats' approach with a human-readable value.
+    // Supported: '1/32','1/16','1/8','1/4','1/2','1','2','4'
+    this.division  = division;
 
-    this._phase    = 0;          // 0..1
-    this._prevRand = Math.random();
-    this._nextRand = Math.random();
-    this._randPhase = 0;
+    this._phase     = 0;
+    this._prevRand  = Math.random();
+    this._nextRand  = Math.random();
+    this._prevIsDownbeat = false;  // for downbeat phase-reset detection
 
-    // Store the original param value so we can restore it if LFO is removed
     this._originalValue = null;
   }
 
-  /**
-   * Advance the LFO and return the current output value.
-   * @param {number} dt   delta time in seconds
-   * @param {number} bpm  current BPM (used if syncToBpm)
-   * @returns {number}    modulated value
-   */
-  tick(dt, bpm) {
-    // Advance phase
+  // Musical division → beats-per-cycle lookup
+  static DIVISIONS = {
+    '1/32': 1/32, '1/16': 1/16, '1/8': 1/8, '1/4': 1/4,
+    '1/2':  1/2,  '1':    1,    '2':   2,    '4':   4,
+  };
+
+  tick(dt, bpm, isDownbeat) {
+    // Phase reset on downbeat when BPM-synced
+    if (this.syncToBpm && isDownbeat && !this._prevIsDownbeat) {
+      this._phase = 0;
+    }
+    this._prevIsDownbeat = !!isDownbeat;
+
     let rateHz = this.rate;
     if (this.syncToBpm && bpm > 0) {
-      // rate in beats → convert to Hz
-      rateHz = (bpm / 60) / this.rate;
+      // division = beats per cycle → Hz = (bpm/60) / beatsPerCycle
+      const beatsPerCycle = LFO.DIVISIONS[this.division] ?? (1 / (this.rate || 1));
+      rateHz = (bpm / 60) / beatsPerCycle;
     }
 
     this._phase += rateHz * dt;
     if (this._phase >= 1) {
       this._phase -= Math.floor(this._phase);
-      // Update random targets on each cycle
       this._prevRand = this._nextRand;
       this._nextRand = Math.random();
     }
@@ -96,6 +105,7 @@ class LFO {
       id: this.id, layerId: this.layerId, paramId: this.paramId,
       shape: this.shape, rate: this.rate, depth: this.depth,
       offset: this.offset, bipolar: this.bipolar, syncToBpm: this.syncToBpm,
+      division: this.division,
     };
   }
 }
@@ -120,12 +130,12 @@ class LFOManager {
 
   clear() { this.lfos = []; }
 
-  tick(dt, bpm, layerStack) {
+  tick(dt, bpm, layerStack, isDownbeat) {
     if (!layerStack) return;
     this.lfos.forEach(lfo => {
       const layer = layerStack.layers.find(l => l.id === lfo.layerId);
       if (!layer) return;
-      const value = lfo.tick(dt, bpm);
+      const value = lfo.tick(dt, bpm, isDownbeat);
 
       if (lfo.paramId === 'opacity') {
         // Special: opacity lives on layer directly, not in layer.params

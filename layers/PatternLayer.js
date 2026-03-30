@@ -48,9 +48,10 @@ class PatternLayer extends BaseLayer {
 
   update(audioData, videoData, dt) {
     this._time += dt * this.params.speed;
-    const av = audioData?.isActive ? (audioData.bass ?? 0) * (this.params.audioReact ?? 0.3) : 0;
+    const react = this.params.audioReact ?? 0.3;
+    const av = audioData?.isActive ? (audioData.bass ?? 0) * react : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.08);
-    if (audioData?.isBeat) this._beatPulse = 1.0;
+    if (audioData?.isBeat && react > 0) this._beatPulse = 1.0;
     this._beatPulse = Math.max(0, this._beatPulse - dt * 6);
   }
 

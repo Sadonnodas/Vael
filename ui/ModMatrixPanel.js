@@ -15,19 +15,30 @@
 const ModMatrixPanel = (() => {
 
   const SOURCE_GROUPS = [
-    { group: 'Audio',  ids: ['bass','mid','treble','volume'] },
-    { group: 'Video',  ids: ['brightness','motion','edgeDensity'] },
-    { group: 'Engine', ids: ['iTime','iBeat','iMouseX','iMouseY'] },
+    { group: 'Audio — bands',    ids: ['bass','mid','treble','volume','rms'] },
+    { group: 'Audio — spectrum', ids: ['spectralCentroid','spectralSpread','spectralFlux'] },
+    { group: 'Audio — beats',    ids: ['kickEnergy','snareEnergy','hihatEnergy'] },
+    { group: 'Video',            ids: ['brightness','motion','edgeDensity'] },
+    { group: 'Engine',           ids: ['iTime','iBeat','iMouseX','iMouseY'] },
   ];
 
   const SOURCE_LABELS = {
-    bass: 'Bass', mid: 'Mid', treble: 'Treble', volume: 'Volume',
+    // Audio bands
+    bass: 'Bass', mid: 'Mid', treble: 'Treble', volume: 'Volume', rms: 'RMS energy',
+    // Spectral
+    spectralCentroid: 'Centroid (brightness)', spectralSpread: 'Spread', spectralFlux: 'Flux (transients)',
+    // Per-band energy
+    kickEnergy: 'Kick energy', snareEnergy: 'Snare energy', hihatEnergy: 'Hi-hat energy',
+    // Video
     brightness: 'Brightness', motion: 'Motion', edgeDensity: 'Edge density',
+    // Engine
     iTime: 'Time', iBeat: 'Beat', iMouseX: 'Mouse X', iMouseY: 'Mouse Y',
   };
 
   const SOURCE_COLORS = {
-    bass: '#ff6b6b', mid: '#ffd700', treble: '#00d4aa', volume: '#7c6af7',
+    bass: '#ff6b6b', mid: '#ffd700', treble: '#00d4aa', volume: '#7c6af7', rms: '#ff9f43',
+    spectralCentroid: '#54a0ff', spectralSpread: '#5f27cd', spectralFlux: '#ff6348',
+    kickEnergy: '#ff4757', snareEnergy: '#ffa502', hihatEnergy: '#2ed573',
     brightness: '#ffd700', motion: '#ff6b6b', edgeDensity: '#a78bfa',
     iTime: '#00d4aa', iBeat: '#ffffff', iMouseX: '#7c6af7', iMouseY: '#7c6af7',
   };
@@ -45,6 +56,9 @@ const ModMatrixPanel = (() => {
     { id: 'opacity', label: 'Opacity' },
   ];
 
+  // Module-level clipboard — persists across layer selections within a session
+  let _routeClipboard = null;   // null | Array<route toJSON objects>
+
   function render(layer, container) {
     if (!layer.modMatrix) return;
 
@@ -60,10 +74,52 @@ const ModMatrixPanel = (() => {
     modCountSpan.textContent   = `Modulation (${layer.modMatrix.routes.length})`;
     headerRow.appendChild(modCountSpan);
 
+    // Button group: Copy · Paste · Add
+    const btnGroup = document.createElement('div');
+    btnGroup.style.cssText = 'display:flex;gap:4px;align-items:center';
+
+    // Copy routes
+    const copyBtn = document.createElement('button');
+    copyBtn.style.cssText = 'background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:8px;padding:2px 7px;cursor:pointer';
+    copyBtn.textContent   = '⎘ Copy';
+    copyBtn.title         = 'Copy all routes from this layer to clipboard';
+    copyBtn.addEventListener('click', () => {
+      if (!layer.modMatrix.routes.length) {
+        Toast.warn('No routes to copy'); return;
+      }
+      _routeClipboard = layer.modMatrix.routes.map(r => r.toJSON());
+      Toast.success(`Copied ${_routeClipboard.length} route${_routeClipboard.length !== 1 ? 's' : ''}`);
+      pasteBtn.disabled = false;
+      pasteBtn.style.opacity = '1';
+    });
+    btnGroup.appendChild(copyBtn);
+
+    // Paste routes
+    const pasteBtn = document.createElement('button');
+    const hasClip  = _routeClipboard && _routeClipboard.length > 0;
+    pasteBtn.style.cssText = `background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:8px;padding:2px 7px;cursor:pointer;opacity:${hasClip ? '1' : '0.35'}`;
+    pasteBtn.textContent   = '⎘ Paste';
+    pasteBtn.title         = 'Paste copied routes onto this layer (appends, does not replace)';
+    pasteBtn.disabled      = !hasClip;
+    pasteBtn.addEventListener('click', () => {
+      if (!_routeClipboard?.length) return;
+      _routeClipboard.forEach(def => {
+        // Deep-clone and assign a fresh id so routes are independent
+        layer.modMatrix.addRoute({ ...def });
+      });
+      modCountSpan.textContent = `Modulation (${layer.modMatrix.routes.length})`;
+      _renderRoutes(layer, routeList);
+      Toast.success(`Pasted ${_routeClipboard.length} route${_routeClipboard.length !== 1 ? 's' : ''}`);
+    });
+    btnGroup.appendChild(pasteBtn);
+
+    // Add route
     const addRouteBtn = document.createElement('button');
     addRouteBtn.style.cssText = 'background:none;border:1px solid var(--accent2);border-radius:3px;color:var(--accent2);font-family:var(--font-mono);font-size:8px;padding:2px 8px;cursor:pointer';
     addRouteBtn.textContent   = '+ Add route';
-    headerRow.appendChild(addRouteBtn);
+    btnGroup.appendChild(addRouteBtn);
+
+    headerRow.appendChild(btnGroup);
     container.appendChild(headerRow);
 
     const routeList = document.createElement('div');
@@ -274,7 +330,7 @@ const ModMatrixPanel = (() => {
       const smooth = parseFloat(form.querySelector('#mod-smooth-sl')?.value) || 0.1;
       if (!source || !target) return;
 
-      layer.modMatrix.addRoute({ source, target, depth, smooth }, layer);
+      layer.modMatrix.addRoute({ source, target, depth, smooth });
       form.style.display = 'none';
       _renderRoutes(layer, routeList);
 

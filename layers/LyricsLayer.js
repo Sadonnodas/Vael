@@ -19,7 +19,23 @@ class LyricsLayer extends BaseLayer {
     params: [
       { id: 'fontSize',    label: 'Font size',    type: 'int',   default: 48,   min: 12,  max: 200 },
       { id: 'fontFamily',  label: 'Font',         type: 'enum',  default: 'system',
-        options: ['system','serif','mono','Georgia','Palatino','Garamond','Didot','Futura','Gill Sans','Trebuchet','Impact','Courier'] },
+        options: [
+          // Generic / system
+          'system','serif','mono',
+          // Serif
+          'Georgia','Palatino','Garamond','Times New Roman','Didot','Bodoni MT',
+          'Book Antiqua','Cambria','Constantia','Hoefler Text',
+          // Sans-serif
+          'Arial','Helvetica','Verdana','Trebuchet MS','Gill Sans','Optima',
+          'Calibri','Candara','Franklin Gothic Medium','Century Gothic',
+          // Display / Impact
+          'Impact','Arial Black','Arial Narrow',
+          // Mono
+          'Courier New','Courier','Lucida Console','Monaco',
+          // Script / decorative (available on most systems)
+          'Comic Sans MS','Papyrus',
+        ]
+      },
       { id: 'posY',        label: 'Vertical pos', type: 'float', default: 0.75, min: 0,   max: 1   },
       { id: 'color',       label: 'Color',        type: 'color', default: '#ffffff' },
       { id: 'transition',  label: 'Transition',   type: 'enum',  default: 'fade',
@@ -198,18 +214,48 @@ class LyricsLayer extends BaseLayer {
 
     ctx.save();
     ctx.globalAlpha  = VaelMath.clamp(this._alpha * this.opacity, 0, 1);
+
+    // Well-known font stacks for generic names; everything else is passed
+    // through verbatim so locally-discovered fonts work automatically.
     const _fontFamilies = {
-      system: 'system-ui, -apple-system, sans-serif',
-      serif:  'Georgia, "Times New Roman", serif',
-      mono:   '"Courier New", Courier, monospace',
-      Georgia: 'Georgia, serif',
-      Palatino: '"Palatino Linotype", Palatino, serif',
-      Garamond: 'Garamond, "EB Garamond", serif',
-      Trebuchet: '"Trebuchet MS", sans-serif',
-      Impact: 'Impact, Haettenschweiler, sans-serif',
-      Courier: '"Courier New", Courier, monospace',
+      system:            'system-ui, -apple-system, sans-serif',
+      serif:             'Georgia, "Times New Roman", serif',
+      mono:              '"Courier New", Courier, monospace',
+      Georgia:           'Georgia, serif',
+      Palatino:          '"Palatino Linotype", Palatino, serif',
+      Garamond:          'Garamond, "EB Garamond", serif',
+      'Times New Roman': '"Times New Roman", Times, serif',
+      Didot:             'Didot, "GFS Didot", serif',
+      'Bodoni MT':       '"Bodoni MT", "Bodoni 72", serif',
+      'Book Antiqua':    '"Book Antiqua", Palatino, serif',
+      Cambria:           'Cambria, Georgia, serif',
+      Constantia:        'Constantia, "Palatino Linotype", serif',
+      'Hoefler Text':    '"Hoefler Text", Garamond, serif',
+      Arial:             'Arial, Helvetica, sans-serif',
+      Helvetica:         'Helvetica, Arial, sans-serif',
+      Verdana:           'Verdana, Geneva, sans-serif',
+      'Trebuchet MS':    '"Trebuchet MS", sans-serif',
+      'Gill Sans':       '"Gill Sans", "Gill Sans MT", sans-serif',
+      Optima:            'Optima, Segoe, sans-serif',
+      Calibri:           'Calibri, Candara, sans-serif',
+      Candara:           'Candara, Calibri, sans-serif',
+      'Franklin Gothic Medium': '"Franklin Gothic Medium", "Arial Narrow", sans-serif',
+      'Century Gothic':  '"Century Gothic", Futura, sans-serif',
+      Impact:            'Impact, Haettenschweiler, sans-serif',
+      'Arial Black':     '"Arial Black", Gadget, sans-serif',
+      'Arial Narrow':    '"Arial Narrow", Arial, sans-serif',
+      'Courier New':     '"Courier New", Courier, monospace',
+      Courier:           '"Courier New", Courier, monospace',
+      'Lucida Console':  '"Lucida Console", Monaco, monospace',
+      Monaco:            'Monaco, "Lucida Console", monospace',
+      'Comic Sans MS':   '"Comic Sans MS", cursive',
+      Papyrus:           'Papyrus, fantasy',
     };
-    const _ff = _fontFamilies[this.params.fontFamily || 'system'] || _fontFamilies.system;
+
+    // Passthrough: if the font name isn't in our table it's likely a locally
+    // discovered font name — quote it and let the browser resolve it directly.
+    const familyName = this.params.fontFamily || 'system';
+    const _ff = _fontFamilies[familyName] || `"${familyName}", sans-serif`;
     ctx.font         = `bold ${fontSize}px ${_ff}`;
     ctx.textAlign    = align;
     ctx.textBaseline = 'middle';
@@ -233,6 +279,34 @@ class LyricsLayer extends BaseLayer {
     ctx.fillText(displayText, xBase, posY);
 
     ctx.restore();
+  }
+
+  // ── Font discovery ────────────────────────────────────────────
+
+  /**
+   * Try to enumerate locally installed fonts via the Font Access API
+   * (Chrome 103+). Falls back silently if the API isn't available or the
+   * user denies permission.
+   *
+   * Discovered font names are appended to the manifest options array so
+   * the LyricsLayer dropdown in ParamPanel shows them automatically.
+   * Call once at app startup: await LyricsLayer.discoverFonts();
+   */
+  static async discoverFonts() {
+    if (typeof window.queryLocalFonts !== 'function') return;
+    try {
+      const fonts  = await window.queryLocalFonts();
+      const names  = [...new Set(fonts.map(f => f.family))].sort();
+      const param  = LyricsLayer.manifest.params.find(p => p.id === 'fontFamily');
+      if (!param) return;
+      // Add only fonts not already in the list
+      const existing = new Set(param.options);
+      names.forEach(n => { if (!existing.has(n)) param.options.push(n); });
+      console.log(`LyricsLayer: discovered ${names.length} local fonts`);
+    } catch (e) {
+      // Permission denied or API unavailable — fail silently
+      console.info('LyricsLayer: local font discovery unavailable', e.message);
+    }
   }
 
   // ── Serialisation ─────────────────────────────────────────────

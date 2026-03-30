@@ -53,6 +53,7 @@ const AudioPanel = (() => {
         _statusLabel.textContent = entry.name.replace(/\.[^.]+$/, '');
         _loopIn = 0; _loopOut = 1;
         _updateLoopPointUI();
+        _buildNewMeters();
         Toast.success(`Audio loaded: ${entry.name} — press Play to start`);
       } catch { Toast.error('Could not load audio from library'); }
     });
@@ -204,9 +205,130 @@ const AudioPanel = (() => {
     }
   }
 
+  // ── Spectrum canvas ─────────────────────────────────────────
+  let _specCanvas = null;
+  let _specCtx    = null;
+  let _peakHold   = null;   // per-bin peak hold values
+
+  function _ensureSpectrumCanvas() {
+    if (_specCanvas) return;
+    const levelsEl = document.getElementById('audio-levels-section');
+    if (!levelsEl) return;
+
+    // Insert spectrum canvas above the VU meters
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-bottom:10px;border-radius:4px;overflow:hidden;background:#050508';
+    _specCanvas = document.createElement('canvas');
+    _specCanvas.height = 80;
+    _specCanvas.style.cssText = 'width:100%;height:80px;display:block';
+    wrap.appendChild(_specCanvas);
+
+    // Insert before the first child of levelsEl
+    levelsEl.insertBefore(wrap, levelsEl.firstChild);
+    _specCtx = _specCanvas.getContext('2d');
+  }
+
+  function _drawSpectrum(fftData, audioData) {
+    if (!_specCanvas || !_specCtx || !fftData) return;
+
+    const W = _specCanvas.offsetWidth || 240;
+    if (_specCanvas.width !== W) _specCanvas.width = W;
+    const H = 80;
+    const N = fftData.length;
+    const ctx = _specCtx;
+
+    ctx.fillStyle = '#050508';
+    ctx.fillRect(0, 0, W, H);
+
+    if (!_peakHold || _peakHold.length !== W) {
+      _peakHold = new Float32Array(W);
+    }
+
+    // Draw frequency bars
+    const barW = Math.max(1, W / 128);
+    const bins  = 128;
+    const step  = Math.floor(N / bins);
+
+    for (let i = 0; i < bins; i++) {
+      const binVal = fftData[i * step] / 255;
+      const x = i * (W / bins);
+      const h = binVal * H * 0.9;
+
+      // Colour by frequency range
+      let hue;
+      if (i < bins * 0.15)      hue = 0;    // bass — red
+      else if (i < bins * 0.4)  hue = 45;   // mid — amber
+      else                      hue = 160;  // treble — teal
+
+      const brightness = 0.35 + binVal * 0.45;
+      ctx.fillStyle = `hsl(${hue},70%,${Math.round(brightness * 100)}%)`;
+      ctx.fillRect(x, H - h, W / bins - 0.5, h);
+
+      // Peak hold
+      const px = i;
+      if (binVal > (_peakHold[px] || 0)) {
+        _peakHold[px] = binVal;
+      } else {
+        _peakHold[px] = Math.max(0, (_peakHold[px] || 0) - 0.008);
+      }
+      const peakY = H - _peakHold[px] * H * 0.9 - 1;
+      ctx.fillStyle = `hsl(${hue},90%,75%)`;
+      ctx.fillRect(x, peakY, W / bins - 0.5, 1.5);
+    }
+
+    // Overlay beat band markers
+    if (audioData?.isActive) {
+      // Kick region marker
+      const kickX = W * 0.15;
+      ctx.strokeStyle = audioData.isKick ? 'rgba(255,71,87,0.9)' : 'rgba(255,71,87,0.15)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      ctx.beginPath(); ctx.moveTo(kickX, 0); ctx.lineTo(kickX, H); ctx.stroke();
+
+      // Snare region marker
+      const snareX = W * 0.4;
+      ctx.strokeStyle = audioData.isSnare ? 'rgba(255,165,2,0.9)' : 'rgba(255,165,2,0.15)';
+      ctx.beginPath(); ctx.moveTo(snareX, 0); ctx.lineTo(snareX, H); ctx.stroke();
+
+      // Hihat region marker
+      const hihatX = W * 0.75;
+      ctx.strokeStyle = audioData.isHihat ? 'rgba(46,213,115,0.9)' : 'rgba(46,213,115,0.15)';
+      ctx.beginPath(); ctx.moveTo(hihatX, 0); ctx.lineTo(hihatX, H); ctx.stroke();
+      ctx.setLineDash([]);
+
+      // Centroid dot
+      const centX = (audioData.spectralCentroid || 0) * W;
+      ctx.fillStyle = 'rgba(84,160,255,0.8)';
+      ctx.beginPath();
+      ctx.arc(centX, 6, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Labels
+    ctx.fillStyle = 'rgba(255,255,255,0.15)';
+    ctx.font = '7px monospace';
+    ctx.textAlign = 'left';
+    ctx.fillText('KICK', 2, H - 2);
+    ctx.textAlign = 'center';
+    ctx.fillText('MID', W * 0.27, H - 2);
+    ctx.fillText('TREBLE', W * 0.6, H - 2);
+    ctx.textAlign = 'right';
+    ctx.fillText('CENTROID →', W - 2, 10);
+  }
+
   // Called every frame from render loop to update scrubber position
   function tick(audioData) {
-    if (_audio.sourceType !== 'file') return;
+    // Always update spectrum (works for mic, system audio, and file)
+    _ensureSpectrumCanvas();
+    if (audioData?.isActive && _audio._dataArray) {
+      _drawSpectrum(_audio._dataArray, audioData);
+    }
+
+    if (_audio.sourceType !== 'file') {
+      // Still update new VU meters for non-file sources
+      if (audioData?.isActive) _updateNewVUs(audioData);
+      return;
+    }
 
     const pos = _audio.currentTime;
     const dur = _audio.duration;
@@ -222,7 +344,7 @@ const AudioPanel = (() => {
     if (posEl) posEl.textContent = VaelMath.formatTime(pos);
     if (durEl) durEl.textContent = VaelMath.formatTime(dur);
 
-    // Handle loop points — seek back to in-point when we pass out-point
+    // Handle loop points
     if (_audio.loop && _audio.isPlaying && dur > 0 && _loopOut < 1) {
       if (pos >= _loopOut * dur) {
         _audio.seekTo(_loopIn * dur);
@@ -235,6 +357,7 @@ const AudioPanel = (() => {
       _updateVU('mid',    audioData.mid);
       _updateVU('treble', audioData.treble);
       _updateVU('volume', audioData.volume);
+      _updateNewVUs(audioData);
     }
   }
 
@@ -243,6 +366,58 @@ const AudioPanel = (() => {
     const num  = document.getElementById(`vn-${band}`);
     if (fill) fill.style.width = `${Math.round(value * 100)}%`;
     if (num)  num.textContent  = Math.round(value * 100);
+  }
+
+  function _updateNewVUs(ad) {
+    // New signal meters injected into audio-levels-section by _buildNewMeters()
+    const pairs = [
+      ['rms', ad.rms], ['centroid', ad.spectralCentroid],
+      ['flux', ad.spectralFlux], ['kick', ad.kickEnergy],
+      ['snare', ad.snareEnergy], ['hihat', ad.hihatEnergy],
+    ];
+    pairs.forEach(([id, val]) => {
+      const fill = document.getElementById(`vu-new-${id}`);
+      if (fill) fill.style.width = `${Math.min(100, Math.round((val || 0) * 100))}%`;
+    });
+  }
+
+  function _buildNewMeters() {
+    const levelsEl = document.getElementById('audio-levels-section');
+    if (!levelsEl || levelsEl.querySelector('#new-meters')) return;
+
+    const wrap = document.createElement('div');
+    wrap.id = 'new-meters';
+    wrap.style.cssText = 'margin-top:10px;padding-top:10px;border-top:1px solid var(--border-dim)';
+
+    const label = document.createElement('div');
+    label.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px';
+    label.textContent = 'Spectral signals';
+    wrap.appendChild(label);
+
+    const meters = [
+      ['rms',     'RMS',       '#ff9f43'],
+      ['centroid','Centroid',  '#54a0ff'],
+      ['flux',    'Flux',      '#ff6348'],
+      ['kick',    'Kick',      '#ff4757'],
+      ['snare',   'Snare',     '#ffa502'],
+      ['hihat',   'Hi-hat',    '#2ed573'],
+    ];
+
+    meters.forEach(([id, lbl, color]) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:5px';
+      row.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);
+                     min-width:52px;text-align:right">${lbl}</span>
+        <div style="flex:1;height:5px;background:var(--bg);border-radius:2px;overflow:hidden">
+          <div id="vu-new-${id}" style="height:100%;width:0%;background:${color};
+               border-radius:2px;transition:width 0.04s linear"></div>
+        </div>
+      `;
+      wrap.appendChild(row);
+    });
+
+    levelsEl.appendChild(wrap);
   }
 
   return { init, tick };

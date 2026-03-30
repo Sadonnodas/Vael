@@ -34,6 +34,11 @@ class SetlistManager {
     this._pendingPreset = null;
     this._flashLoaded   = false;
 
+    // Auto-thumbnail: when true, captureThumbnail() is called after every
+    // scene switch finishes. Set _captureCanvas to the main canvas element.
+    this.autoCaptureThumbnails = false;
+    this._captureCanvas        = null;
+
     this.onSceneChange = null;
   }
 
@@ -83,6 +88,13 @@ class SetlistManager {
       this._startFade(entry.preset);
     } else {
       this._loadPreset(entry.preset);
+      // Auto-capture for cut transitions (no _finishFade is called)
+      if (this.autoCaptureThumbnails && this._captureCanvas) {
+        setTimeout(() => {
+          this.captureThumbnail(this._captureCanvas, this.currentIndex);
+          if (typeof this.onThumbUpdate === 'function') this.onThumbUpdate(this.currentIndex);
+        }, 200);
+      }
     }
 
     if (typeof this.onSceneChange === 'function') {
@@ -251,6 +263,15 @@ class SetlistManager {
     this._fading       = false;
     this._fadeT        = 0;
     this._flashLoaded  = false;
+
+    // Auto-capture thumbnail after fade completes — small delay lets the
+    // new scene render a frame first so the snapshot isn't black.
+    if (this.autoCaptureThumbnails && this._captureCanvas) {
+      setTimeout(() => {
+        this.captureThumbnail(this._captureCanvas, this.currentIndex);
+        if (typeof this.onThumbUpdate === 'function') this.onThumbUpdate(this.currentIndex);
+      }, 200);
+    }
   }
 
   // ── Direct load (no fade) ────────────────────────────────────

@@ -40,36 +40,10 @@ class ModMatrix {
     this._baseVals = new Map();
   }
 
-  addRoute(config, layer = null) {
+  addRoute(config) {
     const route = new ModRoute(config);
     this.routes.push(route);
-
-    // Capture base values immediately from the layer's current state,
-    // so the resting position is always the value at the moment of wiring —
-    // not whatever it happens to be on the first modulated frame.
-    if (layer) {
-      this._captureBase(route.target, layer);
-    }
-
     return route;
-  }
-
-  /**
-   * Record the layer's current param/transform/opacity value as the base
-   * for a given target, unless a base has already been stored for it.
-   */
-  _captureBase(target, layer) {
-    if (this._baseVals.has(target)) return; // already set — don't overwrite
-
-    if (target.startsWith('transform.')) {
-      const key   = target.slice('transform.'.length);
-      const range = _transformRange(key);
-      this._baseVals.set(target, layer.transform?.[key] ?? range.base);
-    } else if (target === 'opacity') {
-      this._baseVals.set('opacity', layer.opacity ?? 1);
-    } else {
-      this._baseVals.set(target, layer.params?.[target] ?? 0);
-    }
   }
 
   removeRoute(id) {
@@ -162,14 +136,8 @@ class ModMatrix {
     return this.routes.map(r => r.toJSON());
   }
 
-  fromJSON(data, layer = null) {
-    this._baseVals.clear();
+  fromJSON(data) {
     this.routes = (data || []).map(d => new ModRoute(d));
-    // Capture base values from the layer's current state if available,
-    // so restored routes start from the correct resting position.
-    if (layer) {
-      this.routes.forEach(r => this._captureBase(r.target, layer));
-    }
   }
 }
 
@@ -187,17 +155,29 @@ function _transformRange(key) {
 
 // Signal source definitions for UI
 ModMatrix.SOURCES = [
-  { id: 'bass',        label: 'Bass',          group: 'Audio' },
-  { id: 'mid',         label: 'Mid',           group: 'Audio' },
-  { id: 'treble',      label: 'Treble',        group: 'Audio' },
-  { id: 'volume',      label: 'Volume',        group: 'Audio' },
-  { id: 'brightness',  label: 'Brightness',    group: 'Video' },
-  { id: 'motion',      label: 'Motion',        group: 'Video' },
-  { id: 'edgeDensity', label: 'Edge density',  group: 'Video' },
-  { id: 'iTime',       label: 'Time',          group: 'Engine' },
-  { id: 'iBeat',       label: 'Beat pulse',    group: 'Engine' },
-  { id: 'iMouseX',     label: 'Mouse X',       group: 'Engine' },
-  { id: 'iMouseY',     label: 'Mouse Y',       group: 'Engine' },
+  // Audio — broad bands
+  { id: 'bass',             label: 'Bass',               group: 'Audio' },
+  { id: 'mid',              label: 'Mid',                group: 'Audio' },
+  { id: 'treble',           label: 'Treble',             group: 'Audio' },
+  { id: 'volume',           label: 'Volume',             group: 'Audio' },
+  { id: 'rms',              label: 'RMS energy',         group: 'Audio' },
+  // Audio — spectral analysis
+  { id: 'spectralCentroid', label: 'Centroid (brightness)', group: 'Audio' },
+  { id: 'spectralSpread',   label: 'Spectral spread',    group: 'Audio' },
+  { id: 'spectralFlux',     label: 'Flux (transients)',  group: 'Audio' },
+  // Audio — per-band energy
+  { id: 'kickEnergy',       label: 'Kick energy',        group: 'Audio' },
+  { id: 'snareEnergy',      label: 'Snare energy',       group: 'Audio' },
+  { id: 'hihatEnergy',      label: 'Hi-hat energy',      group: 'Audio' },
+  // Video
+  { id: 'brightness',       label: 'Brightness',         group: 'Video' },
+  { id: 'motion',           label: 'Motion',             group: 'Video' },
+  { id: 'edgeDensity',      label: 'Edge density',       group: 'Video' },
+  // Engine
+  { id: 'iTime',            label: 'Time',               group: 'Engine' },
+  { id: 'iBeat',            label: 'Beat pulse',         group: 'Engine' },
+  { id: 'iMouseX',          label: 'Mouse X',            group: 'Engine' },
+  { id: 'iMouseY',          label: 'Mouse Y',            group: 'Engine' },
 ];
 
 // Transform target definitions for the ModMatrix UI
