@@ -177,6 +177,15 @@ const ModMatrixPanel = (() => {
       const depthAbs   = Math.abs(route.depth).toFixed(2);
       const depthColor = route.depth < 0 ? '#ff9070' : color;
 
+      const curveOpts = (typeof ModMatrix !== 'undefined' && ModMatrix.CURVES
+        ? ModMatrix.CURVES
+        : [
+            { id: 'linear', label: 'Lin' }, { id: 'exponential', label: 'Exp' },
+            { id: 'logarithmic', label: 'Log' }, { id: 'scurve', label: 'S' },
+            { id: 'step', label: 'Step' }, { id: 'inverted', label: 'Inv' },
+          ]
+      ).map(c => `<option value="${c.id}" ${(route.curve || 'linear') === c.id ? 'selected' : ''}>${c.label}</option>`).join('');
+
       row.innerHTML = `
         <span style="font-family:var(--font-mono);font-size:8px;font-weight:600;
                      color:${color};min-width:52px">${sourceName}</span>
@@ -184,6 +193,16 @@ const ModMatrixPanel = (() => {
         <span style="font-family:var(--font-mono);font-size:8px;color:var(--text);flex:1">
           ${targetName}
         </span>
+
+        <div style="display:flex;align-items:center;gap:3px">
+          <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim)">curve</span>
+          <select class="mod-curve"
+            style="background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;
+                   color:var(--text-dim);font-family:var(--font-mono);font-size:7px;
+                   padding:1px 3px;cursor:pointer">
+            ${curveOpts}
+          </select>
+        </div>
 
         <div style="display:flex;align-items:center;gap:3px">
           <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim)">depth</span>
@@ -212,6 +231,10 @@ const ModMatrixPanel = (() => {
 
       const depthSlider = row.querySelector('.mod-depth');
       const depthVal    = row.querySelector('.mod-depth-val');
+
+      row.querySelector('.mod-curve').addEventListener('change', e => {
+        route.curve = e.target.value;
+      });
 
       depthSlider.addEventListener('input', () => {
         const v    = parseFloat(depthSlider.value);
@@ -310,6 +333,27 @@ const ModMatrixPanel = (() => {
           style="width:100%;accent-color:var(--accent2)" />
       </div>
 
+      <div style="margin-bottom:10px">
+        <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:3px">
+          Curve shape
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:4px">
+          ${(typeof ModMatrix !== 'undefined' && ModMatrix.CURVES ? ModMatrix.CURVES : [
+            { id:'linear',label:'Linear'}, { id:'exponential',label:'Exponential'},
+            { id:'logarithmic',label:'Logarithmic'}, { id:'scurve',label:'S-curve'},
+            { id:'step',label:'Step 50%'}, { id:'step25',label:'Step 25%'},
+            { id:'inverted',label:'Inverted'},
+          ]).map(c => `
+            <label style="display:flex;align-items:center;gap:3px;cursor:pointer;
+                          font-family:var(--font-mono);font-size:8px;color:var(--text-muted)">
+              <input type="radio" name="mod-curve" value="${c.id}"
+                ${c.id === 'linear' ? 'checked' : ''}
+                style="accent-color:var(--accent)" />
+              ${c.label}
+            </label>`).join('')}
+        </div>
+      </div>
+
       <button id="mod-confirm" class="btn accent" style="width:100%;font-size:9px">Add route</button>
     `;
   }
@@ -328,9 +372,10 @@ const ModMatrixPanel = (() => {
       const target = form.querySelector('#mod-target')?.value;
       const depth  = parseFloat(form.querySelector('#mod-depth-sl')?.value) || 0.5;
       const smooth = parseFloat(form.querySelector('#mod-smooth-sl')?.value) || 0.1;
+      const curve  = form.querySelector('input[name="mod-curve"]:checked')?.value || 'linear';
       if (!source || !target) return;
 
-      layer.modMatrix.addRoute({ source, target, depth, smooth });
+      layer.modMatrix.addRoute({ source, target, depth, smooth, curve });
       form.style.display = 'none';
       _renderRoutes(layer, routeList);
 

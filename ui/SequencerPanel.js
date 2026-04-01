@@ -283,6 +283,62 @@ const SequencerPanel = (() => {
     });
     section.appendChild(resetBtn);
 
+    // Auto-calibrate button
+    const calBtn = document.createElement('button');
+    calBtn.className   = 'btn accent';
+    calBtn.style.cssText = 'width:100%;font-size:9px;margin-top:6px';
+    calBtn.textContent = '⟳ Auto-calibrate (8s)';
+    calBtn.title       = 'Play audio, then click. Listens for 8 seconds and sets thresholds automatically.';
+
+    // Progress bar (hidden until calibrating)
+    const calProgress = document.createElement('div');
+    calProgress.style.cssText = 'display:none;margin-top:6px';
+    calProgress.innerHTML = `
+      <div style="font-family:var(--font-mono);font-size:8px;color:var(--accent2);margin-bottom:4px;text-align:center">
+        Listening… keep audio playing
+      </div>
+      <div style="height:4px;background:var(--bg);border-radius:2px;overflow:hidden">
+        <div class="cal-bar" style="height:100%;width:0%;background:var(--accent2);border-radius:2px;transition:width 0.1s linear"></div>
+      </div>
+    `;
+
+    calBtn.addEventListener('click', () => {
+      if (_beat.isCalibrating) {
+        _beat.cancelCalibration();
+        calBtn.textContent    = '⟳ Auto-calibrate (8s)';
+        calBtn.className      = 'btn accent';
+        calProgress.style.display = 'none';
+        return;
+      }
+
+      calBtn.textContent    = '⏹ Cancel calibration';
+      calBtn.className      = 'btn danger';
+      calProgress.style.display = 'block';
+      const bar = calProgress.querySelector('.cal-bar');
+
+      _beat.startCalibration(
+        8000,
+        (elapsed, total) => {
+          if (bar) bar.style.width = `${Math.min(100, (elapsed / total) * 100).toFixed(1)}%`;
+        },
+        (result) => {
+          calBtn.textContent    = '⟳ Auto-calibrate (8s)';
+          calBtn.className      = 'btn accent';
+          calProgress.style.display = 'none';
+          // Re-render sliders to show updated values
+          _render();
+          Toast.success(
+            `Calibrated — flux: ${result.fluxMult}, kick: ${result.kickMult}, ` +
+            `snare: ${result.snareMult}, hi-hat: ${result.hihatMult} ` +
+            `(${result.samples} samples)`
+          );
+        }
+      );
+    });
+
+    section.appendChild(calBtn);
+    section.appendChild(calProgress);
+
     _container.appendChild(section);
   }
 

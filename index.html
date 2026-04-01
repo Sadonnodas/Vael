@@ -562,13 +562,13 @@
     <!-- Drag handle for resizing sidebar width -->
     <div id="sidebar-resize-handle" title="Drag to resize sidebar"></div>
 
-    <div id="sidebar-header">
+    <div id="sidebar-header" style="position:relative">
       <img id="vael-logo" src="Vael-logo.png" alt="Vael"
         onerror="this.style.display='none';document.getElementById('sidebar-title-fallback').style.display='block'"
         style="
           display: block;
-          margin: 0 auto 4px auto;   /* centered horizontally */
-          height: 52px;              /* ← adjust this to resize */
+          margin: 0 auto 4px auto;
+          height: 52px;
           max-width: 100%;
           object-fit: contain;
         " />
@@ -576,6 +576,14 @@
         <div id="sidebar-title">VAEL</div>
         <div id="sidebar-tagline">Light onto Sound</div>
       </div>
+      <!-- Help button — top-right of header -->
+      <button id="btn-help" title="Help & manual"
+        style="position:absolute;top:10px;right:10px;
+               background:none;border:1px solid var(--border-dim);border-radius:50%;
+               width:22px;height:22px;color:var(--text-dim);font-family:var(--font-mono);
+               font-size:11px;cursor:pointer;display:flex;align-items:center;
+               justify-content:center;transition:border-color 0.15s,color 0.15s;
+               line-height:1">?</button>
     </div>
 
     <div id="sidebar-tabs">
@@ -987,6 +995,27 @@
         <div id="timeline-panel-content"></div>
       </div>
 
+<!-- Help / manual overlay — opened by the ? button in the sidebar header -->
+<div id="help-overlay" style="
+  display:none;position:fixed;inset:0;
+  background:rgba(0,0,0,0.75);z-index:500;
+  backdrop-filter:blur(8px);
+  align-items:flex-start;justify-content:flex-end">
+  <div style="
+    background:var(--bg-mid);border-left:1px solid var(--border);
+    width:380px;height:100vh;overflow:hidden;
+    display:flex;flex-direction:column;">
+    <div style="display:flex;justify-content:space-between;align-items:center;
+                padding:14px 16px;border-bottom:1px solid var(--border-dim);flex-shrink:0">
+      <span style="font-family:var(--font-mono);font-size:10px;
+                   letter-spacing:2px;color:var(--accent)">HELP & MANUAL</span>
+      <button id="help-close" style="background:none;border:none;
+              color:var(--text-dim);cursor:pointer;font-size:16px;line-height:1">✕</button>
+    </div>
+    <div id="help-panel-content" style="flex:1;overflow-y:auto"></div>
+  </div>
+</div>
+
 <!-- Keyboard shortcut help overlay -->
 <div id="shortcut-overlay" style="
   display:none;position:fixed;inset:0;
@@ -1105,6 +1134,7 @@
 <script src="ui/ScenePalette.js"></script>
 <script src="ui/TimelinePanel.js"></script>
 <script src="ui/VaelAssistant.js"></script>
+<script src="ui/HelpPanel.js"></script>
 <script src="ui/App.js"></script>
 
 <style>

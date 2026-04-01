@@ -15,22 +15,24 @@
 
 class ModRoute {
   constructor({ source, target, depth = 0.5, smooth = 0.1,
-                min = null, max = null, invert = false }) {
+                min = null, max = null, invert = false, curve = 'linear' }) {
     this.id      = `mod-${Date.now()}-${Math.random().toString(36).slice(2,5)}`;
     this.source  = source;
     this.target  = target;
     this.depth   = depth;   // -2 to +2 — negative inverts, >1 = extra range
     this.smooth  = smooth;  // 0.01 (slow) – 1.0 (instant)
-    this.min     = min;     // override clamp min (null = use manifest/default)
-    this.max     = max;     // override clamp max (null = use manifest/default)
+    this.min     = min;
+    this.max     = max;
     this.invert  = invert;  // legacy — use negative depth instead
+    this.curve   = curve;   // 'linear' | 'exp' | 'log' | 'scurve' | 'step' | 'invert'
 
     this._smoothed = 0;
   }
 
   toJSON() {
     return { source: this.source, target: this.target, depth: this.depth,
-             smooth: this.smooth, min: this.min, max: this.max, invert: this.invert };
+             smooth: this.smooth, min: this.min, max: this.max,
+             invert: this.invert, curve: this.curve };
   }
 }
 
@@ -73,6 +75,9 @@ class ModMatrix {
       // Smooth per-route
       route._smoothed += (raw - route._smoothed) * Math.min(1, smooth);
 
+      // Apply curve shaping to the smoothed value before multiplying by depth
+      const shaped = _shapeCurve(route._smoothed, route.curve || 'linear');
+
       // Is this a transform target?
       const isTransform = target.startsWith('transform.');
       const transformKey = isTransform ? target.slice('transform.'.length) : null;
@@ -90,7 +95,7 @@ class ModMatrix {
         const pMax = max ?? range.max;
         const r    = pMax - pMin;
 
-        const modValue = base + route._smoothed * depth * r;
+        const modValue = base + shaped * depth * r;
         const clamped  = Math.max(pMin, Math.min(pMax, modValue));
         if (layer.transform) layer.transform[transformKey] = clamped;
 
@@ -102,7 +107,7 @@ class ModMatrix {
         const base     = this._baseVals.get('opacity');
         const pMin     = min ?? 0;
         const pMax     = max ?? 1;
-        const modValue = base + route._smoothed * depth * (pMax - pMin);
+        const modValue = base + shaped * depth * (pMax - pMin);
         layer.opacity  = Math.max(0, Math.min(1, modValue));
 
       } else {
@@ -118,7 +123,7 @@ class ModMatrix {
         const pMax     = max ?? manifest?.max ?? 1;
         const r        = pMax - pMin;
 
-        const modValue = base + route._smoothed * depth * r;
+        const modValue = base + shaped * depth * r;
         layer.params[target] = Math.max(pMin, Math.min(pMax, modValue));
       }
     });
@@ -140,6 +145,55 @@ class ModMatrix {
     this.routes = (data || []).map(d => new ModRoute(d));
   }
 }
+
+// ── Curve shaping ──────────────────────────────────────────────────────────
+// Maps a normalised 0–1 signal through a shaping curve.
+// All inputs and outputs stay in 0–1 range.
+
+function _shapeCurve(v, curve) {
+  switch (curve) {
+    case 'exponential':
+      // Slow start, fast end — good for fades that feel natural
+      return v * v;
+
+    case 'logarithmic':
+      // Fast start, slow end — immediate response that settles gently
+      return Math.sqrt(Math.max(0, v));
+
+    case 'scurve':
+      // Smooth S-curve (cubic ease-in-out) — slow at both ends
+      return v < 0.5
+        ? 2 * v * v
+        : 1 - Math.pow(-2 * v + 2, 2) / 2;
+
+    case 'step':
+      // Binary: 0 below 0.5, 1 above — on/off trigger
+      return v >= 0.5 ? 1 : 0;
+
+    case 'step25':
+      // Fires at quarter-threshold — useful for hi-hats and transients
+      return v >= 0.25 ? 1 : 0;
+
+    case 'inverted':
+      // Signal is flipped: loud = low output, quiet = high output
+      return 1 - v;
+
+    case 'linear':
+    default:
+      return v;
+  }
+}
+
+// Exported curve definitions for UI
+ModMatrix.CURVES = [
+  { id: 'linear',      label: 'Linear',      symbol: '╱'  },
+  { id: 'exponential', label: 'Exponential',  symbol: '⌒'  },
+  { id: 'logarithmic', label: 'Logarithmic',  symbol: '⌣'  },
+  { id: 'scurve',      label: 'S-curve',      symbol: '∫'  },
+  { id: 'step',        label: 'Step (50%)',    symbol: '⌐'  },
+  { id: 'step25',      label: 'Step (25%)',    symbol: '⌐'  },
+  { id: 'inverted',    label: 'Inverted',      symbol: '╲'  },
+];
 
 // Default ranges for transform targets
 function _transformRange(key) {

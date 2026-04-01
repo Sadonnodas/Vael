@@ -98,13 +98,25 @@
 
   window.addEventListener('vael:refresh-params', () => {
     if (!_selectedLayerId) return;
-    const layer = layers.layers.find(l => l.id === _selectedLayerId);
+    const layer = _findLayerAnywhere(_selectedLayerId);
     if (!layer) return;
     if (layer instanceof ImageLayer)  _renderImageLayerPanel(layer, paramsContent);
     else if (layer instanceof ShaderLayer) ShaderPanel.render(layer, paramsContent);
     else if (layer instanceof LyricsLayer) LyricsPanel.render(layer, paramsContent);
     else ParamPanel.render(layer, paramsContent, audio);
   });
+
+  // Searches top-level layers AND group children
+  function _findLayerAnywhere(id) {
+    for (const l of layers.layers) {
+      if (l.id === id) return l;
+      if (l instanceof GroupLayer) {
+        const child = l.children.find(c => c.id === id);
+        if (child) return child;
+      }
+    }
+    return null;
+  }
 
   // ── MathVisualizer restart button ─────────────────────────────
   function _injectMathRestartBtn(layer, container) {
@@ -286,6 +298,16 @@
   window._vaelMidi = midi;
   midi.init().then(() => MidiPanel.init(midi, layers, document.getElementById('midi-panel-content')));
 
+  // MIDI clock sync — override beat detector BPM when external clock is active
+  midi.onClockBpm = (bpm) => {
+    // Sequencer always gets the clock BPM
+    seq.setBpm(bpm);
+    // Refresh MIDI panel to show current BPM
+    MidiPanel.refresh();
+  };
+  midi.onClockStart = () => Toast.info('MIDI clock: started');
+  midi.onClockStop  = () => Toast.info('MIDI clock: stopped');
+
   // ── OSC ──────────────────────────────────────────────────────
   const osc = new OscBridge({ layerStack: layers, setlist, recorder });
   osc.connect('ws://localhost:8080');
@@ -297,6 +319,25 @@
 
   // ── Post FX ──────────────────────────────────────────────────
   PostFXPanel.init(renderer, document.getElementById('fx-panel-content'));
+
+  // Help / manual — triggered by ? button in sidebar header
+  if (typeof HelpPanel !== 'undefined') {
+    HelpPanel.init(document.getElementById('help-panel-content'));
+  }
+  document.getElementById('btn-help')?.addEventListener('click', () => {
+    const ov = document.getElementById('help-overlay');
+    if (ov) ov.style.display = ov.style.display === 'flex' ? 'none' : 'flex';
+  });
+  document.getElementById('help-close')?.addEventListener('click', () => {
+    const ov = document.getElementById('help-overlay');
+    if (ov) ov.style.display = 'none';
+  });
+  // Close on backdrop click
+  document.getElementById('help-overlay')?.addEventListener('click', e => {
+    if (e.target === document.getElementById('help-overlay')) {
+      document.getElementById('help-overlay').style.display = 'none';
+    }
+  });
 
   // ── Library panel ─────────────────────────────────────────────
   LibraryPanel.init({
@@ -396,7 +437,7 @@
   const _origSelectLayer = LayerPanel.selectLayer.bind(LayerPanel);
   LayerPanel.selectLayer = (id) => {
     _origSelectLayer(id);
-    const layer = layers.layers.find(l => l.id === id);
+    const layer = _findLayerAnywhere(id);
     if (layer instanceof MathVisualizer) {
       setTimeout(() => _injectMathRestartBtn(layer, paramsContent), 15);
     }
@@ -499,13 +540,15 @@
     renderer.videoData = video.smoothed;
 
     beat.update(audio.smoothed, audio._dataArray);
+    // MIDI clock overrides beat detector BPM when active
+    const activeBpm = (midi.clockSync && midi.clockBpm > 0) ? midi.clockBpm : beat.bpm;
     audio.smoothed.isBeat     = beat.isBeat;
-    audio.smoothed.bpm        = beat.bpm;
-    audio.smoothed.beat       = beat.beat;       // 1-4: beat within bar
-    audio.smoothed.bar        = beat.bar;         // 1-4: bar within phrase
-    audio.smoothed.phrase     = beat.phrase;      // 1+: current phrase
-    audio.smoothed.isDownbeat = beat.isDownbeat;  // true on beat 1 of bar
-    audio.smoothed.isBarOne   = beat.isBarOne;    // true on bar 1 of phrase
+    audio.smoothed.bpm        = activeBpm;
+    audio.smoothed.beat       = beat.beat;
+    audio.smoothed.bar        = beat.bar;
+    audio.smoothed.phrase     = beat.phrase;
+    audio.smoothed.isDownbeat = beat.isDownbeat;
+    audio.smoothed.isBarOne   = beat.isBarOne;
 
     if (video.smoothed.isActive) {
       audio.smoothed.brightness  = video.smoothed.brightness;
@@ -527,7 +570,7 @@
     }
 
     seq.tick(dt);
-    lfoManager.tick(dt, beat.bpm || seq.bpm, layers, beat.isDownbeat);
+    lfoManager.tick(dt, activeBpm || seq.bpm, layers, beat.isDownbeat);
     setlist.tick(dt);
     perfMode.tick(dt);
     AudioPanel.tick(audio.smoothed);

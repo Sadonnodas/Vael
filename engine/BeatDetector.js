@@ -148,6 +148,14 @@ class BeatDetector {
     this.kickEnergy  = this._lerp(this.kickEnergy,  this._bandEnergy(spectrum, kickStart,  kickEnd),  0.15);
     this.snareEnergy = this._lerp(this.snareEnergy, this._bandEnergy(spectrum, snareStart, snareEnd), 0.15);
     this.hihatEnergy = this._lerp(this.hihatEnergy, this._bandEnergy(spectrum, hihatStart, hihatEnd), 0.15);
+
+    // Feed calibration sample collector if active
+    if (this._calibrating) {
+      const kf = this._bandEnergy(spectrum, kickStart,  kickEnd);
+      const sf = this._bandEnergy(spectrum, snareStart, snareEnd);
+      const hf = this._bandEnergy(spectrum, hihatStart, hihatEnd);
+      this._tickCalibration(flux, kf, sf, hf);
+    }
   }
 
   _detectOnset(history, flux, now, lastBeatMs, minInterval, mult) {
@@ -244,4 +252,118 @@ class BeatDetector {
     this.isDownbeat = this.isBarOne = false;
     this._beatCount = this._barCount = 0;
   }
+
+  /**
+   * Auto-calibration — listens for `durationMs` milliseconds (default 8000),
+   * collects the flux distribution across full-spectrum and per-band histories,
+   * then sets fluxMult and per-band mult thresholds based on the 75th percentile
+   * of observed flux values.
+   *
+   * This makes the detector self-tuning to the current track / room acoustics.
+   *
+   * @param {number}   durationMs   How long to listen (ms). Default 8000.
+   * @param {Function} onProgress   Optional (elapsed, total) callback for a
+   *                                progress bar.
+   * @param {Function} onComplete   Called with { fluxMult, kickMult, snareMult,
+   *                                hihatMult } when done.
+   */
+  startCalibration(durationMs = 8000, onProgress, onComplete) {
+    if (this._calibrating) return;
+
+    this._calibrating     = true;
+    this._calStartMs      = performance.now();
+    this._calDurationMs   = durationMs;
+    this._calFluxSamples  = [];
+    this._calKickSamples  = [];
+    this._calSnareSamples = [];
+    this._calHihatSamples = [];
+    this._calOnProgress   = onProgress;
+    this._calOnComplete   = onComplete;
+
+    // Patch the _detectOnset method temporarily to collect samples
+    // instead of firing beats — we still call update() normally
+    this._calOrigFluxMult = this.fluxMult;
+    // Set fluxMult very high so nothing fires during calibration
+    this.fluxMult = 999;
+    if (this._kick)  this._kick.mult  = 999;
+    if (this._snare) this._snare.mult = 999;
+    if (this._hihat) this._hihat.mult = 999;
+
+    console.log(`BeatDetector: calibrating for ${durationMs / 1000}s…`);
+  }
+
+  /**
+   * Called every frame during calibration to collect flux samples.
+   * BeatDetector.update() calls this automatically when _calibrating is true.
+   */
+  _tickCalibration(fullFlux, kickFlux, snareFlux, hihatFlux) {
+    if (!this._calibrating) return;
+
+    const elapsed = performance.now() - this._calStartMs;
+    if (typeof this._calOnProgress === 'function') {
+      this._calOnProgress(elapsed, this._calDurationMs);
+    }
+
+    // Collect non-zero flux samples
+    if (fullFlux  > 0.0005) this._calFluxSamples.push(fullFlux);
+    if (kickFlux  > 0.0005) this._calKickSamples.push(kickFlux);
+    if (snareFlux > 0.0005) this._calSnareSamples.push(snareFlux);
+    if (hihatFlux > 0.0005) this._calHihatSamples.push(hihatFlux);
+
+    if (elapsed >= this._calDurationMs) {
+      this._finishCalibration();
+    }
+  }
+
+  _finishCalibration() {
+    this._calibrating = false;
+
+    const p75 = arr => {
+      if (!arr.length) return null;
+      const sorted = arr.slice().sort((a, b) => a - b);
+      return sorted[Math.floor(sorted.length * 0.75)];
+    };
+
+    // Set fluxMult to 1.5× the 75th percentile — this catches genuine peaks
+    // while ignoring the constant background noise floor
+    const fullP75  = p75(this._calFluxSamples);
+    const kickP75  = p75(this._calKickSamples);
+    const snareP75 = p75(this._calSnareSamples);
+    const hihatP75 = p75(this._calHihatSamples);
+
+    const MULT = 1.5;  // how far above the noise floor a beat needs to be
+
+    if (fullP75)  this.fluxMult           = Math.max(1.1, Math.min(4.0, fullP75  * MULT * (1 / 0.005)));
+    if (kickP75  && this._kick)  this._kick.mult  = Math.max(1.1, Math.min(4.0, kickP75  * MULT * (1 / 0.005)));
+    if (snareP75 && this._snare) this._snare.mult = Math.max(1.1, Math.min(4.0, snareP75 * MULT * (1 / 0.005)));
+    if (hihatP75 && this._hihat) this._hihat.mult = Math.max(1.1, Math.min(4.0, hihatP75 * MULT * (1 / 0.005)));
+
+    const result = {
+      fluxMult:   parseFloat(this.fluxMult.toFixed(2)),
+      kickMult:   parseFloat((this._kick?.mult  ?? 1.8).toFixed(2)),
+      snareMult:  parseFloat((this._snare?.mult ?? 1.6).toFixed(2)),
+      hihatMult:  parseFloat((this._hihat?.mult ?? 1.7).toFixed(2)),
+      samples:    this._calFluxSamples.length,
+    };
+
+    console.log('BeatDetector: calibration complete', result);
+    if (typeof this._calOnComplete === 'function') this._calOnComplete(result);
+
+    // Clean up temp storage
+    this._calFluxSamples = this._calKickSamples = this._calSnareSamples = this._calHihatSamples = [];
+  }
+
+  cancelCalibration() {
+    if (!this._calibrating) return;
+    this._calibrating = false;
+    // Restore previous values
+    this.fluxMult = this._calOrigFluxMult ?? 1.5;
+    if (this._kick)  this._kick.mult  = 1.8;
+    if (this._snare) this._snare.mult = 1.6;
+    if (this._hihat) this._hihat.mult = 1.7;
+    console.log('BeatDetector: calibration cancelled');
+  }
+
+  get isCalibrating() { return !!this._calibrating; }
 }
+

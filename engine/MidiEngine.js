@@ -20,7 +20,7 @@ class MidiEngine {
     this._layerStack = layerStack;
     this._access     = null;
     this._inputs     = [];
-    this._links      = new Map();   // key: `${ch}-${cc}` → { layerId, paramId, min, max }
+    this._links      = new Map();
 
     // Learn mode state
     this._learning      = false;
@@ -33,10 +33,24 @@ class MidiEngine {
     this.isAvailable    = false;
     this.deviceNames    = [];
 
+    // ── MIDI Clock sync ──────────────────────────────────────────
+    // MIDI clock sends 24 pulses per quarter note (24 PPQ).
+    // We collect timestamps of incoming 0xF8 messages and derive BPM.
+    this.clockSync        = false;   // true = actively syncing to external clock
+    this.clockBpm         = 0;       // current BPM derived from clock
+    this._clockPulses     = [];      // ring buffer of pulse timestamps (ms)
+    this._clockMaxPulses  = 24;      // average over one full beat (24 pulses)
+    this._clockLastMs     = 0;
+    // Fired whenever a new BPM is computed from the clock
+    this.onClockBpm       = null;    // (bpm) → void
+    // Fired on MIDI Start (0xFA) and Stop (0xFC) messages
+    this.onClockStart     = null;
+    this.onClockStop      = null;
+
     // Callbacks
-    this.onLink         = null;   // (link) → void, called when a new link is made
-    this.onMessage      = null;   // (ch, cc, value) → void, raw message
-    this.onDeviceChange = null;   // () → void, devices connected/disconnected
+    this.onLink         = null;
+    this.onMessage      = null;
+    this.onDeviceChange = null;
   }
 
   // ── Init ─────────────────────────────────────────────────────
@@ -85,6 +99,29 @@ class MidiEngine {
 
   _onMessage(event) {
     const [status, data1, data2] = event.data;
+
+    // ── System Real-Time messages (single byte, no channel) ──────
+    // These have status bytes >= 0xF8 and carry no data bytes.
+
+    if (status === 0xF8) {
+      // MIDI Timing Clock — 24 pulses per quarter note
+      this._onClockPulse();
+      return;
+    }
+    if (status === 0xFA) {
+      // MIDI Start
+      this._clockPulses = [];
+      this.clockBpm     = 0;
+      if (typeof this.onClockStart === 'function') this.onClockStart();
+      return;
+    }
+    if (status === 0xFC) {
+      // MIDI Stop
+      this._clockPulses = [];
+      if (typeof this.onClockStop === 'function') this.onClockStop();
+      return;
+    }
+
     const type    = status & 0xf0;
     const channel = status & 0x0f;
 
@@ -92,11 +129,10 @@ class MidiEngine {
     if (type !== 0xb0) return;
 
     const cc    = data1;
-    const value = data2 / 127;   // normalise to 0–1
+    const value = data2 / 127;
 
     if (typeof this.onMessage === 'function') this.onMessage(channel, cc, value);
 
-    // Learn mode — capture first CC movement
     if (this._learning) {
       this._createLink(channel, cc, this._learnLayerId, this._learnParamId,
                        this._learnMin, this._learnMax);
@@ -104,10 +140,44 @@ class MidiEngine {
       return;
     }
 
-    // Apply any existing link
     const key  = `${channel}-${cc}`;
     const link = this._links.get(key);
     if (link) this._applyLink(link, value);
+  }
+
+  _onClockPulse() {
+    const now = performance.now();
+
+    // Ignore pulses that arrive impossibly fast (< 5ms apart = > 2500 BPM)
+    if (now - this._clockLastMs < 5) return;
+
+    this._clockPulses.push(now);
+    this._clockLastMs = now;
+
+    // Keep only the last _clockMaxPulses timestamps
+    if (this._clockPulses.length > this._clockMaxPulses + 1) {
+      this._clockPulses.shift();
+    }
+
+    // Need at least 2 pulses to compute interval
+    if (this._clockPulses.length < 2) return;
+
+    // Average interval across all stored pulses
+    const n = this._clockPulses.length;
+    const totalMs = this._clockPulses[n - 1] - this._clockPulses[0];
+    const avgPulseMs = totalMs / (n - 1);
+
+    // 24 pulses per beat → ms per beat = avgPulseMs * 24
+    const msPerBeat = avgPulseMs * 24;
+    const bpm = Math.round(60000 / msPerBeat);
+
+    // Sanity check: ignore wildly out-of-range values
+    if (bpm < 20 || bpm > 400) return;
+
+    this.clockBpm  = bpm;
+    this.clockSync = true;
+
+    if (typeof this.onClockBpm === 'function') this.onClockBpm(bpm);
   }
 
   // ── Learn mode ───────────────────────────────────────────────

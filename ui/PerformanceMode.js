@@ -626,7 +626,7 @@ class PerformanceMode {
                    color:var(--accent)">SCENE GRID</span>
       <div style="display:flex;align-items:center;gap:16px">
         <span style="font-family:var(--font-mono);font-size:9px;color:rgba(255,255,255,0.25)">
-          Click to load · Double-click to load &amp; close · Esc to close
+          Click to load · Double-click to load &amp; close · Drag to reorder · Esc to close
         </span>
         <button id="sg-close" style="background:none;border:none;color:rgba(255,255,255,0.4);
           cursor:pointer;font-size:20px;line-height:1">✕</button>
@@ -657,13 +657,15 @@ class PerformanceMode {
       const isPending = i === this._pendingScene;
 
       const tile = document.createElement('div');
+      tile.draggable = true;
+      tile.dataset.index = i;
       tile.style.cssText = `
         position: relative;
         border-radius: 8px;
         overflow: hidden;
-        cursor: pointer;
+        cursor: grab;
         border: 2px solid ${isCurrent ? 'var(--accent)' : isPending ? '#ffa502' : 'rgba(255,255,255,0.08)'};
-        transition: border-color 0.15s, transform 0.1s;
+        transition: border-color 0.15s, transform 0.1s, opacity 0.15s;
         background: rgba(255,255,255,0.04);
       `;
 
@@ -702,13 +704,47 @@ class PerformanceMode {
       `;
       tile.appendChild(label);
 
+      // Drag-to-reorder
+      tile.addEventListener('dragstart', e => {
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', String(i));
+        tile.style.opacity = '0.4';
+        tile.style.cursor  = 'grabbing';
+      });
+      tile.addEventListener('dragend', () => {
+        tile.style.opacity = '1';
+        tile.style.cursor  = 'grab';
+        // Remove all drop-over highlights
+        tileGrid.querySelectorAll('[data-index]').forEach(t => {
+          t.style.outline = 'none';
+        });
+      });
+      tile.addEventListener('dragover', e => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        tile.style.outline = '2px solid rgba(0,212,170,0.7)';
+      });
+      tile.addEventListener('dragleave', () => {
+        tile.style.outline = 'none';
+      });
+      tile.addEventListener('drop', e => {
+        e.preventDefault();
+        tile.style.outline = 'none';
+        const fromIndex = parseInt(e.dataTransfer.getData('text/plain'));
+        const toIndex   = i;
+        if (fromIndex === toIndex || isNaN(fromIndex)) return;
+        this._setlist.moveEntry(fromIndex, toIndex);
+        this._renderSceneGrid();
+        Toast.info(`Moved scene to position ${toIndex + 1}`);
+      });
+
       // Hover
       tile.addEventListener('mouseenter', () => {
-        tile.style.transform = 'scale(1.03)';
+        if (!tile.dragging) tile.style.transform = 'scale(1.03)';
         tile.style.borderColor = isCurrent ? 'var(--accent)' : 'rgba(255,255,255,0.3)';
       });
       tile.addEventListener('mouseleave', () => {
-        tile.style.transform = 'scale(1)';
+        tile.style.transform  = 'scale(1)';
         tile.style.borderColor = isCurrent ? 'var(--accent)' : isPending ? '#ffa502' : 'rgba(255,255,255,0.08)';
       });
 

@@ -210,6 +210,7 @@ const LayerPanel = (() => {
       // Drag-to-reorder
       row.addEventListener('dragstart', e => {
         e.dataTransfer.setData('text/plain', layer.id);
+        e.dataTransfer.setData('vael/layer-id', layer.id);
         setTimeout(() => { row.style.opacity = '0.4'; }, 0);
       });
       row.addEventListener('dragend', () => { row.style.opacity = '1'; });
@@ -772,68 +773,199 @@ const LayerPanel = (() => {
 
       _layerListEl.appendChild(row);
 
-      // If this is a group and not collapsed, show children indented
-      if (layer instanceof GroupLayer && !layer.collapsed && layer.children.length > 0) {
-        layer.children.slice().reverse().forEach(child => {
+      // ── Group children — expanded view ──────────────────────
+      if (layer instanceof GroupLayer && !layer.collapsed) {
+        // Drop zone: drag a top-level layer here to add it to the group
+        const dropZone = document.createElement('div');
+        dropZone.style.cssText = `
+          margin-left: 12px;
+          margin-bottom: 3px;
+          border: 1px dashed var(--border-dim);
+          border-radius: 4px;
+          padding: 4px 8px;
+          font-family: var(--font-mono);
+          font-size: 8px;
+          color: var(--text-dim);
+          text-align: center;
+          transition: border-color 0.15s, color 0.15s;
+        `;
+        dropZone.textContent = '↓ drag a layer here to add to group';
+        dropZone.addEventListener('dragover', e => {
+          e.preventDefault();
+          dropZone.style.borderColor = 'var(--accent)';
+          dropZone.style.color       = 'var(--accent)';
+        });
+        dropZone.addEventListener('dragleave', () => {
+          dropZone.style.borderColor = 'var(--border-dim)';
+          dropZone.style.color       = 'var(--text-dim)';
+        });
+        dropZone.addEventListener('drop', e => {
+          e.preventDefault();
+          dropZone.style.borderColor = 'var(--border-dim)';
+          dropZone.style.color       = 'var(--text-dim)';
+          const draggedId = e.dataTransfer.getData('vael/layer-id');
+          if (!draggedId || draggedId === layer.id) return;
+          const dragged = _layers.layers.find(l => l.id === draggedId);
+          if (!dragged || dragged instanceof GroupLayer) {
+            Toast.warn('Cannot nest groups'); return;
+          }
+          _layers.layers.splice(_layers.layers.indexOf(dragged), 1);
+          layer.addChild(dragged);
+          _layers._notify();
+          Toast.success(`${dragged.name} added to ${layer.name}`);
+        });
+        _layerListEl.appendChild(dropZone);
+
+        // Child rows
+        layer.children.slice().reverse().forEach((child, revIdx) => {
+          const childIdx = layer.children.length - 1 - revIdx;
           const childRow = document.createElement('div');
+          childRow.draggable = true;
+          childRow.dataset.childId    = child.id;
+          childRow.dataset.childIndex = childIdx;
           childRow.style.cssText = `
             background: var(--bg);
             border: 1px solid var(--border-dim);
             border-left: 2px solid var(--accent2);
             border-radius: 4px;
-            padding: 5px 8px 5px 20px;
+            padding: 5px 8px 5px 16px;
             margin-bottom: 3px;
             margin-left: 12px;
             display: flex;
             align-items: center;
             gap: 8px;
+            cursor: grab;
+            transition: opacity 0.15s, border-color 0.1s;
           `;
+
+          const isSelected = child.id === _selectedLayerId;
           childRow.innerHTML = `
             <button class="child-vis" style="background:none;border:none;cursor:pointer;
                     font-size:11px;color:${child.visible ? 'var(--accent2)' : 'var(--text-dim)'}">
               ${child.visible ? '◉' : '○'}
             </button>
-            <span style="flex:1;font-family:var(--font-mono);font-size:9px;
-                         color:var(--text-muted);cursor:pointer" class="child-name">
+            <span class="child-name" style="flex:1;font-family:var(--font-mono);font-size:9px;
+                   color:${isSelected ? 'var(--accent)' : 'var(--text-muted)'};cursor:pointer;
+                   overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
               ${child.name}
             </span>
             <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
               ${Math.round((child.opacity ?? 1) * 100)}%
             </span>
+            <button class="child-move-up" title="Move up within group"
+              style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:9px;padding:0 2px">↑</button>
+            <button class="child-move-down" title="Move down within group"
+              style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:9px;padding:0 2px">↓</button>
             <button class="child-eject" title="Move out of group"
-              style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:9px">
-              ↑
-            </button>
+              style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:9px;padding:0 2px">⇥</button>
           `;
 
-          childRow.querySelector('.child-vis').addEventListener('click', e => {
-            e.stopPropagation();
-            child.visible = !child.visible;
-            e.target.style.color   = child.visible ? 'var(--accent2)' : 'var(--text-dim)';
-            e.target.textContent   = child.visible ? '◉' : '○';
+          // Drag to reorder within group
+          childRow.addEventListener('dragstart', e => {
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('vael/child-id', child.id);
+            e.dataTransfer.setData('vael/child-group', layer.id);
+            childRow.style.opacity = '0.4';
           });
+          childRow.addEventListener('dragend', () => {
+            childRow.style.opacity = '1';
+          });
+          childRow.addEventListener('dragover', e => {
+            e.preventDefault();
+            childRow.style.borderColor = 'var(--accent2)';
+          });
+          childRow.addEventListener('dragleave', () => {
+            childRow.style.borderColor = 'var(--border-dim)';
+          });
+          childRow.addEventListener('drop', e => {
+            e.preventDefault();
+            childRow.style.borderColor = 'var(--border-dim)';
+            const fromId      = e.dataTransfer.getData('vael/child-id');
+            const fromGroupId = e.dataTransfer.getData('vael/child-group');
+            if (!fromId || fromId === child.id) return;
 
-          childRow.querySelector('.child-name').addEventListener('click', () => {
-            selectLayer(child.id);
-            // Temporarily add child to layers so selectLayer can find it
-            if (!_layers.layers.find(l => l.id === child.id)) {
-              _layers.layers.push(child);
-              selectLayer(child.id);
-              _layers.layers.pop();
+            if (fromGroupId === layer.id) {
+              // Reorder within same group
+              const fromIdx = layer.children.findIndex(c => c.id === fromId);
+              const toIdx   = childIdx;
+              if (fromIdx === -1 || fromIdx === toIdx) return;
+              const [moved] = layer.children.splice(fromIdx, 1);
+              layer.children.splice(toIdx, 0, moved);
+              _layers._notify();
             }
           });
 
+          // Visibility toggle
+          childRow.querySelector('.child-vis').addEventListener('click', e => {
+            e.stopPropagation();
+            child.visible = !child.visible;
+            e.target.style.color = child.visible ? 'var(--accent2)' : 'var(--text-dim)';
+            e.target.textContent = child.visible ? '◉' : '○';
+          });
+
+          // Select child — opens its params
+          childRow.querySelector('.child-name').addEventListener('click', () => {
+            _selectedLayerId = child.id;
+            // Temporarily surface child so selectLayer can find it
+            const alreadyInStack = _layers.layers.find(l => l.id === child.id);
+            if (!alreadyInStack) {
+              _layers.layers.push(child);
+              selectLayer(child.id);
+              _layers.layers.pop();
+            } else {
+              selectLayer(child.id);
+            }
+            renderLayerList(); // refresh to show selection highlight
+          });
+
+          // Move up within group
+          childRow.querySelector('.child-move-up').addEventListener('click', e => {
+            e.stopPropagation();
+            if (childIdx < layer.children.length - 1) {
+              [layer.children[childIdx], layer.children[childIdx + 1]] =
+              [layer.children[childIdx + 1], layer.children[childIdx]];
+              _layers._notify();
+            }
+          });
+
+          // Move down within group
+          childRow.querySelector('.child-move-down').addEventListener('click', e => {
+            e.stopPropagation();
+            if (childIdx > 0) {
+              [layer.children[childIdx], layer.children[childIdx - 1]] =
+              [layer.children[childIdx - 1], layer.children[childIdx]];
+              _layers._notify();
+            }
+          });
+
+          // Eject from group
           childRow.querySelector('.child-eject').addEventListener('click', e => {
             e.stopPropagation();
             layer.removeChild(child.id);
             const groupIdx = _layers.layers.indexOf(layer);
             _layers.layers.splice(groupIdx + 1, 0, child);
             _layers._notify();
-            Toast.info(`${child.name} moved out of group`);
+            Toast.info(`${child.name} moved out of ${layer.name}`);
           });
 
           _layerListEl.appendChild(childRow);
         });
+
+        // Empty group hint
+        if (layer.children.length === 0) {
+          const hint = document.createElement('div');
+          hint.style.cssText = `
+            margin-left: 12px;
+            margin-bottom: 3px;
+            padding: 6px 8px;
+            font-family: var(--font-mono);
+            font-size: 8px;
+            color: var(--text-dim);
+            text-align: center;
+          `;
+          hint.textContent = 'Group is empty — drag layers here';
+          _layerListEl.appendChild(hint);
+        }
       }
     });
   }

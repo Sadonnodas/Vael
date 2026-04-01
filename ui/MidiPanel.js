@@ -70,6 +70,38 @@ const MidiPanel = (() => {
     `;
     _container.appendChild(devSection);
 
+    // Clock sync section
+    const clockSection = document.createElement('div');
+    clockSection.style.marginBottom = '14px';
+    const clockActive = _midi.clockSync && _midi.clockBpm > 0;
+    clockSection.innerHTML = `
+      <div class="section-label">MIDI Clock Sync</div>
+      <p style="font-size:10px;color:var(--text-muted);line-height:1.6;margin-bottom:10px">
+        Receive MIDI clock from a DAW or drum machine. Overrides the beat detector BPM when active.
+      </p>
+      <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;
+                  background:var(--bg-card);border:1px solid var(--border-dim);
+                  border-radius:5px;margin-bottom:8px">
+        <div class="status-dot ${clockActive ? '' : 'inactive'}"></div>
+        <span style="font-family:var(--font-mono);font-size:10px;color:var(--text);flex:1">
+          ${clockActive ? `Synced — ${_midi.clockBpm} BPM` : 'Waiting for clock signal…'}
+        </span>
+        ${clockActive ? `<span style="font-family:var(--font-mono);font-size:9px;color:var(--accent)">${_midi.clockBpm} BPM</span>` : ''}
+      </div>
+      <button id="btn-clock-reset" class="btn" style="width:100%;font-size:9px;color:var(--text-dim)">
+        Reset clock sync
+      </button>
+    `;
+    _container.appendChild(clockSection);
+
+    clockSection.querySelector('#btn-clock-reset')?.addEventListener('click', () => {
+      _midi.clockSync    = false;
+      _midi.clockBpm     = 0;
+      _midi._clockPulses = [];
+      refresh();
+      Toast.info('MIDI clock sync reset');
+    });
+
     // Learn mode section
     const learnSection = document.createElement('div');
     learnSection.style.marginBottom = '14px';
