@@ -12,54 +12,69 @@
  */
 
 class LFO {
+
+  /**
+   * Convert a musical division string to beats (quarter notes).
+   * '1/32'=0.125, '1/16'=0.25, '1/8'=0.5, '1/4'=1, '1/2'=2,
+   * '1'=4, '2'=8, '4'=16
+   */
+  static divisionToBeats(div) {
+    const map = {
+      '1/32': 0.125, '1/16': 0.25, '1/8': 0.5, '1/4': 1,
+      '1/2': 2, '1': 4, '2': 8, '4': 16,
+    };
+    return map[div] ?? 4; // default to 1 bar (4 beats)
+  }
   constructor({ layerId, paramId, shape = 'sine', rate = 1.0,
-                depth = 0.5, offset = 0, bipolar = false,
-                syncToBpm = false, division = '1/4' }) {
+                depth = 0.5, offset = 0, bipolar = false, syncToBpm = false,
+                division = null }) {
     this.id        = `lfo-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
     this.layerId   = layerId;
     this.paramId   = paramId;
     this.shape     = shape;
-    this.rate      = rate;       // Hz (when syncToBpm=false)
+    this.division  = division;   // store the musical division string for UI display
+    this.syncToBpm = syncToBpm;
+
+    // When syncing to BPM, rate = beats per cycle.
+    // If a division string is given, convert it to beats.
+    // '1/4' = 1 beat (quarter note), '1/2' = 2 beats, '1' = 4 beats (1 bar), etc.
+    if (syncToBpm && division) {
+      this.rate = LFO.divisionToBeats(division);
+    } else {
+      this.rate = rate;
+    }
+
     this.depth     = depth;
     this.offset    = offset;
     this.bipolar   = bipolar;
-    this.syncToBpm = syncToBpm;
-    // Musical division (used when syncToBpm=true).
-    // Replaces the raw 'rate in beats' approach with a human-readable value.
-    // Supported: '1/32','1/16','1/8','1/4','1/2','1','2','4'
-    this.division  = division;
 
-    this._phase     = 0;
-    this._prevRand  = Math.random();
-    this._nextRand  = Math.random();
-    this._prevIsDownbeat = false;  // for downbeat phase-reset detection
+    this._phase    = 0;
+    this._prevRand = Math.random();
+    this._nextRand = Math.random();
+    this._randPhase = 0;
 
+    // Store the original param value so we can restore it if LFO is removed
     this._originalValue = null;
   }
 
-  // Musical division → beats-per-cycle lookup
-  static DIVISIONS = {
-    '1/32': 1/32, '1/16': 1/16, '1/8': 1/8, '1/4': 1/4,
-    '1/2':  1/2,  '1':    1,    '2':   2,    '4':   4,
-  };
-
-  tick(dt, bpm, isDownbeat) {
-    // Phase reset on downbeat when BPM-synced
-    if (this.syncToBpm && isDownbeat && !this._prevIsDownbeat) {
-      this._phase = 0;
-    }
-    this._prevIsDownbeat = !!isDownbeat;
-
+  /**
+   * Advance the LFO and return the current output value.
+   * @param {number} dt   delta time in seconds
+   * @param {number} bpm  current BPM (used if syncToBpm)
+   * @returns {number}    modulated value
+   */
+  tick(dt, bpm) {
+    // Advance phase
     let rateHz = this.rate;
     if (this.syncToBpm && bpm > 0) {
-      // division = beats per cycle → Hz = (bpm/60) / beatsPerCycle
-      const beatsPerCycle = LFO.DIVISIONS[this.division] ?? (1 / (this.rate || 1));
-      rateHz = (bpm / 60) / beatsPerCycle;
+      // rate in beats → convert to Hz
+      rateHz = (bpm / 60) / this.rate;
     }
 
     this._phase += rateHz * dt;
     if (this._phase >= 1) {
       this._phase -= Math.floor(this._phase);
+      // Update random targets on each cycle
       this._prevRand = this._nextRand;
       this._nextRand = Math.random();
     }
@@ -105,7 +120,6 @@ class LFO {
       id: this.id, layerId: this.layerId, paramId: this.paramId,
       shape: this.shape, rate: this.rate, depth: this.depth,
       offset: this.offset, bipolar: this.bipolar, syncToBpm: this.syncToBpm,
-      division: this.division,
     };
   }
 }
@@ -130,12 +144,12 @@ class LFOManager {
 
   clear() { this.lfos = []; }
 
-  tick(dt, bpm, layerStack, isDownbeat) {
+  tick(dt, bpm, layerStack) {
     if (!layerStack) return;
     this.lfos.forEach(lfo => {
       const layer = layerStack.layers.find(l => l.id === lfo.layerId);
       if (!layer) return;
-      const value = lfo.tick(dt, bpm, isDownbeat);
+      const value = lfo.tick(dt, bpm);
 
       if (lfo.paramId === 'opacity') {
         // Special: opacity lives on layer directly, not in layer.params

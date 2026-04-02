@@ -85,6 +85,35 @@ const VideoPanel = (() => {
     _loopIn = 0; _loopOut = 1;
     _updateLoopPointUI();
 
+    // Show video metadata once the video element has loaded
+    const metaEl = document.getElementById('video-meta');
+    if (metaEl && _video.videoElement) {
+      const showMeta = () => {
+        const el  = _video.videoElement;
+        const dur = el.duration || 0;
+        const mins = Math.floor(dur / 60);
+        const secs = (dur % 60).toFixed(1);
+        const w   = el.videoWidth  || 0;
+        const h   = el.videoHeight || 0;
+        const sizeStr = (() => {
+          const kb = file.size / 1024;
+          return kb < 1024 ? `${kb.toFixed(0)} KB` : `${(kb/1024).toFixed(1)} MB`;
+        })();
+        const rows = [
+          `Duration: ${mins}:${secs.padStart(4,'0')}`,
+          w && h ? `Resolution: ${w}×${h}` : null,
+          `File size: ${sizeStr}`,
+        ].filter(Boolean);
+        metaEl.innerHTML  = rows.join('&emsp;·&emsp;');
+        metaEl.style.display = 'block';
+      };
+      if (_video.videoElement.readyState >= 1) {
+        showMeta();
+      } else {
+        _video.videoElement.addEventListener('loadedmetadata', showMeta, { once: true });
+      }
+    }
+
     // Update any VideoPlayerLayer using the legacy single-video path
     _layers.layers.forEach(l => {
       if (l instanceof VideoPlayerLayer) l.setVideoElement(_video.videoElement);

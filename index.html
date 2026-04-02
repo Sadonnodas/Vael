@@ -548,6 +548,12 @@
           <div class="status-dot inactive" id="dot-video"></div>
           <span id="label-video">No video</span>
         </div>
+        <!-- Recording indicator — shown only while recording -->
+        <div id="status-rec-indicator" style="display:none;align-items:center;gap:5px">
+          <div style="width:7px;height:7px;border-radius:50%;background:#ff4444;
+                      animation:pulse 1s ease-in-out infinite"></div>
+          <span id="status-rec-time" style="color:#ff6666;font-family:var(--font-mono);font-size:10px">REC 0:00</span>
+        </div>
       </div>
       <div id="status-right">
         <span id="label-fps">-- fps</span>
@@ -700,6 +706,13 @@
 
           <div id="audio-transport" style="display:none">
             <div class="file-name" id="audio-filename"></div>
+            <!-- Audio file metadata -->
+            <div id="audio-meta" style="
+              display:none;font-family:var(--font-mono);font-size:8px;
+              color:var(--text-dim);background:var(--bg-card);
+              border:1px solid var(--border-dim);border-radius:4px;
+              padding:5px 8px;margin-bottom:6px;line-height:1.8;
+            "></div>
             <div class="scrubber" style="margin-bottom:8px;position:relative">
               <button class="play-btn" id="btn-audio-play">▶</button>
               <span class="scrubber-time" id="audio-pos">0:00</span>
@@ -773,6 +786,20 @@
           </div>
         </div>
 
+        <div class="section">
+          <div class="section-label">Playback speed</div>
+          <div class="slider-field">
+            <div class="slider-header">
+              <span class="slider-label">Rate</span>
+              <span class="slider-value" id="val-playback-rate">1.00×</span>
+            </div>
+            <input type="range" id="sl-playback-rate" min="0.25" max="2" step="0.05" value="1" />
+          </div>
+          <p style="font-size:9px;color:var(--text-dim);margin-top:4px;line-height:1.5">
+            0.5× = half speed · 1.0× = normal · 2.0× = double speed
+          </p>
+        </div>
+
       </div>
 
       <!-- VIDEO TAB -->
@@ -797,6 +824,13 @@
 
           <div id="video-transport" style="display:none">
             <div class="file-name" id="video-filename"></div>
+            <!-- Video file metadata -->
+            <div id="video-meta" style="
+              display:none;font-family:var(--font-mono);font-size:8px;
+              color:var(--text-dim);background:var(--bg-card);
+              border:1px solid var(--border-dim);border-radius:4px;
+              padding:5px 8px;margin-bottom:6px;line-height:1.8;
+            "></div>
             <div class="scrubber" style="margin-bottom:8px;">
               <button class="play-btn" id="btn-video-play" style="
                 background: color-mix(in srgb, var(--accent2) 15%, transparent);
@@ -889,7 +923,7 @@
         <div class="section">
           <div class="section-label">Quick record</div>
           <p style="font-size:10px;color:var(--text-muted);line-height:1.6;margin-bottom:10px">
-            Loads audio, hits record, and stops automatically when the song ends.
+            Loads audio, hits record, and stops automatically when the song ends. Records video + audio together.
           </p>
           <button class="btn accent" id="btn-rec-quick" style="width:100%;margin-bottom:8px;height:40px;font-size:11px">
             ⚡ Record this song
@@ -906,23 +940,34 @@
             <button class="btn" id="btn-rec-start" style="width:100%;margin-bottom:6px;">
               ⏺ Start recording
             </button>
+            <div id="rec-audio-indicator" style="
+              display:flex;align-items:center;font-family:var(--font-mono);
+              font-size:9px;color:var(--text-dim);margin-top:6px;line-height:1.6">
+              🔇 No audio playing — output will be video only
+            </div>
+            <p style="font-size:9px;color:var(--text-dim);margin-top:4px;line-height:1.6">
+              Audio will be captured automatically if audio is playing. Exports as .webm — convert to MP4 with: <span style="color:var(--accent2)">ffmpeg -i recording.webm output.mp4</span>
+            </p>
           </div>
 
           <div id="rec-active" style="display:none">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
-              <div class="status-dot" style="background:#ff4444"></div>
+              <div class="status-dot" style="background:#ff4444;animation:pulse 1s ease-in-out infinite"></div>
               <span style="font-family:var(--font-mono);font-size:11px;color:#ff6666" id="rec-timer">0:00</span>
-              <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim)">recording</span>
+              <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim)">recording — switch tabs freely</span>
             </div>
-            <button class="btn danger" id="btn-rec-stop" style="width:100%">⏹ Stop</button>
+            <button class="btn danger" id="btn-rec-stop" style="width:100%">⏹ Stop & save</button>
           </div>
 
           <div id="rec-done" style="display:none">
             <div style="font-family:var(--font-mono);font-size:10px;color:var(--text-muted);margin-bottom:10px;" id="rec-info"></div>
             <div class="btn-row">
-              <button class="btn accent" id="btn-rec-download">↓ Download</button>
+              <button class="btn accent" id="btn-rec-download">↓ Download .webm</button>
               <button class="btn" id="btn-rec-discard">✕ Discard</button>
             </div>
+            <p style="font-size:9px;color:var(--text-dim);margin-top:8px;line-height:1.6">
+              To convert to MP4: <span style="color:var(--accent2)">ffmpeg -i recording.webm output.mp4</span>
+            </p>
           </div>
         </div>
 
@@ -994,6 +1039,21 @@
       <div class="tab-panel" id="tab-timeline">
         <div id="timeline-panel-content"></div>
       </div>
+
+<!-- Floating stop-recording button — visible from any tab while recording -->
+<div id="rec-float-stop" style="
+  display:none;position:fixed;bottom:28px;left:50%;transform:translateX(-50%);
+  background:#ff4444;border:none;border-radius:24px;
+  color:#fff;font-family:var(--font-mono);font-size:11px;font-weight:600;
+  padding:10px 22px;cursor:pointer;z-index:450;
+  box-shadow:0 4px 20px rgba(255,68,68,0.5);
+  display:none;align-items:center;gap:8px;letter-spacing:0.5px;
+  animation:pulse 2s ease-in-out infinite;
+">
+  <span style="width:8px;height:8px;border-radius:50%;background:#fff;display:inline-block"></span>
+  <span id="rec-float-time">0:00</span>
+  <span>— click to stop recording</span>
+</div>
 
 <!-- Help / manual overlay — opened by the ? button in the sidebar header -->
 <div id="help-overlay" style="
@@ -1135,6 +1195,7 @@
 <script src="ui/TimelinePanel.js"></script>
 <script src="ui/VaelAssistant.js"></script>
 <script src="ui/HelpPanel.js"></script>
+<script src="layers/SlideshowLayer.js"></script>
 <script src="ui/App.js"></script>
 
 <style>

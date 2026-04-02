@@ -27,6 +27,16 @@ class BaseLayer {
     // Per-layer transform
     this.transform = { x: 0, y: 0, scaleX: 1.0, scaleY: 1.0, rotation: 0 };
 
+    // Per-layer clip shape — clips the layer to a rectangle or ellipse
+    // before compositing. null = no clip (full canvas).
+    // { type: 'none'|'rect'|'ellipse', w: 0–1, h: 0–1, feather: 0–1 }
+    // w and h are fractions of the canvas half-dimensions (1.0 = full canvas).
+    this.clipShape = null;
+
+    // Param update mode — true = soft/incremental (no full reset on param change)
+    // false = instant (full reinitialise on every param change, old behaviour)
+    this.softUpdate = true;
+
     // Per-layer FX chain
     this.fx = [];
 
@@ -65,6 +75,8 @@ class BaseLayer {
       maskLayerId: this.maskLayerId || null,
       maskMode:    this.maskMode    || 'luminance',
       transform:   { ...this.transform },
+      clipShape:   this.clipShape ? { ...this.clipShape } : null,
+      softUpdate:  this.softUpdate,
       fx:          this.fx ? this.fx.map(f => ({ ...f, params: { ...f.params } })) : [],
       modMatrix:   this.modMatrix?.toJSON() || [],
     };

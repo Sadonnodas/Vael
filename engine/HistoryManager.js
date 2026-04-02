@@ -56,6 +56,19 @@ class HistoryManager {
     const entry = {
       id:        `h-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
       label,
+      category:  label.startsWith('Changed ') ? 'param'
+                : label.startsWith('Layer ')   ? 'layer'
+                : label.startsWith('Transform')? 'transform'
+                : label.startsWith('Opacity')  ? 'opacity'
+                : label.startsWith('Blend')    ? 'blend'
+                : label.startsWith('Visible')  ? 'visibility'
+                : label.startsWith('Solo')     ? 'solo'
+                : label.startsWith('Renamed')  ? 'rename'
+                : label.startsWith('Added')    ? 'layer'
+                : label.startsWith('Removed')  ? 'layer'
+                : label.startsWith('Resumed')  ? 'preset'
+                : label.startsWith('Load')     ? 'preset'
+                : 'other',
       timestamp: Date.now(),
       state,
     };
@@ -83,6 +96,45 @@ class HistoryManager {
     this._debounceTimer = setTimeout(() => {
       this.snapshot(this._debounceLabel);
     }, this._debounceMs);
+  }
+
+  onTransformChange(layer) {
+    this._debounceLabel = `Transform · ${layer?.name ?? ''}`;
+    clearTimeout(this._debounceTimer);
+    this._debounceTimer = setTimeout(() => {
+      this.snapshot(this._debounceLabel);
+    }, this._debounceMs);
+  }
+
+  onOpacityChange(layer, value) {
+    clearTimeout(this._debounceTimer);
+    this._debounceTimer = setTimeout(() => {
+      this.snapshot(`Opacity · ${layer?.name ?? ''} → ${Math.round(value * 100)}%`);
+    }, this._debounceMs);
+  }
+
+  onBlendChange(layer, mode) {
+    this.snapshot(`Blend · ${layer?.name ?? ''} → ${mode}`);
+  }
+
+  onVisibilityChange(layer, visible) {
+    this.snapshot(`Visible · ${layer?.name ?? ''} → ${visible ? 'shown' : 'hidden'}`);
+  }
+
+  onSoloChange(layer, soloed) {
+    this.snapshot(`Solo · ${layer?.name ?? ''} → ${soloed ? 'on' : 'off'}`);
+  }
+
+  onLayerAdded(layerName) {
+    this.snapshot(`Added layer: ${layerName}`);
+  }
+
+  onLayerRemoved(layerName) {
+    this.snapshot(`Removed layer: ${layerName}`);
+  }
+
+  onLayerRenamed(oldName, newName) {
+    this.snapshot(`Renamed: ${oldName} → ${newName}`);
   }
 
   // ── State capture ─────────────────────────────────────────────
@@ -195,11 +247,12 @@ class HistoryManager {
 
   _renderPanel() {
     if (!this._container) return;
+    if (!this._filter) this._filter = 'all';
     this._container.innerHTML = '';
 
-    // Header row
+    // ── Header row ──────────────────────────────────────────────
     const header = document.createElement('div');
-    header.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:12px';
+    header.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
     header.innerHTML = `
       <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);
                    text-transform:uppercase;letter-spacing:1px;flex:1">
@@ -215,20 +268,61 @@ class HistoryManager {
                font-size:8px;padding:2px 7px">Redo →</button>
     `;
     this._container.appendChild(header);
-
     header.querySelector('#hist-undo').addEventListener('click', () => this.undo());
     header.querySelector('#hist-redo').addEventListener('click', () => this.redo());
 
-    if (this._entries.length === 0) {
+    // ── Filter row ───────────────────────────────────────────────
+    const CATS = [
+      { id: 'all',        label: 'All'    },
+      { id: 'param',      label: 'Params' },
+      { id: 'layer',      label: 'Layers' },
+      { id: 'transform',  label: 'Xform'  },
+      { id: 'opacity',    label: 'Opacity'},
+      { id: 'blend',      label: 'Blend'  },
+      { id: 'visibility', label: 'Vis'    },
+      { id: 'preset',     label: 'Preset' },
+    ];
+    const filterRow = document.createElement('div');
+    filterRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:3px;margin-bottom:8px';
+    CATS.forEach(cat => {
+      const btn = document.createElement('button');
+      const active = this._filter === cat.id;
+      btn.style.cssText = `background:${active?'var(--accent)':'none'};border:1px solid ${active?'var(--accent)':'var(--border-dim)'};border-radius:3px;color:${active?'var(--bg)':'var(--text-dim)'};font-family:var(--font-mono);font-size:7px;padding:2px 6px;cursor:pointer`;
+      btn.textContent = cat.label;
+      btn.addEventListener('click', () => { this._filter = cat.id; this._renderPanel(); });
+      filterRow.appendChild(btn);
+    });
+
+    // Search box
+    const searchIn = document.createElement('input');
+    searchIn.type = 'text';
+    searchIn.placeholder = 'Search…';
+    searchIn.value = this._search || '';
+    searchIn.style.cssText = 'flex:1;min-width:80px;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:8px;padding:2px 6px';
+    searchIn.addEventListener('input', e => { this._search = e.target.value; this._renderPanel(); });
+    filterRow.appendChild(searchIn);
+    this._container.appendChild(filterRow);
+
+    // ── Apply filters ────────────────────────────────────────────
+    const search = (this._search || '').toLowerCase();
+    const visible = this._entries.filter((e, i) => {
+      const catMatch = this._filter === 'all' || e.category === this._filter;
+      const txtMatch = !search || e.label.toLowerCase().includes(search);
+      return catMatch && txtMatch;
+    });
+
+    if (visible.length === 0) {
       const empty = document.createElement('div');
       empty.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-dim);text-align:center;padding:16px 0;line-height:1.8';
-      empty.textContent   = 'No history yet.\nMake some changes and they\nwill appear here.';
+      empty.textContent = this._entries.length === 0
+        ? 'No history yet.\nMake some changes and they\nwill appear here.'
+        : 'No entries match the current filter.';
       this._container.appendChild(empty);
-      return;
     }
 
-    // Entry list — newest at top
-    this._entries.forEach((entry, i) => {
+    // Entry list — filtered, newest at top
+    visible.forEach((entry) => {
+      const i = this._entries.indexOf(entry);
       const isCurrent = i === this._currentIdx;
       const row       = document.createElement('div');
       row.style.cssText = `

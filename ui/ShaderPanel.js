@@ -29,17 +29,52 @@ const ShaderPanel = (() => {
       container.appendChild(h);
     }
 
-    // ── Param sliders from manifest (no audioTarget) ───────────
+    // ── Param sliders — rename based on SHADER_META ────────────
     const manifest = layer.constructor.manifest;
+    const meta     = ShaderLayer.SHADER_META?.[layer._shaderName] || {};
+
     if (manifest?.params) {
       manifest.params.forEach(param => {
-        if (param.type === 'band') return; // skip any legacy band params
+        if (param.type === 'band') return;
+
+        // Override label with per-shader meaning if known
+        const metaLabel = meta[param.id];
+        const displayParam = metaLabel
+          ? { ...param, label: metaLabel }
+          : param;
+
+        // Hide iParam sliders that do nothing for this shader (null in meta)
+        const isIParam = ['param1','param2','param3'].includes(param.id);
+        if (isIParam && metaLabel === null) {
+          // Render greyed-out disabled version so user knows it exists but inactive
+          const ghost = document.createElement('div');
+          ghost.style.cssText = 'opacity:0.25;margin-bottom:8px;pointer-events:none';
+          const current = layer.params?.[param.id] ?? param.default;
+          const ctrl = (typeof ParamPanel !== 'undefined')
+            ? ParamPanel.buildControl(param, current, layer)
+            : _legacySlider(param, current, layer);
+          if (ctrl) { ghost.appendChild(ctrl); container.appendChild(ghost); }
+          return;
+        }
+
         const current = layer.params?.[param.id] ?? param.default;
         const ctrl = (typeof ParamPanel !== 'undefined')
-          ? ParamPanel.buildControl(param, current, layer)
-          : _legacySlider(param, current, layer);
+          ? ParamPanel.buildControl(displayParam, current, layer)
+          : _legacySlider(displayParam, current, layer);
         if (ctrl) container.appendChild(ctrl);
       });
+    }
+
+    // Per-shader usage note
+    if (meta.note) {
+      const noteEl = document.createElement('div');
+      noteEl.style.cssText = `
+        font-family:var(--font-mono);font-size:8px;color:var(--text-dim);
+        background:var(--bg-card);border:1px solid var(--border-dim);
+        border-radius:4px;padding:6px 8px;margin-bottom:12px;line-height:1.6;
+      `;
+      noteEl.textContent = '💡 ' + meta.note;
+      container.appendChild(noteEl);
     }
 
     // ── Divider ────────────────────────────────────────────────
@@ -53,7 +88,11 @@ const ShaderPanel = (() => {
     presetsLabel.textContent   = 'Built-in shaders';
     container.appendChild(presetsLabel);
 
-    const presets = ['plasma', 'ripple', 'distort', 'bloom', 'chromatic', 'kaleidoscope', 'tunnel', 'voronoi', 'turing'];
+    const presets = [
+      'plasma','ripple','distort','bloom','chromatic',
+      'kaleidoscope','tunnel','voronoi','turing',
+      'fbm','rings','aurora','julia','lissajous',
+    ];
     const presetRow = document.createElement('div');
     presetRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;margin-bottom:14px';
 

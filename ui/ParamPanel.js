@@ -65,6 +65,23 @@ const ParamPanel = (() => {
     // Name header
     container.appendChild(_buildNameHeader(layer, manifest?.name || typeKey));
 
+    // Slideshow: Edit Images button
+    if (layer instanceof SlideshowLayer) {
+      const editBtn = document.createElement('button');
+      editBtn.className   = 'btn accent';
+      editBtn.style.cssText = 'width:100%;font-size:9px;margin-bottom:10px';
+      editBtn.textContent = `🖼 Edit images (${layer._images?.length ?? 0})`;
+      editBtn.addEventListener('click', () => {
+        const currentUrls = (layer._images || []).map(e => e.url).filter(Boolean);
+        SlideshowLayer.showPickerModal(currentUrls, selected => {
+          layer.loadEntries(selected);
+          editBtn.textContent = `🖼 Edit images (${selected.length})`;
+          Toast.success(`Slideshow: ${selected.length} image${selected.length!==1?'s':''}`);
+        });
+      });
+      container.appendChild(editBtn);
+    }
+
     // Transform & Opacity — always shown for every layer
     const xfSec = _buildCollapsible('Transform & Opacity', sec.transform, o => { sec.transform = o; });
     _buildTransformControls(layer, xfSec.body);
@@ -82,6 +99,47 @@ const ParamPanel = (() => {
 
     if (params.length > 0) {
       const pSec = _buildCollapsible('Parameters', sec.params, o => { sec.params = o; });
+
+      // ⚄ Random button in section header
+      const randBtn = document.createElement('button');
+      randBtn.style.cssText = `
+        background:none;border:1px solid var(--border-dim);border-radius:3px;
+        color:var(--text-dim);font-family:var(--font-mono);font-size:8px;
+        padding:1px 6px;cursor:pointer;margin-left:auto;flex-shrink:0;
+        transition:color 0.1s,border-color 0.1s;
+      `;
+      randBtn.textContent = '⚄ Random';
+      randBtn.title = 'Randomise all parameters';
+      randBtn.addEventListener('mouseenter', () => { randBtn.style.color = 'var(--accent)'; randBtn.style.borderColor = 'var(--accent)'; });
+      randBtn.addEventListener('mouseleave', () => { randBtn.style.color = 'var(--text-dim)'; randBtn.style.borderColor = 'var(--border-dim)'; });
+      randBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        params.forEach(p => {
+          if (!layer.params) return;
+          if (p.type === 'float' || p.type === 'int') {
+            const min = p.min ?? 0, max = p.max ?? 1;
+            const v = p.type === 'int'
+              ? Math.round(min + Math.random() * (max - min))
+              : parseFloat((min + Math.random() * (max - min)).toFixed(3));
+            layer.params[p.id] = v;
+            if (typeof layer.setParam === 'function') layer.setParam(p.id, v);
+          } else if (p.type === 'bool') {
+            layer.params[p.id] = Math.random() > 0.5;
+          } else if (p.type === 'enum' && p.options?.length) {
+            layer.params[p.id] = p.options[Math.floor(Math.random() * p.options.length)];
+          } else if (p.type === 'color') {
+            const hue = Math.floor(Math.random() * 360);
+            const sat = 60 + Math.floor(Math.random() * 40);
+            const lit = 40 + Math.floor(Math.random() * 30);
+            layer.params[p.id] = `hsl(${hue},${sat}%,${lit}%)`;
+          }
+        });
+        // Re-render params panel to reflect new values
+        window.dispatchEvent(new CustomEvent('vael:refresh-params'));
+        Toast.info('Parameters randomised');
+      });
+      pSec.el.querySelector('summary').appendChild(randBtn);
+
       params.forEach(p => {
         pSec.body.appendChild(buildControl(p, layer.params?.[p.id] ?? p.default, layer));
       });
@@ -148,7 +206,7 @@ const ParamPanel = (() => {
     container.appendChild(buildSlider(
       { id: 'opacity', label: 'Opacity', type: 'float', min: 0, max: 1, step: 0.01 },
       layer.opacity ?? 1, layer,
-      v => { layer.opacity = v; }
+      v => { layer.opacity = v; if (window._vaelHistory) window._vaelHistory.onOpacityChange(layer, v); }
     ));
 
     // Blend mode
@@ -165,11 +223,11 @@ const ParamPanel = (() => {
     xyRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
     xyRow.appendChild(buildSlider(
       { id: '_tx', label: 'X', type: 'float', min: -800, max: 800, step: 1 },
-      t.x ?? 0, layer, v => { layer.transform.x = v; }
+      t.x ?? 0, layer, v => { layer.transform.x = v; if (window._vaelHistory) window._vaelHistory.onTransformChange(layer); }
     ));
     xyRow.appendChild(buildSlider(
       { id: '_ty', label: 'Y', type: 'float', min: -450, max: 450, step: 1 },
-      t.y ?? 0, layer, v => { layer.transform.y = v; }
+      t.y ?? 0, layer, v => { layer.transform.y = v; if (window._vaelHistory) window._vaelHistory.onTransformChange(layer); }
     ));
     container.appendChild(xyRow);
 
@@ -178,19 +236,140 @@ const ParamPanel = (() => {
     scaleRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
     scaleRow.appendChild(buildSlider(
       { id: '_tscaleX', label: 'Scale X', type: 'float', min: 0.1, max: 4, step: 0.01 },
-      t.scaleX ?? 1, layer, v => { layer.transform.scaleX = v; }
+      t.scaleX ?? 1, layer, v => { layer.transform.scaleX = v; if (window._vaelHistory) window._vaelHistory.onTransformChange(layer); }
     ));
     scaleRow.appendChild(buildSlider(
       { id: '_tscaleY', label: 'Scale Y', type: 'float', min: 0.1, max: 4, step: 0.01 },
-      t.scaleY ?? 1, layer, v => { layer.transform.scaleY = v; }
+      t.scaleY ?? 1, layer, v => { layer.transform.scaleY = v; if (window._vaelHistory) window._vaelHistory.onTransformChange(layer); }
     ));
     container.appendChild(scaleRow);
 
     // Rotation
     container.appendChild(buildSlider(
       { id: '_trot', label: 'Rotation', type: 'float', min: -180, max: 180, step: 0.5 },
-      t.rotation ?? 0, layer, v => { layer.transform.rotation = v; }
+      t.rotation ?? 0, layer, v => { layer.transform.rotation = v; if (window._vaelHistory) window._vaelHistory.onTransformChange(layer); }
     ));
+
+    // Soft update toggle
+    const updateRow = document.createElement('div');
+    updateRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-top:6px';
+    updateRow.innerHTML = `
+      <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">Param changes</span>
+      <div style="display:flex;gap:3px">
+        <button class="su-soft" style="
+          background:${layer.softUpdate!==false?'var(--accent)':'none'};
+          border:1px solid ${layer.softUpdate!==false?'var(--accent)':'var(--border-dim)'};
+          border-radius:3px 0 0 3px;color:${layer.softUpdate!==false?'var(--bg)':'var(--text-dim)'};
+          font-family:var(--font-mono);font-size:8px;padding:2px 8px;cursor:pointer"
+          title="Smooth — parameters update incrementally without reinitialising">Smooth</button>
+        <button class="su-instant" style="
+          background:${layer.softUpdate===false?'var(--accent2)':'none'};
+          border:1px solid ${layer.softUpdate===false?'var(--accent2)':'var(--border-dim)'};
+          border-radius:0 3px 3px 0;color:${layer.softUpdate===false?'var(--bg)':'var(--text-dim)'};
+          font-family:var(--font-mono);font-size:8px;padding:2px 8px;cursor:pointer"
+          title="Instant — full reinitialise on every parameter change">Instant</button>
+      </div>
+    `;
+    updateRow.querySelector('.su-soft').addEventListener('click', e => {
+      e.stopPropagation();
+      layer.softUpdate = true;
+      updateRow.querySelector('.su-soft').style.background    = 'var(--accent)';
+      updateRow.querySelector('.su-soft').style.borderColor   = 'var(--accent)';
+      updateRow.querySelector('.su-soft').style.color         = 'var(--bg)';
+      updateRow.querySelector('.su-instant').style.background = 'none';
+      updateRow.querySelector('.su-instant').style.borderColor = 'var(--border-dim)';
+      updateRow.querySelector('.su-instant').style.color      = 'var(--text-dim)';
+    });
+    updateRow.querySelector('.su-instant').addEventListener('click', e => {
+      e.stopPropagation();
+      layer.softUpdate = false;
+      updateRow.querySelector('.su-instant').style.background  = 'var(--accent2)';
+      updateRow.querySelector('.su-instant').style.borderColor = 'var(--accent2)';
+      updateRow.querySelector('.su-instant').style.color       = 'var(--bg)';
+      updateRow.querySelector('.su-soft').style.background     = 'none';
+      updateRow.querySelector('.su-soft').style.borderColor    = 'var(--border-dim)';
+      updateRow.querySelector('.su-soft').style.color          = 'var(--text-dim)';
+    });
+    container.appendChild(updateRow);
+
+    // Clip shape
+    const clipDiv = document.createElement('div');
+    clipDiv.style.cssText = 'margin-top:10px;padding-top:8px;border-top:1px solid var(--border-dim)';
+
+    const clipLabel = document.createElement('div');
+    clipLabel.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:6px;text-transform:uppercase;letter-spacing:0.5px';
+    clipLabel.textContent = 'Clip shape';
+    clipDiv.appendChild(clipLabel);
+
+    const clipTypeRow = document.createElement('div');
+    clipTypeRow.style.cssText = 'display:flex;gap:4px;margin-bottom:8px';
+
+    const clipSizeContainer = document.createElement('div');
+
+    const _refreshClip = () => {
+      const curType = layer.clipShape?.type || 'none';
+      clipTypeRow.querySelectorAll('button').forEach(b => {
+        const isActive = b.dataset.shape === curType;
+        b.style.background  = isActive ? 'var(--accent)' : 'none';
+        b.style.borderColor = isActive ? 'var(--accent)' : 'var(--border-dim)';
+        b.style.color       = isActive ? 'var(--bg)'     : 'var(--text-dim)';
+      });
+      clipSizeContainer.innerHTML = '';
+      const cs2 = layer.clipShape;
+      if (cs2 && cs2.type && cs2.type !== 'none') {
+        const sizeRow = document.createElement('div');
+        sizeRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
+        sizeRow.appendChild(buildSlider(
+          { id: '_clipW', label: 'Width',  type: 'float', min: 0.05, max: 1.5, step: 0.01 },
+          cs2.w ?? 0.5, layer, v => { if (layer.clipShape) layer.clipShape.w = v; }
+        ));
+        sizeRow.appendChild(buildSlider(
+          { id: '_clipH', label: 'Height', type: 'float', min: 0.05, max: 1.5, step: 0.01 },
+          cs2.h ?? 0.5, layer, v => { if (layer.clipShape) layer.clipShape.h = v; }
+        ));
+        clipSizeContainer.appendChild(sizeRow);
+        if (cs2.type.includes('outline')) {
+          clipSizeContainer.appendChild(buildSlider(
+            { id: '_clipLW', label: 'Line width', type: 'float', min: 1, max: 30, step: 0.5, default: 3 },
+            cs2.lineWidth ?? 3, layer, v => { if (layer.clipShape) layer.clipShape.lineWidth = v; }
+          ));
+        }
+      }
+    };
+
+    // Shapes: none=full, rect/ellipse=fill clip, rect-outline/ellipse-outline=stroke only
+    const CLIP_SHAPES = ['none','rect','ellipse','rect-outline','ellipse-outline'];
+    const CLIP_LABELS = { none:'Full', rect:'▭ Fill', ellipse:'◯ Fill', 'rect-outline':'▭ Line', 'ellipse-outline':'◯ Line' };
+    CLIP_SHAPES.forEach(shape => {
+      const btn = document.createElement('button');
+      btn.dataset.shape = shape;
+      const isActive = (layer.clipShape?.type || 'none') === shape;
+      btn.style.cssText = `background:${isActive?'var(--accent)':'none'};
+        border:1px solid ${isActive?'var(--accent)':'var(--border-dim)'};
+        border-radius:3px;color:${isActive?'var(--bg)':'var(--text-dim)'};
+        font-family:var(--font-mono);font-size:7px;padding:2px 4px;cursor:pointer;flex:1`;
+      btn.textContent = CLIP_LABELS[shape] || shape;
+      btn.title = shape === 'none' ? 'Full canvas — no clipping' :
+                  shape.includes('outline') ? 'Show only the shape outline (stroke)' :
+                  'Clip to this shape (everything outside is hidden)';
+      btn.addEventListener('click', e => {
+        e.stopPropagation();
+        layer.clipShape = shape === 'none' ? null
+          : { type: shape, w: layer.clipShape?.w ?? 0.5, h: layer.clipShape?.h ?? 0.5, lineWidth: layer.clipShape?.lineWidth ?? 3 };
+        _refreshClip();
+      });
+      clipTypeRow.appendChild(btn);
+    });
+
+    // Tip about using masks for layer-based clipping
+    const maskTip = document.createElement('div');
+    maskTip.style.cssText = 'font-family:var(--font-mono);font-size:7px;color:var(--text-dim);margin-top:4px;line-height:1.5';
+    maskTip.textContent = 'For layer-shaped clipping → use the Mask dropdown above';
+    clipDiv.appendChild(clipTypeRow);
+    clipDiv.appendChild(maskTip);
+    clipDiv.appendChild(clipSizeContainer);
+    _refreshClip();
+    container.appendChild(clipDiv);
   }
 
   // ── Control builders ─────────────────────────────────────────
@@ -256,6 +435,32 @@ const ParamPanel = (() => {
       badge.title = `MIDI: ch${midiLink.channel} CC${midiLink.cc} → ${param.label}\nRange: ${midiLink.min.toFixed(2)} – ${midiLink.max.toFixed(2)}`;
       labelLeft.appendChild(badge);
     }
+
+    // ∿ LFO quick-add button (float/int params only, no custom setters)
+    if (!customSetter && layer && (param.type === 'float' || param.type === 'int')) {
+      const lfoBtn = document.createElement('button');
+      lfoBtn.style.cssText = `
+        background:none;border:none;cursor:pointer;padding:0 2px;
+        font-size:11px;color:var(--text-dim);line-height:1;
+        transition:color 0.1s;flex-shrink:0;
+      `;
+      lfoBtn.textContent = '∿';
+      lfoBtn.title       = `Add LFO to "${param.label}"`;
+      lfoBtn.addEventListener('mouseenter', () => lfoBtn.style.color = 'var(--accent2)');
+      lfoBtn.addEventListener('mouseleave', () => lfoBtn.style.color = 'var(--text-dim)');
+      lfoBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (typeof LFOPanel !== 'undefined' && LFOPanel.openQuickAdd) {
+          LFOPanel.openQuickAdd(layer, param.id, param.label);
+        } else {
+          // Fallback: switch to LFO tab
+          document.querySelector('[data-tab="lfo"]')?.click();
+          Toast.info(`LFO tab — add a route for "${param.label}"`);
+        }
+      });
+      labelLeft.appendChild(lfoBtn);
+    }
+
     labelRow.appendChild(labelLeft);
 
     const numInput = document.createElement('input');
@@ -329,9 +534,26 @@ const ParamPanel = (() => {
         if (typeof layer.setParam === 'function') layer.setParam(param.id, c);
       }
       if (window._vaelHistory && !customSetter) window._vaelHistory.onParamChange(param.label, layer);
+      // Record into AutomationTimeline if recording is active
+      if (window._vaelTimeline?.isRecording && !customSetter && layer?.id) {
+        window._vaelTimeline.recordPoint(layer.id, param.id, c, param);
+      }
     };
 
     slider.addEventListener('input', () => apply(parseFloat(slider.value)));
+    // Double-click or Cmd/Ctrl+click resets to default value
+    const resetToDefault = (e) => {
+      if (e.type === 'dblclick' || (e.type === 'click' && (e.metaKey || e.ctrlKey))) {
+        e.preventDefault();
+        if (param.default !== undefined) {
+          apply(param.default);
+          Toast.info(`${param.label} → default (${fmt(param.default)})`);
+        }
+      }
+    };
+    slider.addEventListener('dblclick', resetToDefault);
+    slider.addEventListener('click', resetToDefault);
+    numInput.addEventListener('dblclick', resetToDefault);
     const commitNum = () => { const v = parseFloat(numInput.value); if (!isNaN(v)) apply(v); };
     numInput.addEventListener('blur', commitNum);
     numInput.addEventListener('keydown', e => {
@@ -394,6 +616,7 @@ const ParamPanel = (() => {
       if (customSetter) { customSetter(e.target.value); return; }
       if (layer.params) layer.params[param.id] = e.target.value;
       if (typeof layer.setParam === 'function') layer.setParam(param.id, e.target.value);
+      if (window._vaelHistory) window._vaelHistory.onParamChange(param.label, layer);
       if (param.triggersRefresh) {
         const cont = wrap.closest('#params-content');
         if (cont) render(layer, cont);
@@ -423,6 +646,7 @@ const ParamPanel = (() => {
       knob.style.background = state ? 'var(--bg)' : 'var(--text-dim)';
       if (layer.params) layer.params[param.id] = state;
       if (typeof layer.setParam === 'function') layer.setParam(param.id, state);
+      if (window._vaelHistory) window._vaelHistory.onParamChange(param.label, layer);
       if (param.triggersRefresh) {
         const cont = wrap.closest('#params-content');
         if (cont) render(layer, cont);
@@ -454,6 +678,7 @@ const ParamPanel = (() => {
       if (typeof layer.setParam === 'function') layer.setParam(param.id, v);
     };
     sw.addEventListener('input', e => { hex.value = e.target.value; apply(e.target.value); });
+    sw.addEventListener('change', () => { if (window._vaelHistory) window._vaelHistory.onParamChange(param.label, layer); });
     hex.addEventListener('input', e => {
       const v = e.target.value.trim();
       if (/^#[0-9a-fA-F]{6}$/.test(v) || /^#[0-9a-fA-F]{3}$/.test(v)) {
@@ -519,13 +744,59 @@ const ParamPanel = (() => {
     sub.textContent   = typeName || '';
     wrap.appendChild(sub);
 
+    // Name row: visibility button | name | solo button
+    const nameRow = document.createElement('div');
+    nameRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:2px';
+
+    // ◉/○ Visibility toggle
+    const visBtn = document.createElement('button');
+    visBtn.style.cssText = 'background:none;border:none;cursor:pointer;font-size:14px;padding:0;line-height:1;flex-shrink:0;transition:color 0.1s';
+    const _updateVis = () => {
+      const on = layer.visible !== false;
+      visBtn.textContent = on ? '◉' : '○';
+      visBtn.style.color = on ? 'var(--accent)' : 'var(--text-dim)';
+      visBtn.title = on ? 'Click to hide layer' : 'Click to show layer';
+    };
+    _updateVis();
+    visBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      layer.visible = layer.visible === false ? true : false;
+      _updateVis();
+      window.dispatchEvent(new CustomEvent('vael:visibility-changed', { detail: { id: layer.id, visible: layer.visible } }));
+    });
+    nameRow.appendChild(visBtn);
+
     const nameEl = document.createElement('div');
-    nameEl.style.cssText = `font-family:var(--font-mono);font-size:12px;color:var(--accent);
+    nameEl.style.cssText = `flex:1;font-family:var(--font-mono);font-size:12px;color:var(--accent);
       letter-spacing:1px;cursor:text;padding:2px 0;border-bottom:1px solid transparent;
       transition:border-color 0.15s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`;
     nameEl.textContent = layer.name;
     nameEl.title       = 'Click to rename';
-    wrap.appendChild(nameEl);
+
+    // S Solo button
+    const soloBtn = document.createElement('button');
+    const _updateSolo = () => {
+      const isSoloed = typeof LayerPanel !== 'undefined'
+        ? LayerPanel.getSoloId?.() === layer.id
+        : window._vaelSolo === layer.id;
+      soloBtn.style.background  = isSoloed ? '#ffd700' : 'none';
+      soloBtn.style.borderColor = isSoloed ? '#ffd700' : 'var(--border-dim)';
+      soloBtn.style.color       = isSoloed ? '#000'    : 'var(--text-dim)';
+    };
+    soloBtn.style.cssText = 'border:1px solid var(--border-dim);border-radius:3px;font-family:var(--font-mono);font-size:8px;padding:2px 6px;cursor:pointer;flex-shrink:0;transition:all 0.1s';
+    soloBtn.textContent = 'S';
+    soloBtn.title = 'Solo this layer (hides all others)';
+    _updateSolo();
+    soloBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (typeof LayerPanel !== 'undefined' && LayerPanel.soloLayer) {
+        LayerPanel.soloLayer(layer.id);
+        _updateSolo();
+      }
+    });
+
+    nameRow.append(nameEl, soloBtn);
+    wrap.appendChild(nameRow);
 
     nameEl.addEventListener('mouseenter', () => nameEl.style.borderBottomColor = 'var(--accent)');
     nameEl.addEventListener('mouseleave', () => nameEl.style.borderBottomColor = 'transparent');

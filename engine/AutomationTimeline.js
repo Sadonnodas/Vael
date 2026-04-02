@@ -39,6 +39,13 @@ class AutomationTimeline {
     this._playhead   = 0;   // seconds from clip start
     this.loop        = true;
 
+    // Play modes: 'forward' | 'reverse' | 'pingpong' | 'random'
+    this.playMode    = 'forward';
+    this._pingDir    = 1;    // 1 = forward, -1 = backward in pingpong mode
+    this.inPoint     = 0;    // loop region start (seconds)
+    this.outPoint    = null; // loop region end (null = use clip.duration)
+    this.crossfade   = 0;    // crossfade time at loop point (seconds)
+
     // Callbacks
     this.onUpdate    = null;   // (playhead) → void — called each frame during playback
     this.onStop      = null;
@@ -124,6 +131,28 @@ class AutomationTimeline {
 
     this.isPlaying  = true;
     this._playStart = performance.now() / 1000 - this._playhead;
+
+    // Multi-clip: each clip gets its own playStart for independent looping
+    if (this.playAll) {
+      const now = performance.now() / 1000;
+      this.clips.forEach(c => { if (!c._playStart) c._playStart = now; });
+    }
+  }
+
+  /** Play all recorded clips simultaneously, each looping independently. */
+  playAll() {
+    if (this.isRecording || this.clips.length === 0) return;
+    this._playAllMode = true;
+    this.isPlaying    = true;
+    const now = performance.now() / 1000;
+    this.clips.forEach(c => { c._playStart = now; c._playhead = 0; });
+    this._activeClip  = this.clips[this.clips.length - 1]; // for UI display
+  }
+
+  stopAll() {
+    this._playAllMode = false;
+    this.stop();
+    this.clips.forEach(c => { c._playStart = null; c._playhead = 0; });
   }
 
   pause() {
@@ -145,18 +174,83 @@ class AutomationTimeline {
   // ── Per-frame tick ────────────────────────────────────────────
 
   tick(dt) {
-    if (!this.isPlaying || !this._activeClip) return;
+    if (!this.isPlaying) return;
 
-    this._playhead = performance.now() / 1000 - this._playStart;
+    // Multi-clip mode: apply all clips independently
+    if (this._playAllMode) {
+      const now2 = performance.now() / 1000;
+      this.clips.forEach(clip => {
+        if (!clip._playStart) return;
+        let ph = now2 - clip._playStart;
+        if (ph >= clip.duration) {
+          if (this.loop) { ph = ph % clip.duration; clip._playStart = now2 - ph; }
+          else { ph = clip.duration; }
+        }
+        clip._playhead = ph;
+        this._applyClip(clip, ph);
+      });
+      if (typeof this.onUpdate === 'function') this.onUpdate(this._activeClip?._playhead ?? 0);
+      return;
+    }
 
-    const dur = this._activeClip.duration;
-    if (this._playhead >= dur) {
-      if (this.loop) {
-        this._playhead  = this._playhead % dur;
-        this._playStart = performance.now() / 1000 - this._playhead;
-      } else {
-        this._playhead = dur;
-        this.stop();
+    if (!this._activeClip) return;
+
+    const clip  = this._activeClip;
+    const dur   = clip.duration;
+    const inPt  = Math.max(0, this.inPoint || 0);
+    const outPt = Math.min(dur, this.outPoint ?? dur);
+    const range = Math.max(0.01, outPt - inPt);
+    const now   = performance.now() / 1000;
+
+    // Advance playhead based on play mode
+    if (this.playMode === 'reverse') {
+      this._playhead = outPt - (now - this._playStart);
+    } else {
+      this._playhead = inPt + (now - this._playStart);
+    }
+
+    if (this.playMode === 'forward' || !this.playMode) {
+      if (this._playhead >= outPt) {
+        if (this.loop) {
+          this._playhead  = inPt + (this._playhead - outPt) % range;
+          this._playStart = now - (this._playhead - inPt);
+        } else {
+          this._playhead = outPt; this.stop();
+          if (typeof this.onUpdate === 'function') this.onUpdate(this._playhead); return;
+        }
+      }
+    } else if (this.playMode === 'reverse') {
+      if (this._playhead <= inPt) {
+        if (this.loop) {
+          this._playhead  = outPt - (inPt - this._playhead) % range;
+          this._playStart = now - (outPt - this._playhead);
+        } else {
+          this._playhead = inPt; this.stop();
+          if (typeof this.onUpdate === 'function') this.onUpdate(this._playhead); return;
+        }
+      }
+    } else if (this.playMode === 'pingpong') {
+      if (!this._pingDir) this._pingDir = 1;
+      const raw = now - this._playStart;
+      const period = range * 2;
+      const pos    = raw % period;
+      this._playhead = pos < range ? inPt + pos : outPt - (pos - range);
+      this._pingDir  = pos < range ? 1 : -1;
+    } else if (this.playMode === 'random') {
+      if (this._playhead >= outPt || !this._randJumped) {
+        this._randJumped = true;
+        this._playhead   = inPt + Math.random() * range;
+        this._playStart  = now - (this._playhead - inPt);
+      }
+    }
+
+    // Crossfade at loop point
+    if (this.crossfade > 0 && (this.playMode === 'forward' || !this.playMode)) {
+      const fadeOut = outPt - this._playhead;
+      if (fadeOut > 0 && fadeOut < this.crossfade) {
+        const mix     = 1 - fadeOut / this.crossfade;
+        const loopPh  = inPt + (this.crossfade - fadeOut);
+        this._applyFrameMixed(this._playhead, loopPh, mix);
         if (typeof this.onUpdate === 'function') this.onUpdate(this._playhead);
         return;
       }
@@ -164,6 +258,31 @@ class AutomationTimeline {
 
     this._applyFrame(this._playhead);
     if (typeof this.onUpdate === 'function') this.onUpdate(this._playhead);
+  }
+
+  _applyFrameMixed(t1, t2, mix) {
+    if (!this._activeClip) return;
+    this._activeClip.lanes.forEach(lane => {
+      const layer = this._layers.layers.find(l => l.id === lane.layerId);
+      if (!layer?.params) return;
+      const v1 = this._interpolate(lane.points, t1);
+      const v2 = this._interpolate(lane.points, t2);
+      if (v1 === null) return;
+      const r = lane.max - lane.min;
+      layer.params[lane.paramId] = (lane.min + v1 * r) * (1 - mix) + (lane.min + (v2 ?? v1) * r) * mix;
+    });
+  }
+
+
+  _applyClip(clip, t) {
+    clip.lanes.forEach(lane => {
+      const layer = this._layers.layers.find(l => l.id === lane.layerId);
+      if (!layer || !layer.params) return;
+      const v = this._interpolate(lane.points, t);
+      if (v === null) return;
+      const range = lane.max - lane.min;
+      layer.params[lane.paramId] = lane.min + v * range;
+    });
   }
 
   _applyFrame(t) {

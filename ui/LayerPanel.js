@@ -25,10 +25,9 @@ const LayerPanel = (() => {
   let _blendModes    = ['normal','multiply','screen','overlay','add','softlight','difference','luminosity','subtract','exclusion'];
   let _layerTypes    = [];
   let _renderImageFn = null;
-  let _videoLibrary  = null;   // set via init(); used by _promptVideoSource
 
   function init({ layers, layerFactory, audio, canvas, onSelectLayer,
-                  blendModes, layerTypes, renderImageLayerPanel, videoLibrary }) {
+                  blendModes, layerTypes, renderImageLayerPanel }) {
     _layers       = layers;
     _layerFactory = layerFactory;
     _audio        = audio;
@@ -37,7 +36,6 @@ const LayerPanel = (() => {
     if (blendModes)    _blendModes = blendModes;
     if (layerTypes)    _layerTypes = layerTypes;
     if (renderImageLayerPanel) _renderImageFn = renderImageLayerPanel;
-    if (videoLibrary)  _videoLibrary = videoLibrary;
 
     // DOM lookups deferred to after DOMContentLoaded
     _layerListEl     = document.getElementById('layer-list');
@@ -210,7 +208,6 @@ const LayerPanel = (() => {
       // Drag-to-reorder
       row.addEventListener('dragstart', e => {
         e.dataTransfer.setData('text/plain', layer.id);
-        e.dataTransfer.setData('vael/layer-id', layer.id);
         setTimeout(() => { row.style.opacity = '0.4'; }, 0);
       });
       row.addEventListener('dragend', () => { row.style.opacity = '1'; });
@@ -460,43 +457,35 @@ const LayerPanel = (() => {
 
       row.querySelector('.layer-name-btn').addEventListener('click', e => {
         e.stopPropagation();
-        selectLayer(layer.id);
+        // Single click: select and expand the row, but stay on current tab
+        _selectedLayerId = layer.id;
+        if (typeof onSelect === 'function') onSelect(layer.id);
+        _layers.layers.forEach(l => { l._rowCollapsed = l.id !== layer.id; });
+        _layers.layers.forEach(l => {
+          if (l.children) l.children.forEach(c => { c._rowCollapsed = c.id !== layer.id; });
+        });
+        renderLayerList();
+        // Update params content silently (so PARAMS tab is ready if they switch)
+        if (_paramsEmptyEl && _paramsContentEl) {
+          _paramsEmptyEl.style.display   = 'none';
+          _paramsContentEl.style.display = 'block';
+          if (layer instanceof LyricsLayer) {
+            LyricsPanel.render(layer, _paramsContentEl);
+          } else if (layer instanceof ShaderLayer) {
+            ShaderPanel.render(layer, _paramsContentEl);
+          } else if (layer instanceof ImageLayer) {
+            _renderImageFn && _renderImageFn(layer, _paramsContentEl);
+          } else {
+            ParamPanel.render(layer, _paramsContentEl, _audio);
+          }
+        }
       });
 
-      // Double-click to rename inline
+      // Double-click to go to PARAMS tab
+      // Double-click layer name → go to PARAMS tab
       row.querySelector('.layer-name-btn').addEventListener('dblclick', e => {
         e.stopPropagation();
-        const span  = e.target;
-        const input = document.createElement('input');
-        input.type  = 'text';
-        input.value = layer.name;
-        input.style.cssText = `
-          flex:1;background:var(--bg);border:1px solid var(--accent);border-radius:3px;
-          color:var(--text);font-family:var(--font-mono);font-size:10px;padding:1px 4px;
-          width:100%;outline:none;
-        `;
-        span.replaceWith(input);
-        input.focus();
-        input.select();
-
-        const commit = () => {
-          const name = input.value.trim() || layer.name;
-          layer.name = name;
-          const newSpan = document.createElement('span');
-          newSpan.className = 'layer-name-btn';
-          newSpan.style = span.style.cssText;
-          newSpan.textContent = (layer instanceof GroupLayer ? '⊞ ' : '') + name;
-          input.replaceWith(newSpan);
-          newSpan.addEventListener('click', ev => { ev.stopPropagation(); selectLayer(layer.id); });
-          newSpan.addEventListener('dblclick', ev => { ev.stopPropagation(); /* re-trigger not needed, row re-renders */ renderLayerList(); });
-          Toast.info(`Renamed to "${name}"`);
-        };
-
-        input.addEventListener('blur', commit);
-        input.addEventListener('keydown', e => {
-          if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
-          if (e.key === 'Escape') { input.value = layer.name; input.blur(); }
-        });
+        selectLayer(layer.id);
       });
 
       // Solo button
@@ -529,7 +518,9 @@ const LayerPanel = (() => {
 
       row.querySelector('.vis-toggle').addEventListener('click', e => {
         e.stopPropagation();
-        _layers.setVisible(layer.id, !layer.visible);
+        const newVis = !layer.visible;
+        _layers.setVisible(layer.id, newVis);
+        if (typeof window._vaelHistory !== 'undefined') window._vaelHistory.onVisibilityChange(layer, newVis);
       });
 
       // Up/down only on non-group layers
@@ -614,9 +605,27 @@ const LayerPanel = (() => {
         const v = parseFloat(e.target.value);
         _layers.setOpacity(layer.id, v);
         row.querySelector('.opacity-val').textContent = Math.round(v * 100) + '%';
+        if (typeof window._vaelHistory !== 'undefined') window._vaelHistory.onOpacityChange(layer, v);
+      });
+      row.querySelector('.opacity-sl').addEventListener('dblclick', e => {
+        e.preventDefault();
+        _layers.setOpacity(layer.id, 1);
+        e.target.value = 1;
+        row.querySelector('.opacity-val').textContent = '100%';
+        Toast.info('Opacity → 100%');
+      });
+      row.querySelector('.opacity-sl').addEventListener('click', e => {
+        if (e.metaKey || e.ctrlKey) {
+          e.preventDefault();
+          _layers.setOpacity(layer.id, 1);
+          e.target.value = 1;
+          row.querySelector('.opacity-val').textContent = '100%';
+          Toast.info('Opacity → 100%');
+        }
       });
       row.querySelector('.blend-sel').addEventListener('change', e => {
         _layers.setBlendMode(layer.id, e.target.value);
+        if (typeof window._vaelHistory !== 'undefined') window._vaelHistory.onBlendChange(layer, e.target.value);
       });
       row.querySelector('.mask-sel').addEventListener('change', e => {
         layer.maskLayerId = e.target.value || null;
@@ -773,328 +782,73 @@ const LayerPanel = (() => {
 
       _layerListEl.appendChild(row);
 
-      // ── Group children — expanded view ──────────────────────
-      if (layer instanceof GroupLayer && !layer.collapsed) {
-        // Drop zone: drag a top-level layer here to add it to the group
-        const dropZone = document.createElement('div');
-        dropZone.style.cssText = `
-          margin-left: 12px;
-          margin-bottom: 3px;
-          border: 1px dashed var(--border-dim);
-          border-radius: 4px;
-          padding: 4px 8px;
-          font-family: var(--font-mono);
-          font-size: 8px;
-          color: var(--text-dim);
-          text-align: center;
-          transition: border-color 0.15s, color 0.15s;
-        `;
-        dropZone.textContent = '↓ drag a layer here to add to group';
-        dropZone.addEventListener('dragover', e => {
-          e.preventDefault();
-          dropZone.style.borderColor = 'var(--accent)';
-          dropZone.style.color       = 'var(--accent)';
-        });
-        dropZone.addEventListener('dragleave', () => {
-          dropZone.style.borderColor = 'var(--border-dim)';
-          dropZone.style.color       = 'var(--text-dim)';
-        });
-        dropZone.addEventListener('drop', e => {
-          e.preventDefault();
-          dropZone.style.borderColor = 'var(--border-dim)';
-          dropZone.style.color       = 'var(--text-dim)';
-          const draggedId = e.dataTransfer.getData('vael/layer-id');
-          if (!draggedId || draggedId === layer.id) return;
-          const dragged = _layers.layers.find(l => l.id === draggedId);
-          if (!dragged || dragged instanceof GroupLayer) {
-            Toast.warn('Cannot nest groups'); return;
-          }
-          _layers.layers.splice(_layers.layers.indexOf(dragged), 1);
-          layer.addChild(dragged);
-          _layers._notify();
-          Toast.success(`${dragged.name} added to ${layer.name}`);
-        });
-        _layerListEl.appendChild(dropZone);
-
-        // Child rows
-        layer.children.slice().reverse().forEach((child, revIdx) => {
-          const childIdx = layer.children.length - 1 - revIdx;
+      // If this is a group and not collapsed, show children indented
+      if (layer instanceof GroupLayer && !layer.collapsed && layer.children.length > 0) {
+        layer.children.slice().reverse().forEach(child => {
           const childRow = document.createElement('div');
-          childRow.draggable = true;
-          childRow.dataset.childId    = child.id;
-          childRow.dataset.childIndex = childIdx;
           childRow.style.cssText = `
             background: var(--bg);
             border: 1px solid var(--border-dim);
             border-left: 2px solid var(--accent2);
             border-radius: 4px;
-            padding: 5px 8px 5px 16px;
+            padding: 5px 8px 5px 20px;
             margin-bottom: 3px;
             margin-left: 12px;
             display: flex;
             align-items: center;
             gap: 8px;
-            cursor: grab;
-            transition: opacity 0.15s, border-color 0.1s;
           `;
-
-          const isSelected = child.id === _selectedLayerId;
           childRow.innerHTML = `
             <button class="child-vis" style="background:none;border:none;cursor:pointer;
                     font-size:11px;color:${child.visible ? 'var(--accent2)' : 'var(--text-dim)'}">
               ${child.visible ? '◉' : '○'}
             </button>
-            <span class="child-name" style="flex:1;font-family:var(--font-mono);font-size:9px;
-                   color:${isSelected ? 'var(--accent)' : 'var(--text-muted)'};cursor:pointer;
-                   overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            <span style="flex:1;font-family:var(--font-mono);font-size:9px;
+                         color:var(--text-muted);cursor:pointer" class="child-name">
               ${child.name}
             </span>
             <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
               ${Math.round((child.opacity ?? 1) * 100)}%
             </span>
-            <button class="child-move-up" title="Move up within group"
-              style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:9px;padding:0 2px">↑</button>
-            <button class="child-move-down" title="Move down within group"
-              style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:9px;padding:0 2px">↓</button>
             <button class="child-eject" title="Move out of group"
-              style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:9px;padding:0 2px">⇥</button>
+              style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:9px">
+              ↑
+            </button>
           `;
 
-          // Drag to reorder within group
-          childRow.addEventListener('dragstart', e => {
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('vael/child-id', child.id);
-            e.dataTransfer.setData('vael/child-group', layer.id);
-            childRow.style.opacity = '0.4';
-          });
-          childRow.addEventListener('dragend', () => {
-            childRow.style.opacity = '1';
-          });
-          childRow.addEventListener('dragover', e => {
-            e.preventDefault();
-            childRow.style.borderColor = 'var(--accent2)';
-          });
-          childRow.addEventListener('dragleave', () => {
-            childRow.style.borderColor = 'var(--border-dim)';
-          });
-          childRow.addEventListener('drop', e => {
-            e.preventDefault();
-            childRow.style.borderColor = 'var(--border-dim)';
-            const fromId      = e.dataTransfer.getData('vael/child-id');
-            const fromGroupId = e.dataTransfer.getData('vael/child-group');
-            if (!fromId || fromId === child.id) return;
-
-            if (fromGroupId === layer.id) {
-              // Reorder within same group
-              const fromIdx = layer.children.findIndex(c => c.id === fromId);
-              const toIdx   = childIdx;
-              if (fromIdx === -1 || fromIdx === toIdx) return;
-              const [moved] = layer.children.splice(fromIdx, 1);
-              layer.children.splice(toIdx, 0, moved);
-              _layers._notify();
-            }
-          });
-
-          // Visibility toggle
           childRow.querySelector('.child-vis').addEventListener('click', e => {
             e.stopPropagation();
             child.visible = !child.visible;
-            e.target.style.color = child.visible ? 'var(--accent2)' : 'var(--text-dim)';
-            e.target.textContent = child.visible ? '◉' : '○';
+            e.target.style.color   = child.visible ? 'var(--accent2)' : 'var(--text-dim)';
+            e.target.textContent   = child.visible ? '◉' : '○';
           });
 
-          // Select child — opens its params
           childRow.querySelector('.child-name').addEventListener('click', () => {
-            _selectedLayerId = child.id;
-            // Temporarily surface child so selectLayer can find it
-            const alreadyInStack = _layers.layers.find(l => l.id === child.id);
-            if (!alreadyInStack) {
+            selectLayer(child.id);
+            // Temporarily add child to layers so selectLayer can find it
+            if (!_layers.layers.find(l => l.id === child.id)) {
               _layers.layers.push(child);
               selectLayer(child.id);
               _layers.layers.pop();
-            } else {
-              selectLayer(child.id);
-            }
-            renderLayerList(); // refresh to show selection highlight
-          });
-
-          // Move up within group
-          childRow.querySelector('.child-move-up').addEventListener('click', e => {
-            e.stopPropagation();
-            if (childIdx < layer.children.length - 1) {
-              [layer.children[childIdx], layer.children[childIdx + 1]] =
-              [layer.children[childIdx + 1], layer.children[childIdx]];
-              _layers._notify();
             }
           });
 
-          // Move down within group
-          childRow.querySelector('.child-move-down').addEventListener('click', e => {
-            e.stopPropagation();
-            if (childIdx > 0) {
-              [layer.children[childIdx], layer.children[childIdx - 1]] =
-              [layer.children[childIdx - 1], layer.children[childIdx]];
-              _layers._notify();
-            }
-          });
-
-          // Eject from group
           childRow.querySelector('.child-eject').addEventListener('click', e => {
             e.stopPropagation();
             layer.removeChild(child.id);
             const groupIdx = _layers.layers.indexOf(layer);
             _layers.layers.splice(groupIdx + 1, 0, child);
             _layers._notify();
-            Toast.info(`${child.name} moved out of ${layer.name}`);
+            Toast.info(`${child.name} moved out of group`);
           });
 
           _layerListEl.appendChild(childRow);
         });
-
-        // Empty group hint
-        if (layer.children.length === 0) {
-          const hint = document.createElement('div');
-          hint.style.cssText = `
-            margin-left: 12px;
-            margin-bottom: 3px;
-            padding: 6px 8px;
-            font-family: var(--font-mono);
-            font-size: 8px;
-            color: var(--text-dim);
-            text-align: center;
-          `;
-          hint.textContent = 'Group is empty — drag layers here';
-          _layerListEl.appendChild(hint);
-        }
       }
     });
   }
 
   // ── Standalone event wirings (moved to init) ─────────────────
-
-  /**
-   * Called immediately after a VideoPlayerLayer is added.
-   * Shows a modal overlay that lets the user:
-   *   a) pick an existing video from the library, or
-   *   b) upload a new file (which also adds it to the library).
-   * If the user dismisses without picking, the layer stays empty
-   * (they can choose later via the PARAMS tab picker).
-   */
-  function _promptVideoSource(layer) {
-    // If no library is wired up, fall back to a simple file picker
-    if (!_videoLibrary) {
-      const input = document.createElement('input');
-      input.type  = 'file';
-      input.accept = 'video/*';
-      input.style.display = 'none';
-      document.body.appendChild(input);
-      input.click();
-      input.addEventListener('change', async e => {
-        const file = e.target.files[0];
-        if (file) {
-          const id = await _videoLibrary?.add(file);
-          const el = _videoLibrary?.getElement(id);
-          if (el) layer.setVideoElement(el);
-          layer.name = file.name.replace(/\.[^.]+$/, '');
-        }
-        input.remove();
-      });
-      return;
-    }
-
-    // Build overlay
-    const overlay = document.createElement('div');
-    overlay.style.cssText = `
-      position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:9000;
-      display:flex;align-items:center;justify-content:center;
-      font-family:'JetBrains Mono',monospace;
-    `;
-
-    const entries = _videoLibrary.entries;
-    const listHtml = entries.length === 0 ? `
-      <div style="font-size:9px;color:var(--text-dim);text-align:center;padding:12px 0">
-        No videos in library yet — upload one below.
-      </div>` : entries.map(e => `
-      <div class="vpick" data-id="${e.id}" style="
-        display:flex;align-items:center;gap:10px;padding:7px 10px;
-        border:1px solid var(--border-dim);border-radius:5px;
-        cursor:pointer;transition:border-color 0.1s;margin-bottom:5px;
-      ">
-        <video src="${e.url}" muted style="width:52px;height:32px;object-fit:cover;border-radius:3px;flex-shrink:0;background:#000"></video>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:9px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${e.name}</div>
-          <div style="font-size:8px;color:var(--text-dim);margin-top:1px">${VaelMath.formatTime(e.duration)}</div>
-        </div>
-        <div style="font-size:9px;color:var(--accent)">Select</div>
-      </div>`).join('');
-
-    overlay.innerHTML = `
-      <div style="
-        background:var(--bg-card);border:1px solid var(--border);border-radius:10px;
-        padding:20px;width:340px;max-height:70vh;display:flex;flex-direction:column;gap:12px;
-      ">
-        <div style="font-size:10px;color:var(--accent);letter-spacing:1.5px;text-transform:uppercase">
-          Choose video source
-        </div>
-        <div style="flex:1;overflow-y:auto;max-height:320px">${listHtml}</div>
-        <div style="display:flex;gap:8px">
-          <button id="vpick-upload" class="btn accent" style="flex:1;font-size:9px">↑ Upload new file</button>
-          <button id="vpick-cancel" class="btn" style="font-size:9px;padding:6px 12px">Cancel</button>
-        </div>
-      </div>`;
-
-    document.body.appendChild(overlay);
-
-    // Play previews on hover
-    overlay.querySelectorAll('video').forEach(v => {
-      v.addEventListener('mouseenter', () => v.play().catch(() => {}));
-      v.addEventListener('mouseleave', () => { v.pause(); v.currentTime = 0; });
-    });
-
-    // Hover highlight
-    overlay.querySelectorAll('.vpick').forEach(row => {
-      row.addEventListener('mouseenter', () => row.style.borderColor = 'var(--accent)');
-      row.addEventListener('mouseleave', () => row.style.borderColor = 'var(--border-dim)');
-      row.addEventListener('click', () => {
-        const id = row.dataset.id;
-        const el = _videoLibrary.getElement(id);
-        const entry = _videoLibrary.entries.find(e => e.id === id);
-        if (el) layer.setVideoElement(el);
-        if (entry) layer.name = entry.name.replace(/\.[^.]+$/, '');
-        if (layer.params) layer.params.videoId = id;
-        overlay.remove();
-        Toast.success(`Video set: ${entry?.name || id}`);
-      });
-    });
-
-    // Upload new
-    overlay.querySelector('#vpick-upload').addEventListener('click', () => {
-      const input = document.createElement('input');
-      input.type   = 'file';
-      input.accept = 'video/*';
-      input.style.display = 'none';
-      document.body.appendChild(input);
-      input.click();
-      input.addEventListener('change', async e => {
-        const file = e.target.files[0];
-        if (file && _videoLibrary) {
-          try {
-            const id = await _videoLibrary.add(file);
-            const el = _videoLibrary.getElement(id);
-            if (el) layer.setVideoElement(el);
-            layer.name = file.name.replace(/\.[^.]+$/, '');
-            if (layer.params) layer.params.videoId = id;
-            Toast.success(`Video loaded: ${file.name}`);
-          } catch { Toast.error(`Could not load: ${file.name}`); }
-        }
-        input.remove();
-        overlay.remove();
-      });
-    });
-
-    overlay.querySelector('#vpick-cancel').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
-  }
 
   function showLayerPicker() {
     document.getElementById('layer-picker')?.remove();
@@ -1237,12 +991,6 @@ const LayerPanel = (() => {
           if (typeof layer.init === 'function') layer.init({});
           _layers.add(layer);
           setTimeout(() => selectLayer(layer.id), 50);
-
-          // Video layer: immediately prompt user to pick/upload a video so
-          // the layer is never silently empty after creation.
-          if (typeId === 'video') {
-            setTimeout(() => _promptVideoSource(layer), 80);
-          }
         }
         picker.remove();
         return;
@@ -1481,13 +1229,41 @@ const LayerPanel = (() => {
     });
   }
 
-           return { 
+  // Public solo API — called from ParamPanel solo button
+  function soloLayer(id) {
+    if (_soloLayerId === id) {
+      _soloLayerId = null;
+      _layers.layers.forEach(l => {
+        if (l._preSoloVisible !== undefined) {
+          l.visible = l._preSoloVisible;
+          delete l._preSoloVisible;
+        }
+      });
+      Toast.info('Solo off');
+      if (typeof window._vaelHistory !== 'undefined') window._vaelHistory.onSoloChange(null, false);
+    } else {
+      _layers.layers.forEach(l => {
+        l._preSoloVisible = l.visible;
+        l.visible = (l.id === id);
+      });
+      _soloLayerId = id;
+      Toast.info(`Solo: ${_layers.layers.find(l => l.id === id)?.name ?? id}`);
+      if (typeof window._vaelHistory !== 'undefined') window._vaelHistory.onSoloChange(_layers.layers.find(l=>l.id===id), true);
+    }
+    renderLayerList();
+  }
+
+  function getSoloId() { return _soloLayerId; }
+
+  return {
     init, 
     selectLayer, 
     renderLayerList,
     setSelectedId,
     getSelectedId,
     getMultiSelect,
+    soloLayer,
+    getSoloId,
     _initCanvasDrag,
     get onSelect() { return onSelect; },
     set onSelect(fn) { onSelect = fn; } 

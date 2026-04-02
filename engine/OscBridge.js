@@ -50,6 +50,15 @@ class OscBridge {
     this._tryConnect();
   }
 
+  /**
+   * Enable auto-connect. Only call this when the user explicitly
+   * wants to use the OSC bridge — not at app startup.
+   */
+  enable(url = 'ws://localhost:8080') {
+    if (this._enabled) return;
+    this.connect(url);
+  }
+
   disconnect() {
     this._enabled = false;
     clearTimeout(this._retryTimer);

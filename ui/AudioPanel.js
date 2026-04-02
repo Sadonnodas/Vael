@@ -54,6 +54,7 @@ const AudioPanel = (() => {
         _loopIn = 0; _loopOut = 1;
         _updateLoopPointUI();
         _buildNewMeters();
+        _showAudioMeta(null);
         Toast.success(`Audio loaded: ${entry.name} — press Play to start`);
       } catch { Toast.error('Could not load audio from library'); }
     });
@@ -73,6 +74,7 @@ const AudioPanel = (() => {
         _updateLoopPointUI();
         _audio.play();
         btnPlay.textContent = '⏸';
+        _showAudioMeta(file);
         Toast.success(`Loaded: ${file.name}`);
         // Also register in the library so it appears in LIBRARY → Audio
         if (typeof LibraryPanel !== 'undefined' && LibraryPanel.addAudioFile) {
@@ -167,6 +169,15 @@ const AudioPanel = (() => {
       const v = parseFloat(slSpeed.value);
       _audio.inputSpeed = v;
       valSpeed.textContent = v.toFixed(3);
+    });
+
+    // Playback rate (pitch + speed together — Web Audio limitation)
+    const slRate  = document.getElementById('sl-playback-rate');
+    const valRate = document.getElementById('val-playback-rate');
+    slRate?.addEventListener('input', () => {
+      const v = parseFloat(slRate.value);
+      _audio.setPlaybackRate(v);
+      valRate.textContent = v.toFixed(2) + '×';
     });
 
     // Loop points
@@ -418,6 +429,33 @@ const AudioPanel = (() => {
     });
 
     levelsEl.appendChild(wrap);
+  }
+
+  function _showAudioMeta(file) {
+    const metaEl = document.getElementById('audio-meta');
+    if (!metaEl) return;
+    const buf = _audio._buffer;
+    if (!buf) { metaEl.style.display = 'none'; return; }
+
+    const dur     = buf.duration;
+    const mins    = Math.floor(dur / 60);
+    const secs    = (dur % 60).toFixed(1);
+    const ch      = buf.numberOfChannels;
+    const sr      = buf.sampleRate;
+    const sizeStr = file ? (() => {
+      const kb = file.size / 1024;
+      return kb < 1024 ? `${kb.toFixed(0)} KB` : `${(kb/1024).toFixed(1)} MB`;
+    })() : null;
+
+    const rows = [
+      `Duration: ${mins}:${secs.padStart(4,'0')}`,
+      `Sample rate: ${(sr/1000).toFixed(1)} kHz`,
+      `Channels: ${ch === 1 ? 'Mono' : ch === 2 ? 'Stereo' : ch + 'ch'}`,
+    ];
+    if (sizeStr) rows.push(`File size: ${sizeStr}`);
+
+    metaEl.innerHTML = rows.join('&emsp;·&emsp;');
+    metaEl.style.display = 'block';
   }
 
   return { init, tick };

@@ -53,8 +53,14 @@ const LibraryPanel = (() => {
     _createFileInputs();
     _render();
     // Restore binary assets from IndexedDB after a short delay
-    // (IndexedDB is async; we render immediately with empty state then populate)
     _restoreFromIndexedDB();
+
+    // When AudioPanel asks to open the library, switch to the audio section
+    window.addEventListener('vael:open-library-audio', () => {
+      document.querySelector('[data-tab="library"]')?.click();
+      _activeSection = 'audio';
+      _render();
+    });
   }
 
   function _createFileInputs() {

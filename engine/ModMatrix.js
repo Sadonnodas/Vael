@@ -64,16 +64,57 @@ class ModMatrix {
   apply(layer, signals) {
     if (!this.routes.length) return;
 
+    // When no audio is active, audio-sourced signals should be exactly 0,
+    // not slowly decaying — this ensures depth slider has no effect without music.
+    const audioInactive = signals && signals.isActive === false;
+
     this.routes.forEach(route => {
       const { source, target, depth, smooth, invert, min, max } = route;
 
+      // Audio sources snap to 0 when audio is inactive
+      const AUDIO_SOURCES = new Set([
+        'bass','mid','treble','volume','rms',
+        'spectralCentroid','spectralSpread','spectralFlux',
+        'kickEnergy','snareEnergy','hihatEnergy',
+        'isBeat','iBeat','kickBeat','snareBeat','hihatBeat',
+        'songPosition','songTime',
+      ]);
+      const isAudioSource = AUDIO_SOURCES.has(source);
+
       // Get raw signal (0–1)
-      let raw = signals?.[source] ?? layer.uniforms?.[source] ?? 0;
+      let raw;
+      if (source?.startsWith('lfo-') && route.lfoState) {
+        // Inline LFO: advance phase and compute output
+        const ls  = route.lfoState;
+        const bpm = signals?.bpm || 120;
+        let rateHz = ls.rate || 1;
+        if (ls.syncToBpm && bpm > 0) {
+          rateHz = (bpm / 60) / (ls.rate || 1);
+        }
+        const dt = signals?._dt || (1/60);
+        ls._phase = ((ls._phase || 0) + rateHz * dt) % 1;
+        const p = ls._phase;
+        let lfoOut;
+        switch (ls.shape || 'sine') {
+          case 'triangle': lfoOut = p < 0.5 ? p * 4 - 1 : 3 - p * 4; break;
+          case 'square':   lfoOut = p < 0.5 ? 1 : -1; break;
+          case 'sawtooth': lfoOut = p * 2 - 1; break;
+          case 'random':   lfoOut = (ls._rand = ls._rand ?? Math.random()); if (p < (ls._prevP || 0)) ls._rand = Math.random(); ls._prevP = p; lfoOut = ls._rand * 2 - 1; break;
+          default:         lfoOut = Math.sin(p * Math.PI * 2); // sine
+        }
+        raw = (lfoOut + 1) / 2; // normalise -1..1 → 0..1
+      } else {
+        raw = signals?.[source] ?? layer.uniforms?.[source] ?? 0;
+      }
       raw = Math.max(0, Math.min(1, raw));
       if (invert) raw = 1 - raw;
 
-      // Smooth per-route
-      route._smoothed += (raw - route._smoothed) * Math.min(1, smooth);
+      // If audio is inactive and this is an audio-sourced route, snap to 0
+      if (audioInactive && isAudioSource) {
+        route._smoothed = 0;
+      } else {
+        route._smoothed += (raw - route._smoothed) * Math.min(1, smooth);
+      }
 
       // Apply curve shaping to the smoothed value before multiplying by depth
       const shaped = _shapeCurve(route._smoothed, route.curve || 'linear');

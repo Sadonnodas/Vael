@@ -1,24 +1,16 @@
 /**
  * layers/ParticleLayer.js
  *
- * FIXES (v2.1):
- * - Full-canvas init: particles now spawn across the full W×H canvas in all
- *   modes, not just a sub-region.
- * - Drift/trails direction fix: per-particle noiseOx/noiseOy offsets are now
- *   spread across a much wider range (0–8000) so they sample genuinely
- *   independent, well-distributed regions of the Perlin field. Previously the
- *   narrow range (0–1000) meant all particles ended up in a correlated zone
- *   that had a net directional bias toward negative x/y (top-left).
- *   Particles also receive a randomised initial velocity so they start moving
- *   in varied directions rather than all accelerating the same way.
- * - Clustering fix: drift damping tightened (0.96 → 0.94) to prevent
- *   sustained co-alignment. audioForce gain reduced so high audio levels
- *   no longer compress particles into a streak.
- * - Audio reactivity: audioReact=0 now fully stops all audio-driven motion
- *   including beat pulse. Beat pulse gating already respected audioReact>0.
+ * FIXES:
+ * - Drift flocking: each particle now adds its own stable per-particle offset
+ *   to the noise coordinates, so nearby particles sample different parts of
+ *   the noise field and don't clump together.
+ * - Audio reactivity: replaced the harsh `1 + audio * 1.5` multiplier with
+ *   a sqrt curve that gives smooth, proportional response across the full
+ *   0–1 audio range. Beat pulse only affects size, not position.
  * - audioTarget param removed — use ModMatrix to route specific bands.
  *
- * MODES (10 total):
+ * MODES (9 total):
  *   drift      — noise-field flow (fixed: no more clumping)
  *   fountain   — gravity-based upward spray
  *   orbit      — circular orbits at varied radii
@@ -37,7 +29,7 @@ class ParticleLayer extends BaseLayer {
     version: '2.0',
     params: [
       { id: 'mode',      label: 'Mode',       type: 'enum',  default: 'drift',  triggersRefresh: true,
-        options: ['drift','fountain','orbit','pulse','fireflies','scatter','rain','vortex','trails','magnet'] },
+        options: ['drift','fountain','orbit','pulse','fireflies','scatter','rain','vortex','trails','magnet','explosion','strings','spiral','snow','galaxy'] },
       { id: 'count',     label: 'Count',      type: 'int',   default: 600,  min: 50,   max: 3000 },
       { id: 'size',      label: 'Size',       type: 'float', default: 2.0,  min: 0.5,  max: 10   },
       { id: 'speed',     label: 'Speed',      type: 'float', default: 0.4,  min: 0.05, max: 3    },
@@ -49,7 +41,7 @@ class ParticleLayer extends BaseLayer {
         showWhen: { mode: ['trails'] } },
       { id: 'pulseSize', label: 'Pulse size', type: 'float', default: 0.5,  min: 0.05, max: 3.0,
         showWhen: { mode: ['pulse'] } },
-      { id: 'audioReact',label: 'Audio react',type: 'float', default: 0.5,  min: 0,    max: 1    },
+      { id: 'audioReact',label: 'Audio react',type: 'float', default: 0.0,  min: 0,    max: 1    },
     ],
   };
 
@@ -64,7 +56,7 @@ class ParticleLayer extends BaseLayer {
       hueShift:  0,
       trailLen:   0.85,
       pulseSize:  0.5,
-      audioReact: 0.5,
+      audioReact: 0.0,
     };
     this._particles   = [];
     this._time        = 0;
@@ -81,7 +73,7 @@ class ParticleLayer extends BaseLayer {
     this._prevCount = 0; // force re-init
   }
 
-  _initParticles(w, h) {
+  _initParticles(w, h, clearTrails = true) {
     const count = this.params.count;
     const mode  = this.params.mode;
     this._particles = Array.from({ length: count }, (_, i) =>
@@ -90,16 +82,29 @@ class ParticleLayer extends BaseLayer {
     this._prevCount = count;
     this._prevMode  = mode;
 
-    // Trail mode gets its own offscreen canvas for persistence
+    // Trail mode gets its own offscreen canvas for persistence.
+    // Only clear the trail canvas when clearTrails=true (mode changed),
+    // not on mere size changes — this prevents trail reset on layer click.
     if (mode === 'trails') {
       if (!this._trailCanvas) {
         this._trailCanvas = document.createElement('canvas');
         this._trailCtx    = this._trailCanvas.getContext('2d');
+        this._trailCanvas.width  = w;
+        this._trailCanvas.height = h;
+        this._trailCtx.fillStyle = '#000';
+        this._trailCtx.fillRect(0, 0, w, h);
+      } else if (this._trailCanvas.width !== w || this._trailCanvas.height !== h) {
+        // Canvas dimensions changed — must resize (wipes content, unavoidable)
+        this._trailCanvas.width  = w;
+        this._trailCanvas.height = h;
+        this._trailCtx.fillStyle = '#000';
+        this._trailCtx.fillRect(0, 0, w, h);
+      } else if (clearTrails) {
+        // Mode changed — deliberately clear trails
+        this._trailCtx.fillStyle = '#000';
+        this._trailCtx.fillRect(0, 0, w, h);
       }
-      this._trailCanvas.width  = w;
-      this._trailCanvas.height = h;
-      this._trailCtx.fillStyle = '#000';
-      this._trailCtx.fillRect(0, 0, w, h);
+      // When clearTrails=false and size unchanged: keep existing trail content
     }
   }
 
@@ -108,23 +113,24 @@ class ParticleLayer extends BaseLayer {
     const rnd  = () => Math.random();
     const rng  = (a, b) => a + rnd() * (b - a);
 
-    // Each particle gets a large, unique noise offset so it samples a
-    // genuinely independent region of the Perlin field. The narrow 0–1000
-    // range in v2.0 put all particles in a correlated zone that had a net
-    // bias toward negative x/y. Spreading across 0–8000 eliminates that.
     const p = {
       x:         rng(-w/2, w/2),
       y:         rng(-h/2, h/2),
-      // Randomised initial velocity — particles start moving in varied
-      // directions rather than all being at rest and then drifting the
-      // same way as the first noise sample pushes them.
-      vx:        rng(-0.8, 0.8),
-      vy:        rng(-0.8, 0.8),
+      vx:        0,
+      vy:        0,
       life:      rng(0, 1),
       maxLife:   rng(0.5, 1),
       size:      rng(0.5, 1.5),
-      noiseOx:   rng(0, 8000),
-      noiseOy:   rng(0, 8000),
+      // Per-particle noise offset — THIS is the fix for drift clumping.
+      // Each particle samples a different region of the noise field even when
+      // two particles are at the same spatial position.
+      // Per-particle noise offsets — keep these small (0–4) so each particle
+      // samples a slightly different region of the noise field. Large values
+      // (the old 0–500) caused all particles to sample extreme coordinates
+      // where the noise gradient consistently points in one direction, creating
+      // the top-left corner drift bug.
+      noiseOx:   rng(0, 4),
+      noiseOy:   rng(0, 4),
       hue:       (i / total) * 360 + rng(-15, 15),
       angle:     rng(0, Math.PI * 2),
     };
@@ -184,10 +190,15 @@ class ParticleLayer extends BaseLayer {
         break;
 
       case 'trails':
-        p.vx = rng(-0.8, 0.8);
-        p.vy = rng(-0.8, 0.8);
+        p.vx = rng(-1.5, 1.5);
+        p.vy = rng(-1.5, 1.5);
         break;
 
+      case 'explosion':
+      case 'strings':
+      case 'spiral':
+      case 'snow':
+      case 'galaxy':
       case 'magnet':
         // Particles drift freely until audio pulls them toward the mouse
         p.vx      = rng(-0.5, 0.5);
@@ -210,23 +221,58 @@ class ParticleLayer extends BaseLayer {
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, targetAudio, 0.08);
 
     if (audioData?.isBeat) {
-      this._beatPulse = (this.params.audioReact ?? 0.5) > 0 ? 1.0 : 0;
-    } else if (!audioData?.isActive) {
-      // Synthetic beat at ~120 BPM so pulse/scatter animate without audio
-      const phase = (this._time * 2.0) % 1;  // 2Hz = 120 BPM
-      if (phase < 0.05 && (this._lastSynthPhase ?? 1) >= 0.05) {
-        this._beatPulse = 0.6;  // weaker than real beat
-      }
-      this._lastSynthPhase = phase;
+      this._beatPulse = (this.params.audioReact ?? 0) > 0 ? 1.0 : 0;
     }
     this._beatPulse = Math.max(0, (this._beatPulse ?? 0) - dt * 4);
   }
 
   render(ctx, width, height) {
-    if (this._prevCount !== this.params.count ||
-        this._prevMode  !== this.params.mode  ||
-        this._particles.length === 0) {
-      this._initParticles(width, height);
+    // Reinitialise only when mode changes or canvas size changes significantly.
+    // Count changes are handled softly below (add/remove particles without reset).
+    // Guard: don't initialise until we have real canvas dimensions
+    if (width < 10 || height < 10) return;
+
+    // Only reinit on genuine size change (>50px), not sub-pixel layout flicker.
+    // The sidebar repaint causes canvas.clientWidth to fluctuate by 1-2px,
+    // which was triggering _initParticles and clearing the trail canvas.
+    const sizeChanged = Math.abs(width  - (this._prevWidth  ?? 0)) > 50 ||
+                        Math.abs(height - (this._prevHeight ?? 0)) > 50;
+    const modeChanged = this._prevMode  !== this.params.mode;
+    const forceReinit = this.softUpdate === false && this._prevCount !== this.params.count;
+
+    const firstRun = this._particles.length === 0;
+
+    if (modeChanged || firstRun || forceReinit) {
+      // Full reinit: mode/first-run/instant-count. firstRun takes priority over
+      // sizeChanged so particles always spawn at the real canvas size.
+      this._initParticles(width, height, modeChanged || firstRun);
+      this._prevWidth  = width;
+      this._prevHeight = height;
+    } else if (sizeChanged) {
+      // Canvas was genuinely resized — only resize the trail canvas, don't respawn particles
+      this._prevWidth  = width;
+      this._prevHeight = height;
+      if (this.params.mode === 'trails' && this._trailCanvas &&
+          (this._trailCanvas.width !== width || this._trailCanvas.height !== height)) {
+        this._trailCanvas.width  = width;
+        this._trailCanvas.height = height;
+        this._trailCtx.fillStyle = '#000';
+        this._trailCtx.fillRect(0, 0, width, height);
+      }
+    } else {
+      // Soft count adjustment — add or remove particles without full reset
+      const target = this.params.count;
+      const current = this._particles.length;
+      if (target > current) {
+        const toAdd = Math.min(target - current, 20);
+        for (let i = 0; i < toAdd; i++) {
+          this._particles.push(this._newParticle(width, height, current + i, target));
+        }
+      } else if (target < current) {
+        const toRemove = Math.min(current - target, 20);
+        this._particles.splice(this._particles.length - toRemove, toRemove);
+      }
+      this._prevCount = this._particles.length;
     }
 
     const dt    = 1 / 60;
@@ -250,16 +296,18 @@ class ParticleLayer extends BaseLayer {
       switch (mode) {
 
         case 'drift': {
-          // Per-particle offsets (0–8000 range) prevent clumping — each
-          // particle samples a genuinely independent noise region
-          const nx  = VaelMath.noise2D((p.x + p.noiseOx) * 0.003, this._time * 0.2) - 0.5;
-          const ny  = VaelMath.noise2D((p.y + p.noiseOy) * 0.003, this._time * 0.2) - 0.5;
-          // Gentler audio force — prevents high audio from compressing particles
-          const audioForce = 0.10 + audio * 0.18;
-          p.vx += nx * audioForce * speed;
-          p.vy += ny * audioForce * speed;
-          // Tighter damping prevents sustained co-alignment
-          p.vx  *= 0.94; p.vy *= 0.94;
+          // Sample noise using normalised coordinates (0–1 range of canvas)
+          // so the field looks the same regardless of canvas size, and particles
+          // spread across the whole canvas rather than clustering near (0,0).
+          const nx  = VaelMath.noise2D((p.x / width  + p.noiseOx) * 2.0, this._time * 0.25);
+          const ny  = VaelMath.noise2D((p.y / height + p.noiseOy) * 2.0, this._time * 0.25);
+          // Base force always present so particles drift without audio.
+          // Audio (gated by audioReact) adds extra energy on top.
+          const baseForce  = 0.12;
+          const audioForce = audio * 0.25;
+          p.vx += nx * (baseForce + audioForce) * speed;
+          p.vy += ny * (baseForce + audioForce) * speed;
+          p.vx  *= 0.96; p.vy *= 0.96;
           p.x   += p.vx; p.y  += p.vy;
           const hw = width/2, hh = height/2;
           if (p.x >  hw) p.x = -hw;
@@ -316,8 +364,8 @@ class ParticleLayer extends BaseLayer {
 
         case 'fireflies': {
           p.phase += dt * p.blinkSpeed * (1 + audio * 0.3);
-          const nx = VaelMath.noise2D((p.x + p.noiseOx) * 0.003, this._time * 0.08) - 0.5;
-          const ny = VaelMath.noise2D((p.y + p.noiseOy) * 0.003, this._time * 0.08) - 0.5;
+          const nx = VaelMath.noise2D((p.x / width  + p.noiseOx) * 2.0, this._time * 0.08);
+          const ny = VaelMath.noise2D((p.y / height + p.noiseOy) * 2.0, this._time * 0.08);
           p.vx += nx * 0.05;
           p.vy += ny * 0.05;
           p.vx *= 0.98; p.vy *= 0.98;
@@ -386,11 +434,11 @@ class ParticleLayer extends BaseLayer {
 
         case 'trails': {
           // Smooth noise-driven motion, renders to a persistent trail canvas
-          const nx = VaelMath.noise2D((p.x + p.noiseOx) * 0.003, this._time * 0.15) - 0.5;
-          const ny = VaelMath.noise2D((p.y + p.noiseOy) * 0.003, this._time * 0.15) - 0.5;
-          p.vx += nx * (0.12 + audio * 0.22) * speed;
-          p.vy += ny * (0.12 + audio * 0.22) * speed;
-          p.vx  *= 0.94; p.vy *= 0.94;
+          const nx = VaelMath.noise2D((p.x / width  + p.noiseOx) * 2.0, this._time * 0.2);
+          const ny = VaelMath.noise2D((p.y / height + p.noiseOy) * 2.0, this._time * 0.2);
+          p.vx += nx * (0.15 + audio * 0.3) * speed;
+          p.vy += ny * (0.15 + audio * 0.3) * speed;
+          p.vx  *= 0.95; p.vy *= 0.95;
           p.x   += p.vx;  p.y  += p.vy;
           const hw = width/2, hh = height/2;
           if (p.x >  hw) p.x = -hw;
@@ -400,6 +448,54 @@ class ParticleLayer extends BaseLayer {
           break;
         }
 
+        case 'explosion': {
+          // Particles burst outward from centre and respawn
+          if (!p.exploding) { p.exploding = true; p.angle = Math.random() * Math.PI * 2; p.speed2 = (0.5 + Math.random() * 1.5) * speed; }
+          p.vx += Math.cos(p.angle) * p.speed2 * 0.05;
+          p.vy += Math.sin(p.angle) * p.speed2 * 0.05;
+          p.vx *= 0.97; p.vy *= 0.97;
+          p.x  += p.vx * width; p.y += p.vy * height;
+          const dist2 = Math.sqrt(p.vx * p.vx + p.vy * p.vy);
+          if (dist2 < 0.0005 || p.x < -width/2 || p.x > width/2 || p.y < -height/2 || p.y > height/2) {
+            Object.assign(p, this._newParticle(width, height, 0, this.params.count));
+            p.x = 0; p.y = 0; p.exploding = false;
+          }
+          break;
+        }
+        case 'strings': {
+          // Connected particle strings — move slowly, draw lines between neighbours
+          const nx2 = VaelMath.noise2D((p.x / width + p.noiseOx) * 1.5, this._time * 0.08);
+          const ny2 = VaelMath.noise2D((p.y / height + p.noiseOy) * 1.5, this._time * 0.08 + 7);
+          p.x += nx2 * 0.003 * speed * width;
+          p.y += ny2 * 0.003 * speed * height;
+          if (p.x < -width/2) p.x = width/2; if (p.x > width/2) p.x = -width/2;
+          if (p.y < -height/2) p.y = height/2; if (p.y > height/2) p.y = -height/2;
+          break;
+        }
+        case 'spiral': {
+          // Logarithmic spiral inward then respawn at edge
+          p.spiralAngle = (p.spiralAngle || Math.random() * Math.PI * 2) + speed * 0.015;
+          p.spiralR     = (p.spiralR     || 0.4 + Math.random() * 0.1) - speed * 0.0008;
+          p.x = Math.cos(p.spiralAngle) * p.spiralR * width;
+          p.y = Math.sin(p.spiralAngle) * p.spiralR * height;
+          if (p.spiralR < 0.02) { p.spiralR = 0.4 + Math.random() * 0.15; p.spiralAngle = Math.random() * Math.PI * 2; }
+          break;
+        }
+        case 'snow': {
+          // Gentle falling snow with horizontal drift
+          p.y += speed * height * 0.004;
+          p.x += Math.sin(this._time * 0.5 + p.noiseOx * 10) * width * 0.0006;
+          if (p.y > height/2) { p.y = -height/2; p.x = (Math.random() - 0.5) * width; }
+          break;
+        }
+        case 'galaxy': {
+          // Galactic rotation — particles orbit at different radii
+          p.orbitR     = p.orbitR     || (0.05 + Math.random() * 0.45);
+          p.orbitAngle = (p.orbitAngle || Math.random() * Math.PI * 2) + speed * 0.008 / p.orbitR;
+          p.x = Math.cos(p.orbitAngle) * p.orbitR * width  + VaelMath.noise2D(p.noiseOx, this._time * 0.1) * 0.015 * width;
+          p.y = Math.sin(p.orbitAngle) * p.orbitR * height * 0.35 + VaelMath.noise2D(p.noiseOy, this._time * 0.1) * 0.01 * height;
+          break;
+        }
         case 'magnet': {
           // Mouse acts as attractor/repeller. Audio strength scales the force.
           // p.charge: +1 = attracted to mouse, -1 = repelled.
@@ -443,6 +539,20 @@ class ParticleLayer extends BaseLayer {
         alpha = blink * (0.35 + audio * 0.45);
         sz    = this.params.size * p.size * (0.5 + blink * 0.9 + audio * 0.3);
         // Soft outer glow
+        // Strings: draw lines to nearby particles
+        if (mode === 'strings') {
+          for (let j = i + 1; j < particles.length; j++) {
+            const q = particles[j];
+            const dx2 = p.x - q.x, dy2 = p.y - q.y;
+            const dist3 = Math.sqrt(dx2*dx2 + dy2*dy2);
+            const maxDist = Math.min(width, height) * 0.12;
+            if (dist3 < maxDist) {
+              ctx.strokeStyle = `rgba(${rgb[0]},${rgb[1]},${rgb[2]},${alpha * (1 - dist3 / maxDist)})`;
+              ctx.lineWidth = sz * 0.5;
+              ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
+            }
+          }
+        }
         ctx.beginPath();
         ctx.arc(p.x, p.y, Math.max(0.5, sz * 3.5), 0, Math.PI * 2);
         ctx.fillStyle   = color;

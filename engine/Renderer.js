@@ -83,6 +83,10 @@ class Renderer {
 
   start() {
     const loop = (timestamp) => {
+      // Always check if canvas dimensions have changed — catches the case where
+      // clientWidth/clientHeight were 0 when the constructor ran (layout not yet complete)
+      this._resize();
+
       const dt = Math.min((timestamp - this._lastT) / 1000, 0.1);
       this._lastT = timestamp;
       if (dt > 0) this._fpsSmoothed += ((1 / dt) - this._fpsSmoothed) * 0.05;
@@ -147,6 +151,50 @@ class Renderer {
         layer.render(offCtx, W, H);
       }
       offCtx.restore();
+
+      // Apply clip shape — punch out everything outside rect/ellipse
+      if (layer.clipShape?.type && layer.clipShape.type !== 'none') {
+        const cs  = layer.clipShape;
+        const t2  = layer.transform || {};
+        const cx2 = W / 2 + (t2.x || 0);
+        const cy2 = H / 2 + (t2.y || 0);
+        const cw  = W * (cs.w ?? 0.5);
+        const ch  = H * (cs.h ?? 0.5);
+        const isOutline = cs.type.includes('outline');
+        const isEllipse = cs.type.includes('ellipse');
+
+        if (isOutline) {
+          // Outline mode: draw the shape as a stroke on top of the layer
+          offCtx.save();
+          offCtx.strokeStyle = '#ffffff';
+          offCtx.lineWidth   = cs.lineWidth ?? 3;
+          offCtx.beginPath();
+          if (isEllipse) {
+            offCtx.ellipse(cx2, cy2, cw, ch, 0, 0, Math.PI * 2);
+          } else {
+            offCtx.rect(cx2 - cw, cy2 - ch, cw * 2, ch * 2);
+          }
+          offCtx.stroke();
+          offCtx.restore();
+        } else {
+          // Fill clip mode: keep only pixels inside the shape
+          const tmp    = document.createElement('canvas');
+          tmp.width    = W; tmp.height = H;
+          const tmpCtx = tmp.getContext('2d');
+          tmpCtx.fillStyle = '#fff';
+          tmpCtx.beginPath();
+          if (isEllipse) {
+            tmpCtx.ellipse(cx2, cy2, cw, ch, 0, 0, Math.PI * 2);
+          } else {
+            tmpCtx.rect(cx2 - cw, cy2 - ch, cw * 2, ch * 2);
+          }
+          tmpCtx.fill();
+          offCtx.save();
+          offCtx.globalCompositeOperation = 'destination-in';
+          offCtx.drawImage(tmp, 0, 0);
+          offCtx.restore();
+        }
+      }
     });
 
     // ── Pass 2: apply masks, FX, opacity bake, upload ───────────
@@ -253,11 +301,24 @@ class Renderer {
     });
 
     layers.forEach(layer => {
-      if (this._quads.has(layer.id)) return;
+      if (this._quads.has(layer.id)) {
+        // Resize existing offscreen canvas if W/H changed
+        const quad = this._quads.get(layer.id);
+        if (W > 0 && H > 0 && (quad.offscreen.width !== W || quad.offscreen.height !== H)) {
+          quad.offscreen.width  = W;
+          quad.offscreen.height = H;
+          quad.texture.needsUpdate = true;
+        }
+        return;
+      }
+
+      // Only create quads when we have real dimensions
+      const cw = W > 0 ? W : 800;
+      const ch = H > 0 ? H : 600;
 
       const offscreen    = document.createElement('canvas');
-      offscreen.width    = W || 800;
-      offscreen.height   = H || 600;
+      offscreen.width    = cw;
+      offscreen.height   = ch;
       const offCtx       = offscreen.getContext('2d', { willReadFrequently: false });
       const texture      = new THREE.CanvasTexture(offscreen);
       texture.minFilter  = THREE.LinearFilter;
@@ -390,6 +451,8 @@ class Renderer {
     let readTarget  = this._postTarget;
     let writeTarget = this._postTargetB;
 
+    const hasFeedbackPass = this._postMeshes?.some(({ pass }) => pass.needsFeedback);
+
     this._postMeshes?.forEach(({ pass, mesh }, i) => {
       const isLast = i === this._postMeshes.length - 1;
       const mat    = mesh.material;
@@ -408,8 +471,11 @@ class Renderer {
       }
       if (pass.updateUniforms) pass.updateUniforms(mat.uniforms, this.audioData);
 
+      // When a feedback pass is last, render to writeTarget so we can capture
+      // it properly — then blit to screen and feedbackBuffer below.
+      const renderToScreen = isLast && !hasFeedbackPass;
       postScene.add(mesh);
-      this._renderer.setRenderTarget(isLast ? null : writeTarget);
+      this._renderer.setRenderTarget(renderToScreen ? null : writeTarget);
       this._renderer.render(postScene, postCamera);
       postScene.remove(mesh);
 
@@ -417,12 +483,23 @@ class Renderer {
     });
 
     if (this._feedbackBuffer && this._postMeshes?.length > 0) {
+      // readTarget now holds the final post-processed frame.
+      // Save it into feedbackBuffer for next frame's tFeedback uniform.
       const blitScene = new THREE.Scene();
       const geo       = new THREE.PlaneGeometry(2, 2);
       const mat       = new THREE.MeshBasicMaterial({ map: readTarget.texture, depthWrite: false, depthTest: false });
       blitScene.add(new THREE.Mesh(geo, mat));
+
+      // Capture to feedbackBuffer
       this._renderer.setRenderTarget(this._feedbackBuffer);
       this._renderer.render(blitScene, postCamera);
+
+      // If last pass rendered to writeTarget (not screen), blit to screen now
+      if (hasFeedbackPass) {
+        this._renderer.setRenderTarget(null);
+        this._renderer.render(blitScene, postCamera);
+      }
+
       this._renderer.setRenderTarget(null);
       geo.dispose(); mat.dispose();
     }

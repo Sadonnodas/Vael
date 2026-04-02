@@ -18,8 +18,10 @@ const ModMatrixPanel = (() => {
     { group: 'Audio — bands',    ids: ['bass','mid','treble','volume','rms'] },
     { group: 'Audio — spectrum', ids: ['spectralCentroid','spectralSpread','spectralFlux'] },
     { group: 'Audio — beats',    ids: ['kickEnergy','snareEnergy','hihatEnergy'] },
+    { group: 'Song position',    ids: ['songPosition','songTime'] },
     { group: 'Video',            ids: ['brightness','motion','edgeDensity'] },
     { group: 'Engine',           ids: ['iTime','iBeat','iMouseX','iMouseY'] },
+    { group: 'LFO',              ids: ['lfo-1','lfo-2','lfo-3','lfo-4'] },
   ];
 
   const SOURCE_LABELS = {
@@ -29,18 +31,24 @@ const ModMatrixPanel = (() => {
     spectralCentroid: 'Centroid (brightness)', spectralSpread: 'Spread', spectralFlux: 'Flux (transients)',
     // Per-band energy
     kickEnergy: 'Kick energy', snareEnergy: 'Snare energy', hihatEnergy: 'Hi-hat energy',
+    // Song position
+    songPosition: 'Song position (0→1)', songTime: 'Song time (seconds)',
     // Video
     brightness: 'Brightness', motion: 'Motion', edgeDensity: 'Edge density',
     // Engine
     iTime: 'Time', iBeat: 'Beat', iMouseX: 'Mouse X', iMouseY: 'Mouse Y',
+    // LFO inline
+    'lfo-1': 'LFO 1', 'lfo-2': 'LFO 2', 'lfo-3': 'LFO 3', 'lfo-4': 'LFO 4',
   };
 
   const SOURCE_COLORS = {
     bass: '#ff6b6b', mid: '#ffd700', treble: '#00d4aa', volume: '#7c6af7', rms: '#ff9f43',
     spectralCentroid: '#54a0ff', spectralSpread: '#5f27cd', spectralFlux: '#ff6348',
     kickEnergy: '#ff4757', snareEnergy: '#ffa502', hihatEnergy: '#2ed573',
+    songPosition: '#00d4aa', songTime: '#00d4aa',
     brightness: '#ffd700', motion: '#ff6b6b', edgeDensity: '#a78bfa',
     iTime: '#00d4aa', iBeat: '#ffffff', iMouseX: '#7c6af7', iMouseY: '#7c6af7',
+    'lfo-1': '#ff9f43', 'lfo-2': '#ee5a24', 'lfo-3': '#0652dd', 'lfo-4': '#9980FA',
   };
 
   // Transform target definitions (matches ModMatrix.TRANSFORM_TARGETS)
@@ -156,109 +164,250 @@ const ModMatrixPanel = (() => {
       return;
     }
 
+    const SHAPES = ['sine','triangle','square','sawtooth','random'];
+    const DIVS   = ['1/32','1/16','1/8','1/4','1/2','1','2','4'];
+    const CURVES = typeof ModMatrix !== 'undefined' && ModMatrix.CURVES
+      ? ModMatrix.CURVES
+      : [
+          { id: 'linear', label: 'Linear' }, { id: 'exponential', label: 'Exponential' },
+          { id: 'logarithmic', label: 'Logarithmic' }, { id: 'scurve', label: 'S-curve' },
+          { id: 'step', label: 'Step' }, { id: 'inverted', label: 'Inverted' },
+        ];
+
+    // Track which routes are expanded (persist across re-renders via route.id)
+    if (!_renderRoutes._expanded) _renderRoutes._expanded = new Set();
+    const expanded = _renderRoutes._expanded;
+
     layer.modMatrix.routes.forEach(route => {
-      // Find the label for this target
       const paramManifest = layer.constructor?.manifest?.params?.find(p => p.id === route.target);
       const transformDef  = TRANSFORM_TARGETS.find(t => t.id === route.target);
       const layerDef      = LAYER_TARGETS.find(t => t.id === route.target);
       const targetName    = paramManifest?.label || transformDef?.label || layerDef?.label || route.target;
       const sourceName    = SOURCE_LABELS[route.source] || route.source;
       const color         = SOURCE_COLORS[route.source] || '#00d4aa';
+      const isOpen        = expanded.has(route.id);
+      const depthSign     = route.depth < 0 ? '−' : '+';
+      const depthAbs      = Math.abs(route.depth).toFixed(2);
+      const depthColor    = route.depth < 0 ? '#ff9070' : color;
 
-      const row = document.createElement('div');
-      row.style.cssText = `
-        display:flex; align-items:center; gap:6px; padding:6px 8px;
-        background:var(--bg-card); border:1px solid var(--border-dim);
-        border-left:2px solid ${color}; border-radius:4px;
-        margin-bottom:4px; flex-wrap:wrap;
+      // ── Card wrapper ─────────────────────────────────────────
+      const card = document.createElement('div');
+      card.style.cssText = `
+        background:var(--bg-card);border:1px solid var(--border-dim);
+        border-left:3px solid ${color};border-radius:5px;
+        margin-bottom:5px;overflow:hidden;
       `;
 
-      const depthSign  = route.depth < 0 ? '−' : '+';
-      const depthAbs   = Math.abs(route.depth).toFixed(2);
-      const depthColor = route.depth < 0 ? '#ff9070' : color;
-
-      const curveOpts = (typeof ModMatrix !== 'undefined' && ModMatrix.CURVES
-        ? ModMatrix.CURVES
-        : [
-            { id: 'linear', label: 'Lin' }, { id: 'exponential', label: 'Exp' },
-            { id: 'logarithmic', label: 'Log' }, { id: 'scurve', label: 'S' },
-            { id: 'step', label: 'Step' }, { id: 'inverted', label: 'Inv' },
-          ]
-      ).map(c => `<option value="${c.id}" ${(route.curve || 'linear') === c.id ? 'selected' : ''}>${c.label}</option>`).join('');
-
-      row.innerHTML = `
-        <span style="font-family:var(--font-mono);font-size:8px;font-weight:600;
-                     color:${color};min-width:52px">${sourceName}</span>
+      // ── Collapsed header row ─────────────────────────────────
+      const header = document.createElement('div');
+      header.style.cssText = `
+        display:flex;align-items:center;gap:6px;padding:7px 10px;
+        cursor:pointer;user-select:none;
+      `;
+      header.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:8px;font-weight:600;color:${color};flex-shrink:0">${sourceName}</span>
         <span style="font-size:9px;color:var(--text-dim)">→</span>
-        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text);flex:1">
-          ${targetName}
-        </span>
-
-        <div style="display:flex;align-items:center;gap:3px">
-          <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim)">curve</span>
-          <select class="mod-curve"
-            style="background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;
-                   color:var(--text-dim);font-family:var(--font-mono);font-size:7px;
-                   padding:1px 3px;cursor:pointer">
-            ${curveOpts}
-          </select>
-        </div>
-
-        <div style="display:flex;align-items:center;gap:3px">
-          <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim)">depth</span>
-          <input type="range" class="mod-depth" min="-2" max="2" step="0.05"
-            value="${route.depth}"
-            style="width:52px;accent-color:${depthColor}"
-            title="Depth: -2 to +2. Negative inverts the signal." />
-          <span class="mod-depth-val" style="font-family:var(--font-mono);font-size:8px;
-                color:${depthColor};min-width:30px;text-align:right">
-            ${depthSign}${depthAbs}
-          </span>
-        </div>
-
-        <div style="display:flex;align-items:center;gap:3px">
-          <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim)">lag</span>
-          <input type="range" class="mod-smooth" min="0.01" max="1" step="0.01"
-            value="${route.smooth}"
-            style="width:40px;accent-color:var(--accent2)"
-            title="Response lag: 0.01=very slow, 1=instant" />
-        </div>
-
-        <button class="mod-del"
-          style="background:none;border:none;color:#ff4444;cursor:pointer;
-                 font-size:10px;padding:0 2px">✕</button>
+        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${targetName}</span>
+        <span style="font-family:var(--font-mono);font-size:8px;color:${depthColor};flex-shrink:0">${depthSign}${depthAbs}</span>
+        <span class="route-arrow" style="font-size:9px;color:var(--text-dim);transition:transform 0.15s;transform:${isOpen?'rotate(90deg)':'rotate(0deg)'};flex-shrink:0">▶</span>
+        <button class="mod-del" style="background:none;border:none;color:#ff4444;cursor:pointer;font-size:11px;padding:0 2px;flex-shrink:0">✕</button>
       `;
 
-      const depthSlider = row.querySelector('.mod-depth');
-      const depthVal    = row.querySelector('.mod-depth-val');
+      // ── Expanded body ────────────────────────────────────────
+      const body = document.createElement('div');
+      body.style.cssText = `display:${isOpen?'block':'none'};padding:10px 12px;border-top:1px solid var(--border-dim);background:var(--bg)`;
 
-      row.querySelector('.mod-curve').addEventListener('change', e => {
-        route.curve = e.target.value;
+      // Target selector
+      const allTargets = [
+        ...(layer.constructor?.manifest?.params || []).filter(p => p.type === 'float' || p.type === 'int').map(p => ({ id: p.id, label: p.label })),
+        ...TRANSFORM_TARGETS,
+        ...LAYER_TARGETS,
+      ];
+      const tgtRow = document.createElement('div');
+      tgtRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+      tgtRow.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:44px">Target</span>
+        <select class="mod-target" style="flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px">
+          ${allTargets.map(t => `<option value="${t.id}" ${t.id===route.target?'selected':''}>${t.label}</option>`).join('')}
+        </select>
+      `;
+      body.appendChild(tgtRow);
+
+      // Source selector
+      const srcOpts = SOURCE_GROUPS.map(g =>
+        `<optgroup label="${g.group}">${g.ids.map(id=>`<option value="${id}" ${id===route.source?'selected':''}>${SOURCE_LABELS[id]||id}</option>`).join('')}</optgroup>`
+      ).join('');
+      const srcRow = document.createElement('div');
+      srcRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+      srcRow.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:44px">Source</span>
+        <select class="mod-source" style="flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px">
+          ${srcOpts}
+        </select>
+      `;
+      body.appendChild(srcRow);
+
+      // Depth slider
+      const depthRow = document.createElement('div');
+      depthRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+      depthRow.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:44px">Depth</span>
+        <input type="range" class="mod-depth" min="-2" max="2" step="0.05" value="${route.depth}"
+          style="flex:1;accent-color:${depthColor}" title="-2 to +2, negative inverts">
+        <span class="mod-depth-val" style="font-family:var(--font-mono);font-size:9px;color:${depthColor};min-width:36px;text-align:right">${depthSign}${depthAbs}</span>
+      `;
+      body.appendChild(depthRow);
+
+      // Curve + lag row
+      const curveRow = document.createElement('div');
+      curveRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+      curveRow.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:44px">Curve</span>
+        <select class="mod-curve" style="flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px">
+          ${CURVES.map(c=>`<option value="${c.id}" ${(route.curve||'linear')===c.id?'selected':''}>${c.label}</option>`).join('')}
+        </select>
+        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-left:8px;flex-shrink:0">Lag</span>
+        <input type="range" class="mod-smooth" min="0.01" max="1" step="0.01" value="${route.smooth}"
+          style="width:60px;accent-color:var(--accent2)" title="Response lag: 0.01=slow, 1=instant">
+      `;
+      body.appendChild(curveRow);
+
+      // LFO controls (shown when source is lfo-*)
+      if (!route.lfoState) route.lfoState = { shape: 'sine', syncToBpm: true, division: '1/4', rate: 1.0, _phase: 0 };
+      const lfoWrap = document.createElement('div');
+      lfoWrap.style.cssText = `display:${route.source?.startsWith('lfo-')?'block':'none'};padding:8px;background:rgba(255,159,67,0.08);border:1px solid rgba(255,159,67,0.25);border-radius:4px;margin-top:4px`;
+      const ls = route.lfoState;
+
+      // LFO shape buttons
+      const lfoShapeRow = document.createElement('div');
+      lfoShapeRow.style.cssText = 'display:flex;gap:4px;margin-bottom:8px';
+      const lfoLabel = document.createElement('span');
+      lfoLabel.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:44px;line-height:28px';
+      lfoLabel.textContent = 'Shape';
+      lfoShapeRow.appendChild(lfoLabel);
+      const shapeGroup = document.createElement('div');
+      shapeGroup.style.cssText = 'display:flex;gap:3px;flex:1';
+      SHAPES.forEach(s => {
+        const b = document.createElement('button');
+        const active = ls.shape === s;
+        b.style.cssText = `flex:1;background:${active?'#ff9f43':'none'};border:1px solid ${active?'#ff9f43':'var(--border-dim)'};border-radius:3px;color:${active?'var(--bg)':'var(--text-dim)'};font-family:var(--font-mono);font-size:8px;padding:4px 2px;cursor:pointer`;
+        b.textContent = s[0].toUpperCase() + s.slice(1);
+        b.addEventListener('click', () => {
+          ls.shape = s;
+          shapeGroup.querySelectorAll('button').forEach((btn, i) => {
+            const a = SHAPES[i] === s;
+            btn.style.background  = a ? '#ff9f43' : 'none';
+            btn.style.borderColor = a ? '#ff9f43' : 'var(--border-dim)';
+            btn.style.color       = a ? 'var(--bg)' : 'var(--text-dim)';
+          });
+        });
+        shapeGroup.appendChild(b);
       });
+      lfoShapeRow.appendChild(shapeGroup);
+      lfoWrap.appendChild(lfoShapeRow);
 
-      depthSlider.addEventListener('input', () => {
-        const v    = parseFloat(depthSlider.value);
-        route.depth = v;
-        const sign = v < 0 ? '−' : '+';
-        const abs  = Math.abs(v).toFixed(2);
-        const col  = v < 0 ? '#ff9070' : (SOURCE_COLORS[route.source] || '#00d4aa');
-        depthVal.textContent = `${sign}${abs}`;
-        depthVal.style.color = col;
-        depthSlider.style.accentColor = col;
+      // LFO rate row
+      const lfoRateRow = document.createElement('div');
+      lfoRateRow.style.cssText = 'display:flex;align-items:center;gap:8px';
+      const syncLabel2 = document.createElement('label');
+      syncLabel2.style.cssText = 'display:flex;align-items:center;gap:4px;font-family:var(--font-mono);font-size:8px;color:var(--text-dim);cursor:pointer;flex-shrink:0';
+      const syncChk = document.createElement('input');
+      syncChk.type = 'checkbox'; syncChk.checked = ls.syncToBpm;
+      syncChk.style.cssText = 'accent-color:#ff9f43';
+      syncLabel2.append(syncChk, 'BPM sync');
+      lfoRateRow.appendChild(syncLabel2);
+
+      const divSel2 = document.createElement('select');
+      divSel2.style.cssText = `flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px;display:${ls.syncToBpm?'block':'none'}`;
+      DIVS.forEach(d => {
+        const o = document.createElement('option');
+        o.value = d;
+        o.textContent = d === '1/4' ? '1/4 (1 beat)' : d === '1' ? '1 bar (4 beats)' : d === '1/2' ? '1/2 (2 beats)' : d;
+        o.selected = d === (ls.division || '1/4');
+        divSel2.appendChild(o);
       });
+      divSel2.addEventListener('change', () => { ls.division = divSel2.value; ls.rate = LFO.divisionToBeats(divSel2.value); });
+      lfoRateRow.appendChild(divSel2);
 
-      row.querySelector('.mod-smooth').addEventListener('input', e => {
-        route.smooth = parseFloat(e.target.value);
+      const rateIn2 = document.createElement('input');
+      rateIn2.type = 'number'; rateIn2.value = ls.rate || 1; rateIn2.min = 0.01; rateIn2.max = 32; rateIn2.step = 0.1;
+      rateIn2.style.cssText = `width:70px;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px;display:${ls.syncToBpm?'none':'block'}`;
+      const rateHz = document.createElement('span');
+      rateHz.style.cssText = `font-family:var(--font-mono);font-size:8px;color:var(--text-dim);display:${ls.syncToBpm?'none':'inline'}`;
+      rateHz.textContent = 'Hz';
+      rateIn2.addEventListener('input', () => { ls.rate = parseFloat(rateIn2.value) || 1; });
+      lfoRateRow.append(rateIn2, rateHz);
+
+      syncChk.addEventListener('change', () => {
+        ls.syncToBpm = syncChk.checked;
+        divSel2.style.display = ls.syncToBpm ? 'block' : 'none';
+        rateIn2.style.display = rateHz.style.display = ls.syncToBpm ? 'none' : 'block';
+        if (ls.syncToBpm) ls.rate = LFO.divisionToBeats(ls.division || '1/4');
       });
+      lfoWrap.appendChild(lfoRateRow);
+      body.appendChild(lfoWrap);
 
-      row.querySelector('.mod-del').addEventListener('click', () => {
+      // ── Wire events ──────────────────────────────────────────
+      header.querySelector('.mod-del').addEventListener('click', e => {
+        e.stopPropagation();
+        expanded.delete(route.id);
         layer.modMatrix.removeRoute(route.id);
         _renderRoutes(layer, container);
       });
 
-      container.appendChild(row);
+      header.addEventListener('click', e => {
+        if (e.target.classList.contains('mod-del')) return;
+        if (expanded.has(route.id)) {
+          expanded.delete(route.id);
+          body.style.display = 'none';
+          header.querySelector('.route-arrow').style.transform = 'rotate(0deg)';
+        } else {
+          expanded.add(route.id);
+          body.style.display = 'block';
+          header.querySelector('.route-arrow').style.transform = 'rotate(90deg)';
+        }
+      });
+
+      body.querySelector('.mod-target').addEventListener('change', e => {
+        route.target = e.target.value;
+        // Update header summary
+        const newTarget = allTargets.find(t => t.id === e.target.value)?.label || e.target.value;
+        header.querySelectorAll('span')[2].textContent = newTarget;
+      });
+
+      body.querySelector('.mod-source').addEventListener('change', e => {
+        route.source = e.target.value;
+        const newColor = SOURCE_COLORS[route.source] || '#00d4aa';
+        const newName  = SOURCE_LABELS[route.source] || route.source;
+        card.style.borderLeftColor = newColor;
+        header.querySelectorAll('span')[0].style.color = newColor;
+        header.querySelectorAll('span')[0].textContent = newName;
+        lfoWrap.style.display = route.source.startsWith('lfo-') ? 'block' : 'none';
+      });
+
+      const depthSlider = body.querySelector('.mod-depth');
+      const depthValEl  = body.querySelector('.mod-depth-val');
+      depthSlider.addEventListener('input', () => {
+        const v = parseFloat(depthSlider.value);
+        route.depth = v;
+        const sign = v < 0 ? '−' : '+';
+        const abs  = Math.abs(v).toFixed(2);
+        const col  = v < 0 ? '#ff9070' : (SOURCE_COLORS[route.source] || '#00d4aa');
+        depthValEl.textContent = `${sign}${abs}`;
+        depthValEl.style.color = col;
+        header.querySelectorAll('span')[3].textContent = `${sign}${abs}`;
+        header.querySelectorAll('span')[3].style.color = col;
+      });
+
+      body.querySelector('.mod-curve').addEventListener('change', e => { route.curve = e.target.value; });
+      body.querySelector('.mod-smooth').addEventListener('input', e => { route.smooth = parseFloat(e.target.value); });
+
+      card.appendChild(header);
+      card.appendChild(body);
+      container.appendChild(card);
     });
   }
+
 
   function _buildAddForm(layer) {
     // Param targets from manifest

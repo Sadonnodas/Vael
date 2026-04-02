@@ -95,6 +95,8 @@ const PresetManager = (() => {
         layer.maskLayerId = def.maskLayerId  || null;
         layer.maskMode    = def.maskMode     || 'luminance';
         if (def.transform)  Object.assign(layer.transform, def.transform);
+        if (def.clipShape !== undefined) layer.clipShape = def.clipShape ? { ...def.clipShape } : null;
+        if (def.softUpdate !== undefined) layer.softUpdate = def.softUpdate;
         if (def.modMatrix)  layer.modMatrix?.fromJSON(def.modMatrix, layer);
         if (def.fx)         layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
 
@@ -214,6 +216,8 @@ const PresetManager = (() => {
         layer.maskLayerId = def.maskLayerId || null;
         layer.maskMode    = def.maskMode    || 'luminance';
         if (def.transform) Object.assign(layer.transform, def.transform);
+        if (def.clipShape !== undefined) layer.clipShape = def.clipShape ? { ...def.clipShape } : null;
+        if (def.softUpdate !== undefined) layer.softUpdate = def.softUpdate;
         if (def.modMatrix) layer.modMatrix?.fromJSON(def.modMatrix, layer);
         if (def.params && layer.params) Object.assign(layer.params, def.params);
         if (layer instanceof GroupLayer && Array.isArray(def.children)) {

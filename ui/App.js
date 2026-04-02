@@ -43,6 +43,7 @@
       case 'CanvasPaintLayer': return new CanvasPaintLayer(uid);
       case 'SVGLayer':         return new SVGLayer(uid);
       case 'FeedbackLayer':    return new FeedbackLayer(uid);
+      case 'SlideshowLayer':   return new SlideshowLayer(uid);
       default: console.warn('Unknown layer type:', typeName); return null;
     }
   }
@@ -310,10 +311,14 @@
 
   // ── OSC ──────────────────────────────────────────────────────
   const osc = new OscBridge({ layerStack: layers, setlist, recorder });
-  osc.connect('ws://localhost:8080');
+  // OscBridge does NOT auto-connect — it only connects when the user
+  // explicitly enables it (e.g. via a toggle in the panel). This prevents
+  // console spam when the bridge script isn't running.
+  // To enable: osc.enable('ws://localhost:8080');
 
   // ── LFO ──────────────────────────────────────────────────────
   const lfoManager = new LFOManager();
+  window._vaelLFOManager = lfoManager;
   LFOPanel.init(lfoManager, layers, document.getElementById('lfo-panel-content'));
   layers.onChanged = () => { renderLayerList(); LFOPanel.refresh(); };
 
@@ -332,12 +337,34 @@
     const ov = document.getElementById('help-overlay');
     if (ov) ov.style.display = 'none';
   });
-  // Close on backdrop click
   document.getElementById('help-overlay')?.addEventListener('click', e => {
     if (e.target === document.getElementById('help-overlay')) {
       document.getElementById('help-overlay').style.display = 'none';
     }
   });
+
+  // ── History (HIST tab) ────────────────────────────────────────
+  const history = new HistoryManager({ layers, lfoManager, layerFactory });
+  history.mountPanel(document.getElementById('history-panel-content'));
+  window._vaelHistory = history;
+
+  // Take an initial snapshot so the panel isn't empty on first open
+  setTimeout(() => history.snapshot('App started'), 200);
+
+  // Snapshot on layer add/remove
+  const _origLayersAddForHistory = layers.add.bind(layers);
+  // Wrap layers.add and layers.remove to snapshot on structural changes
+  // (lightweight — HistoryManager debounces param changes internally)
+  layers.addEventListener?.('change', () => {
+    history.snapshot('Layer changed');
+  });
+
+  // ── AutomationTimeline (AUTO tab) ─────────────────────────────
+  const timeline = new AutomationTimeline({ layerStack: layers });
+  window._vaelTimeline = timeline;  // exposed so ParamPanel can record param changes
+  if (typeof TimelinePanel !== 'undefined') {
+    TimelinePanel.init(timeline, layers, document.getElementById('timeline-panel-content'));
+  }
 
   // ── Library panel ─────────────────────────────────────────────
   LibraryPanel.init({
@@ -388,26 +415,56 @@
 
   // ── Layer types ───────────────────────────────────────────────
   const LAYER_TYPES = [
-    { id: 'gradient',         label: 'Gradient',              cls: () => new GradientLayer(`gradient-${Date.now()}`) },
-    { id: 'noise',            label: 'Noise Field',            cls: () => new NoiseFieldLayer(`noise-${Date.now()}`) },
-    { id: 'particles',        label: 'Particles',              cls: () => new ParticleLayer(`particles-${Date.now()}`) },
-    { id: 'math',             label: 'Math Visualizer',        cls: () => new MathVisualizer(`math-${Date.now()}`) },
-    { id: 'waveform',         label: 'Waveform / Spectrum',    cls: () => { const l = new WaveformLayer(`waveform-${Date.now()}`); l._audioEngine = audio; return l; }},
-    { id: 'pattern',          label: 'Pattern (geometric)',    cls: () => new PatternLayer(`pattern-${Date.now()}`) },
-    { id: 'lyrics',           label: 'Lyrics / Text',          cls: () => new LyricsLayer(`lyrics-${Date.now()}`) },
-    { id: 'image',            label: 'Image (PNG/JPG/SVG)',    cls: () => new ImageLayer(`image-${Date.now()}`) },
-    { id: 'video',            label: 'Video file',             cls: () => new VideoPlayerLayer(`video-${Date.now()}`, video.videoElement) },
-    { id: 'webcam',           label: 'Webcam',                 cls: () => new WebcamLayer(`webcam-${Date.now()}`) },
-    { id: 'canvas-paint',     label: 'Canvas Paint',           cls: () => new CanvasPaintLayer(`canvas-paint-${Date.now()}`) },
-    { id: 'svg',              label: 'SVG',                    cls: () => new SVGLayer(`svg-${Date.now()}`) },
-    { id: 'feedback',         label: 'Feedback',               cls: () => new FeedbackLayer(`feedback-${Date.now()}`) },
-    { id: 'group',            label: 'Group (empty)',           cls: () => { const g = new GroupLayer(`group-${Date.now()}`); g.name = 'Group'; return g; } },
-    { id: 'shader-custom',    label: 'Shader — Custom (blank)', cls: () => { const s = new ShaderLayer(`shader-${Date.now()}`); s._shaderName = 'custom'; s._customGLSL = ''; s.name = 'Custom Shader'; return s; } },
-    { id: 'shader-plasma',    label: 'Shader — Plasma',        cls: () => ShaderLayer.fromBuiltin('plasma') },
-    { id: 'shader-ripple',    label: 'Shader — Ripple',        cls: () => ShaderLayer.fromBuiltin('ripple') },
-    { id: 'shader-distort',   label: 'Shader — Distort',       cls: () => ShaderLayer.fromBuiltin('distort') },
-    { id: 'shader-bloom',     label: 'Shader — Bloom',         cls: () => ShaderLayer.fromBuiltin('bloom') },
-    { id: 'shader-chromatic', label: 'Shader — Chromatic',     cls: () => ShaderLayer.fromBuiltin('chromatic') },
+    // ── Backgrounds & procedural ─────────────────────────────
+    { id: 'gradient',         label: '🎨 Gradient',              cls: () => new GradientLayer(`gradient-${Date.now()}`) },
+    { id: 'noise',            label: '🌊 Noise Field',            cls: () => new NoiseFieldLayer(`noise-${Date.now()}`) },
+    { id: 'pattern',          label: '⬡ Pattern (geometric)',    cls: () => new PatternLayer(`pattern-${Date.now()}`) },
+
+    // ── Audio-reactive ───────────────────────────────────────
+    { id: 'particles',        label: '✦ Particles',              cls: () => new ParticleLayer(`particles-${Date.now()}`) },
+    { id: 'waveform',         label: '〜 Waveform / Spectrum',    cls: () => { const l = new WaveformLayer(`waveform-${Date.now()}`); l._audioEngine = audio; return l; }},
+    { id: 'math',             label: '∑ Math Visualizer',        cls: () => new MathVisualizer(`math-${Date.now()}`) },
+
+    // ── Image & video ────────────────────────────────────────
+    { id: 'image',            label: '🖼 Image (PNG/JPG/SVG)',    cls: () => new ImageLayer(`image-${Date.now()}`) },
+    { id: 'slideshow',        label: '🖼 Slideshow (images)',     cls: () => {
+        const s = new SlideshowLayer(`slideshow-${Date.now()}`);
+        s.init({});
+        setTimeout(() => {
+          SlideshowLayer.showPickerModal([], selected => {
+            s.loadEntries(selected);
+            if (selected.length > 0) Toast.success(`Slideshow: ${selected.length} image${selected.length!==1?'s':''} loaded`);
+          });
+        }, 100);
+        return s;
+      }
+    },
+    { id: 'video',            label: '🎬 Video file',             cls: () => new VideoPlayerLayer(`video-${Date.now()}`, video.videoElement) },
+    { id: 'webcam',           label: '📷 Webcam',                 cls: () => new WebcamLayer(`webcam-${Date.now()}`) },
+
+    // ── Text ─────────────────────────────────────────────────
+    { id: 'lyrics',           label: '💬 Lyrics / Text',          cls: () => new LyricsLayer(`lyrics-${Date.now()}`) },
+
+    // ── Utilities ────────────────────────────────────────────
+    { id: 'canvas-paint',     label: '✏ Canvas Paint',           cls: () => new CanvasPaintLayer(`canvas-paint-${Date.now()}`) },
+    { id: 'group',            label: '▤ Group (empty)',           cls: () => { const g = new GroupLayer(`group-${Date.now()}`); g.name = 'Group'; return g; } },
+
+    // ── Shaders ──────────────────────────────────────────────
+    { id: 'shader-custom',    label: '⚡ Shader — Custom (blank)', cls: () => { const s = new ShaderLayer(`shader-${Date.now()}`); s._shaderName = 'custom'; s._customGLSL = ''; s.name = 'Custom Shader'; return s; } },
+    { id: 'shader-plasma',    label: '⚡ Shader — Plasma',        cls: () => ShaderLayer.fromBuiltin('plasma') },
+    { id: 'shader-ripple',    label: '⚡ Shader — Ripple',        cls: () => ShaderLayer.fromBuiltin('ripple') },
+    { id: 'shader-distort',   label: '⚡ Shader — Distort',       cls: () => ShaderLayer.fromBuiltin('distort') },
+    { id: 'shader-bloom',     label: '⚡ Shader — Bloom',         cls: () => ShaderLayer.fromBuiltin('bloom') },
+    { id: 'shader-chromatic',    label: '⚡ Shader — Chromatic',      cls: () => ShaderLayer.fromBuiltin('chromatic') },
+    { id: 'shader-kaleidoscope', label: '⚡ Shader — Kaleidoscope',   cls: () => ShaderLayer.fromBuiltin('kaleidoscope') },
+    { id: 'shader-tunnel',       label: '⚡ Shader — Tunnel',          cls: () => ShaderLayer.fromBuiltin('tunnel') },
+    { id: 'shader-voronoi',      label: '⚡ Shader — Voronoi',         cls: () => ShaderLayer.fromBuiltin('voronoi') },
+    { id: 'shader-turing',       label: '⚡ Shader — Turing',          cls: () => ShaderLayer.fromBuiltin('turing') },
+    { id: 'shader-fbm',          label: '⚡ Shader — FBM Clouds',      cls: () => ShaderLayer.fromBuiltin('fbm') },
+    { id: 'shader-rings',        label: '⚡ Shader — Rings',           cls: () => ShaderLayer.fromBuiltin('rings') },
+    { id: 'shader-aurora',       label: '⚡ Shader — Aurora',          cls: () => ShaderLayer.fromBuiltin('aurora') },
+    { id: 'shader-julia',        label: '⚡ Shader — Julia Fractal',   cls: () => ShaderLayer.fromBuiltin('julia') },
+    { id: 'shader-lissajous',    label: '⚡ Shader — Lissajous',       cls: () => ShaderLayer.fromBuiltin('lissajous') },
   ];
 
   const BLEND_MODES = ['normal','multiply','screen','overlay','add','softlight','difference','luminosity','subtract','exclusion'];
@@ -454,25 +511,44 @@
 
   function renderLayerList() { LayerPanel.renderLayerList(); }
 
-  // ── Default scene — clean slate, just noise + particles ──────
-  const noiseLayer = new NoiseFieldLayer('noise-default');
-  noiseLayer.init({ mode: 'field', hueA: 210, hueB: 260, speed: 0.08, lightness: 0.08, saturation: 0.6 });
-  noiseLayer.opacity   = 1.0;
-  noiseLayer.blendMode = 'normal';
-
-  const particleLayer = new ParticleLayer('particles-default');
-  particleLayer.init({ mode: 'drift', count: 300, size: 1.5, speed: 0.25, colorMode: 'cool' });
-  particleLayer.opacity   = 0.5;
-  particleLayer.blendMode = 'add';
-
-  _origLayersAdd(noiseLayer);
-  _origLayersAdd(particleLayer);
-
-  // Refresh panels that rendered before layers were added
+  // ── Startup: check for autosave BEFORE adding default layers ─
+  // If an autosave exists, show the resume dialog first.
+  // Default layers are only added if starting fresh.
+  renderer.start();
   LFOPanel.refresh();
 
-  renderer.start();
-  setTimeout(() => _restoreAutoSave(), 100);
+  const _hasSave = (() => {
+    try {
+      const s = localStorage.getItem('vael-autosave');
+      if (!s) return false;
+      const p = JSON.parse(s);
+      return !!(p.layers?.length);
+    } catch { return false; }
+  })();
+
+  function _addDefaultLayers() {
+    const noiseLayer = new NoiseFieldLayer('noise-default');
+    noiseLayer.init({ mode: 'field', hueA: 210, hueB: 260, speed: 0.08, lightness: 0.08, saturation: 0.6 });
+    noiseLayer.opacity   = 1.0;
+    noiseLayer.blendMode = 'normal';
+
+    const particleLayer = new ParticleLayer('particles-default');
+    particleLayer.init({ mode: 'drift', count: 300, size: 1.5, speed: 0.25, colorMode: 'cool' });
+    particleLayer.opacity   = 0.5;
+    particleLayer.blendMode = 'add';
+
+    _origLayersAdd(noiseLayer);
+    _origLayersAdd(particleLayer);
+    LFOPanel.refresh();
+  }
+
+  if (_hasSave) {
+    // Show the dialog immediately — don't add default layers yet
+    setTimeout(() => _restoreAutoSave(_addDefaultLayers), 50);
+  } else {
+    // No save — go straight to default scene
+    _addDefaultLayers();
+  }
 
   // ── Preset save / load ────────────────────────────────────────
   document.getElementById('btn-preset-save').addEventListener('click', () => {
@@ -538,6 +614,7 @@
 
     renderer.audioData = audio.smoothed;
     renderer.videoData = video.smoothed;
+    audio.smoothed._dt = dt;  // pass dt for inline LFO evaluation in ModMatrix
 
     beat.update(audio.smoothed, audio._dataArray);
     // MIDI clock overrides beat detector BPM when active
@@ -549,6 +626,14 @@
     audio.smoothed.phrase     = beat.phrase;
     audio.smoothed.isDownbeat = beat.isDownbeat;
     audio.smoothed.isBarOne   = beat.isBarOne;
+
+    // Song position signals — available as ModMatrix sources
+    // songPosition: 0.0 (start) → 1.0 (end), useful for "reveal over time" effects
+    // songTime: current position in seconds
+    const _dur = audio.duration || 0;
+    const _pos = audio.currentTime || 0;
+    audio.smoothed.songPosition = _dur > 0 ? Math.min(1, _pos / _dur) : 0;
+    audio.smoothed.songTime     = _pos;
 
     if (video.smoothed.isActive) {
       audio.smoothed.brightness  = video.smoothed.brightness;
@@ -571,11 +656,29 @@
 
     seq.tick(dt);
     lfoManager.tick(dt, activeBpm || seq.bpm, layers, beat.isDownbeat);
+    timeline.tick(dt);  // AutomationTimeline playback
+    if (timeline.isPlaying && typeof TimelinePanel !== 'undefined') TimelinePanel.refresh();
     setlist.tick(dt);
     perfMode.tick(dt);
     AudioPanel.tick(audio.smoothed);
     VideoPanel.tick();
+    RecordPanel.tick();
+    PostFXPanel.tick(audio.smoothed);
     dotAudio.classList.toggle('inactive', !audio.smoothed.isActive);
+
+    // Recording indicator in status strip
+    const recIndicator = document.getElementById('status-rec-indicator');
+    if (recIndicator) {
+      if (recorder.state === 'recording') {
+        recIndicator.style.display = 'flex';
+        const secs = Math.floor(recorder.duration);
+        const m = Math.floor(secs / 60);
+        const s = String(secs % 60).padStart(2, '0');
+        recIndicator.querySelector('#status-rec-time').textContent = `REC ${m}:${s}`;
+      } else {
+        recIndicator.style.display = 'none';
+      }
+    }
   };
 
   // ── Scene Palette ─────────────────────────────────────────────
@@ -608,14 +711,14 @@
     } catch (e) { console.warn('Auto-save failed:', e); }
   }
 
-  function _restoreAutoSave() {
+  function _restoreAutoSave(onFresh) {
     try {
       const saved = localStorage.getItem(AUTOSAVE_KEY);
-      if (!saved) return;
+      if (!saved) { if (onFresh) onFresh(); return; }
       const preset = JSON.parse(saved);
-      if (!preset.layers?.length || layers.count > 0) return;
+      if (!preset.layers?.length) { if (onFresh) onFresh(); return; }
 
-      // Show startup dialog instead of silently restoring
+      // Show startup dialog
       const savedDate = preset.saved
         ? new Date(preset.saved).toLocaleString(undefined, {
             month: 'short', day: 'numeric',
@@ -677,14 +780,13 @@
 
       document.body.appendChild(overlay);
 
-      // Hover effects
       ['sd-resume','sd-fresh','sd-load'].forEach(id => {
         const btn = overlay.querySelector(`#${id}`);
         btn.addEventListener('mouseenter', () => btn.style.filter = 'brightness(1.2)');
         btn.addEventListener('mouseleave', () => btn.style.filter = '');
       });
 
-      // Resume
+      // Resume — restore saved layers (no default layers added)
       overlay.querySelector('#sd-resume').addEventListener('click', () => {
         overlay.remove();
         PresetManager._applyRaw(preset, layers, layerFactory);
@@ -692,20 +794,22 @@
         Toast.success(`Resumed: "${preset.name}"`);
       });
 
-      // Fresh start — discard autosave
+      // Fresh start — delete save, add default layers
       overlay.querySelector('#sd-fresh').addEventListener('click', () => {
         overlay.remove();
         localStorage.removeItem(AUTOSAVE_KEY);
+        if (onFresh) onFresh();
         Toast.info('Starting fresh');
       });
 
-      // Load from file
+      // Load from file — add defaults then open picker
       overlay.querySelector('#sd-load').addEventListener('click', () => {
         overlay.remove();
-        document.getElementById('btn-preset-load')?.click();
+        if (onFresh) onFresh();
+        setTimeout(() => document.getElementById('btn-preset-load')?.click(), 100);
       });
 
-    } catch { /* corrupted autosave — just skip silently */ }
+    } catch { if (onFresh) onFresh(); }
   }
 
   setInterval(_autoSave, 5 * 60 * 1000);

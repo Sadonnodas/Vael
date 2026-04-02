@@ -65,79 +65,36 @@ class FeedbackLayer extends BaseLayer {
   }
 
   update(audioData, videoData, dt) {
-    const react = this.params.audioReact ?? 0.4;
-    const av = audioData?.isActive ? (audioData.bass ?? 0) * react : 0;
+    const av = audioData?.isActive ? (audioData.bass ?? 0) : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.1);
-    // Gate beat pulse on audioReact — at 0 there should be no beat-driven rotation
-    if (audioData?.isBeat && react > 0) this._beatPulse = 1.0;
+    if (audioData?.isBeat) this._beatPulse = 1.0;
     this._beatPulse = Math.max(0, this._beatPulse - dt * 6);
     this._hueAccum += this.params.hueShift * dt * 60;
   }
 
   render(ctx, width, height) {
-    this._ensureBuffers(width, height);
-
-    const W = width, H = height;
-    const p = this.params;
-
-    // ── Step 1: Draw previous buffer (bufA) → bufB with transform ──
-    const ctxB = this._ctxB;
-    ctxB.clearRect(0, 0, W, H);
-
-    if (!this._firstFrame) {
-      const audioZoom = p.zoom + this._audioSmooth * (p.audioReact ?? 0.4) * 0.008;
-      const beatRot   = this._beatPulse * (p.beatKick ?? 0.3);
-      const rotRad    = (p.rotation + beatRot) * Math.PI / 180;
-
-      ctxB.save();
-      ctxB.translate(W / 2, H / 2);
-      ctxB.rotate(rotRad);
-      ctxB.scale(audioZoom, audioZoom);
-      ctxB.translate(-W / 2, -H / 2);
-
-      // Apply decay as globalAlpha
-      ctxB.globalAlpha = VaelMath.clamp(p.decay ?? 0.97, 0, 1);
-      ctxB.drawImage(this._bufA, 0, 0);
-      ctxB.restore();
-      ctxB.globalAlpha = 1;
-
-      // Apply hue shift if needed — using CSS filter (fast)
-      if (p.hueShift > 0) {
-        const tmp    = document.createElement('canvas');
-        tmp.width    = W; tmp.height = H;
-        const tCtx   = tmp.getContext('2d');
-        tCtx.filter  = `hue-rotate(${(this._hueAccum % 360).toFixed(1)}deg)`;
-        tCtx.drawImage(this._bufB, 0, 0);
-        tCtx.filter  = 'none';
-        ctxB.clearRect(0, 0, W, H);
-        ctxB.drawImage(tmp, 0, 0);
-      }
-    }
-
-    // ── Step 2: Composite bufB (transformed feedback) onto layer ctx ──
-    // The amount param controls how much of the feedback bleeds through.
-    // We composite it using the layer's blend mode at the given amount opacity.
-    if (!this._firstFrame) {
-      ctx.save();
-      ctx.translate(-W / 2, -H / 2);
-      ctx.globalAlpha = VaelMath.clamp(p.amount ?? 0.88, 0, 1);
-      ctx.drawImage(this._bufB, 0, 0);
-      ctx.globalAlpha = 1;
-      ctx.restore();
-    }
-
-    // ── Step 3: Capture the full composite so far into bufA ──────────
-    // We draw the current output canvas (everything below + this layer)
-    // into bufA as the source for next frame's feedback.
-    // We can't access the WebGL canvas pixels directly here, but we can
-    // copy bufB (which already has the previous frame's feedback) as a proxy.
-    // A full read-back would require Renderer integration; this self-referencing
-    // approach produces the signature feedback look without pixel readback.
-    const ctxA = this._ctxA;
-    ctxA.clearRect(0, 0, W, H);
-    ctxA.drawImage(this._bufB, 0, 0);
-
-    this._firstFrame = false;
+    // FeedbackLayer as a canvas 2D layer cannot access the WebGL framebuffer,
+    // so it cannot capture the composited scene beneath it. This means the
+    // feedback loop has nothing to feed on and produces no visible output.
+    //
+    // ✅ USE THE FX TAB INSTEAD:
+    // Go to FX tab → Add "Feedback trail" — this is the working GPU-level
+    // feedback effect with Amount, Zoom, Rotation, Hue drift, and Decay.
+    //
+    // This placeholder renders a visible notice so the layer isn't invisible.
+    ctx.save();
+    ctx.translate(-width/2, -height/2);
+    ctx.fillStyle = 'rgba(120,60,180,0.12)';
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = 'rgba(200,160,255,0.7)';
+    ctx.font = 'bold 13px monospace';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('Feedback Trail → use the FX tab instead', width/2, height/2 - 12);
+    ctx.font = '11px monospace';
+    ctx.fillStyle = 'rgba(200,160,255,0.45)';
+    ctx.fillText('FX tab → Add → Feedback trail', width/2, height/2 + 12);
+    ctx.restore();
   }
 
   _ensureBuffers(W, H) {

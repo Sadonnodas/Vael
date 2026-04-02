@@ -47,7 +47,10 @@ class Recorder {
     // Build the stream — video only, or video+audio
     let combinedStream = videoStream;
     try {
-      if (audioEngine?._ctx && audioEngine.isPlaying && audioEngine._analyser) {
+      // Always attach audio if AudioContext exists — even if not playing yet.
+      // The analyser outputs silence until playback starts, so audio that
+      // begins after recording starts is still captured.
+      if (audioEngine?._ctx && audioEngine._analyser) {
         const dest = audioEngine._ctx.createMediaStreamDestination();
         audioEngine._analyser.connect(dest);
         this._recordingDest = dest;

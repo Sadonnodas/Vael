@@ -145,6 +145,10 @@ const LayerFXPanel = (() => {
           <span style="flex:1;font-family:var(--font-mono);font-size:9px;color:var(--text)">
             ${def?.label || effect.type}
           </span>
+          ${controls.length > 0 ? `
+          <button class="lfx-rand" style="background:none;border:1px solid var(--border-dim);border-radius:3px;
+                  cursor:pointer;color:var(--text-dim);font-family:var(--font-mono);font-size:7px;
+                  padding:1px 5px" title="Randomise this FX">⚄</button>` : ''}
           <button class="lfx-up" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:10px" title="Move up">↑</button>
           <button class="lfx-down" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:10px" title="Move down">↓</button>
           <button class="lfx-del" style="background:none;border:none;cursor:pointer;color:#ff4444;font-size:10px">✕</button>
@@ -174,6 +178,16 @@ const LayerFXPanel = (() => {
       card.querySelector('.lfx-toggle').addEventListener('click', () => {
         effect.enabled = !effect.enabled;
         _renderChain(layer, container, countSpan);
+      });
+
+      // Randomise FX params
+      card.querySelector('.lfx-rand')?.addEventListener('click', () => {
+        controls.forEach(ctrl => {
+          const v = parseFloat((ctrl.min + Math.random() * (ctrl.max - ctrl.min)).toFixed(3));
+          effect.params[ctrl.id] = v;
+        });
+        _renderChain(layer, container, countSpan);
+        Toast.info('FX randomised');
       });
 
       // Sliders

@@ -241,21 +241,34 @@ Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candleligh
 
     const systemPrompt = _buildSystemPrompt();
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key':    apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-io': 'true',
-      },
-      body: JSON.stringify({
-        model:      'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        system:     systemPrompt,
-        messages:   _messages.concat([{ role: 'user', content: userMessage }]),
-      }),
-    });
+    let response;
+    try {
+      response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key':    apiKey,
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-io': 'true',
+        },
+        body: JSON.stringify({
+          model:      'claude-sonnet-4-20250514',
+          max_tokens: 1000,
+          system:     systemPrompt,
+          messages:   _messages.concat([{ role: 'user', content: userMessage }]),
+        }),
+      });
+    } catch (networkErr) {
+      // CORS or network failure — usually means running from file:// or a
+      // domain that isn't allowlisted by Anthropic for direct browser access.
+      throw new Error(
+        'Cannot reach the Anthropic API from this page. ' +
+        'This usually means the page is served from a domain not permitted ' +
+        'for direct browser API calls. ' +
+        'Try opening Vael from localhost or your GitHub Pages URL, ' +
+        'and make sure your API key is correct.'
+      );
+    }
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));

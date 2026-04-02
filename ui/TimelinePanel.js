@@ -38,12 +38,29 @@ const TimelinePanel = (() => {
     _container = container;
 
     _tl.onUpdate = () => _drawCanvas();
-    _tl.onStop   = () => _drawCanvas();
+    _tl.onStop   = () => { _drawCanvas(); _render(); };
 
     _render();
   }
 
-  function refresh() { _render(); }
+  // Track last known state to avoid unnecessary full rerenders
+  let _lastState = '';
+
+  function _getState() {
+    return `${_tl.isPlaying}|${_tl.isRecording}|${_tl.clips.length}|${_tl.loop}`;
+  }
+
+  function refresh() {
+    // During playback/recording: only redraw the canvas (playhead position).
+    // Only do a full DOM rebuild when state actually changes (play→stop etc).
+    const state = _getState();
+    if (state !== _lastState) {
+      _lastState = state;
+      _render();
+    } else if (_tl.isPlaying || _tl.isRecording) {
+      _drawCanvas();
+    }
+  }
 
   // ── Main render ───────────────────────────────────────────────
 
@@ -107,6 +124,56 @@ const TimelinePanel = (() => {
 
     transport.append(recBtn, playBtn, stopBtn, loopBtn);
 
+    // Play All button — only shown when there are multiple clips
+    if (_tl.clips.length > 1) {
+      const playAllBtn = _btn('▶ All', _tl._playAllMode ? 'btn accent' : 'btn');
+      playAllBtn.style.cssText += ';font-size:9px;padding:5px 8px';
+      playAllBtn.title = 'Play all clips simultaneously, each looping independently';
+      playAllBtn.addEventListener('click', () => {
+        if (_tl._playAllMode) { _tl.stopAll(); }
+        else                  { _tl.playAll(); }
+        _render();
+      });
+      transport.appendChild(playAllBtn);
+    }
+
+    // Play mode buttons
+    if (_tl.activeClip && !_tl.isRecording) {
+      const modes = [
+        { id: 'forward',  label: '▶',  title: 'Forward' },
+        { id: 'reverse',  label: '◀',  title: 'Reverse' },
+        { id: 'pingpong', label: '⇄',  title: 'Ping-pong (back and forth)' },
+        { id: 'random',   label: '⇀',  title: 'Jump to random points' },
+      ];
+      const modeRow = document.createElement('div');
+      modeRow.style.cssText = 'display:flex;gap:3px;margin-top:5px';
+      modes.forEach(m => {
+        const b = _btn(m.label, _tl.playMode === m.id ? 'btn accent' : 'btn');
+        b.style.cssText += ';font-size:10px;padding:3px 8px;min-width:28px';
+        b.title = m.title;
+        b.addEventListener('click', () => {
+          _tl.playMode    = m.id;
+          _tl._pingDir    = 1;
+          _tl._randJumped = false;
+          _render();
+        });
+        modeRow.appendChild(b);
+      });
+
+      // Crossfade control
+      const cfLabel = document.createElement('span');
+      cfLabel.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-left:8px;flex-shrink:0;line-height:24px';
+      cfLabel.textContent = 'Xfade:';
+      const cfIn = document.createElement('input');
+      cfIn.type = 'number'; cfIn.value = (_tl.crossfade || 0).toFixed(2);
+      cfIn.min = 0; cfIn.max = 4; cfIn.step = 0.1;
+      cfIn.style.cssText = 'width:46px;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:8px;padding:2px 4px';
+      cfIn.title = 'Crossfade duration at loop point (seconds)';
+      cfIn.addEventListener('change', () => { _tl.crossfade = Math.max(0, parseFloat(cfIn.value) || 0); });
+      modeRow.append(cfLabel, cfIn);
+      transport.appendChild(modeRow);
+    }
+
     // Clip selector (if multiple clips)
     if (_tl.clips.length > 1) {
       const sel = document.createElement('select');
@@ -141,6 +208,73 @@ const TimelinePanel = (() => {
     }
 
     _container.appendChild(transport);
+
+    // ── Clip edit row (shown when a clip is active and not recording) ─
+    const clip0 = _tl.activeClip;
+    if (clip0 && !_tl.isRecording) {
+      const editRow = document.createElement('div');
+      editRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:6px;margin-bottom:2px';
+
+      // Rename input
+      const nameIn = document.createElement('input');
+      nameIn.type        = 'text';
+      nameIn.value       = clip0.name;
+      nameIn.style.cssText = 'flex:1;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:3px 6px';
+      nameIn.addEventListener('change', () => { clip0.name = nameIn.value.trim() || clip0.name; });
+      editRow.appendChild(nameIn);
+
+      // Duration trim
+      const durLabel = document.createElement('span');
+      durLabel.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);flex-shrink:0';
+      durLabel.textContent = 'Trim:';
+      const durIn = document.createElement('input');
+      durIn.type  = 'number';
+      durIn.value = clip0.duration.toFixed(2);
+      durIn.min   = '0.1'; durIn.step = '0.1';
+      durIn.style.cssText = 'width:52px;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--accent);font-family:var(--font-mono);font-size:9px;padding:3px 5px';
+      durIn.title = 'Clip duration in seconds — trim to shorten the loop';
+      durIn.addEventListener('change', () => {
+        const v = parseFloat(durIn.value);
+        if (!isNaN(v) && v > 0) {
+          clip0.duration = v;
+          _updateViewRange();
+          _drawCanvas();
+        }
+      });
+      const sLabel = document.createElement('span');
+      sLabel.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim)';
+      sLabel.textContent = 's';
+      editRow.append(durLabel, durIn, sLabel);
+
+      // In/Out point controls
+      const ioRow = document.createElement('div');
+      ioRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:4px';
+      ioRow.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:20px">In:</span>
+        <input type="number" class="pt-in" value="${(_tl.inPoint||0).toFixed(2)}" min="0" step="0.1"
+          style="width:52px;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--accent);font-family:var(--font-mono);font-size:8px;padding:2px 4px" title="Loop start (seconds)">
+        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-left:4px">Out:</span>
+        <input type="number" class="pt-out" value="${(_tl.outPoint ?? clip0.duration).toFixed(2)}" min="0" step="0.1"
+          style="width:52px;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--accent);font-family:var(--font-mono);font-size:8px;padding:2px 4px" title="Loop end (seconds, max = clip duration)">
+        <button class="pt-reset" style="background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:7px;padding:1px 5px;cursor:pointer" title="Reset in/out to full clip">Full</button>
+      `;
+      ioRow.querySelector('.pt-in').addEventListener('change', e => {
+        _tl.inPoint = Math.max(0, parseFloat(e.target.value) || 0);
+        if (_tl.playMode === 'reverse' || _tl.playMode === 'pingpong') _tl.seekTo(_tl.inPoint);
+        else _tl.seekTo(_tl.inPoint);
+      });
+      ioRow.querySelector('.pt-out').addEventListener('change', e => {
+        _tl.outPoint = Math.min(clip0.duration, parseFloat(e.target.value) || clip0.duration);
+      });
+      ioRow.querySelector('.pt-reset').addEventListener('click', () => {
+        _tl.inPoint = 0; _tl.outPoint = null;
+        ioRow.querySelector('.pt-in').value  = '0.00';
+        ioRow.querySelector('.pt-out').value = clip0.duration.toFixed(2);
+        Toast.info('In/out reset');
+      });
+      _container.appendChild(ioRow);
+      _container.appendChild(editRow);
+    }
 
     // ── Empty state ───────────────────────────────────────────
     if (_tl.clips.length === 0) {

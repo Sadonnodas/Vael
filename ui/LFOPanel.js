@@ -361,6 +361,12 @@ const LFOPanel = (() => {
           bipolar:   getEl(idBipolar)?.checked || false,
         };
 
+        // When BPM-synced, derive rate from division string (beats per cycle)
+        // so that '1/4' = 1 beat, '1/2' = 2 beats, '1' = 4 beats (1 bar), etc.
+        if (props.syncToBpm && props.division) {
+          props.rate = LFO.divisionToBeats(props.division);
+        }
+
         if (isEdit) {
           // Apply to existing LFO in-place
           Object.assign(existingLfo, props);
@@ -404,6 +410,131 @@ const LFOPanel = (() => {
     return wrap;
   }
 
-  return { init, refresh };
+  /**
+   * Open the LFO tab and pre-fill the add-form for a specific layer+param.
+   * Called from the ∿ button in ParamPanel's buildSlider.
+   */
+  function openQuickAdd(layer, paramId, paramLabel) {
+    // Switch to LFO tab
+    document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+    document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+    const lfoBtn   = document.querySelector('[data-tab="lfo"]');
+    const lfoPanel = document.getElementById('tab-lfo');
+    lfoBtn?.classList.add('active');
+    lfoPanel?.classList.add('active');
+
+    // Scroll to add form
+    setTimeout(() => {
+      if (!_container) return;
+
+      // Remove any existing quick-add form
+      _container.querySelector('#lfo-quickadd-form')?.remove();
+
+      const formWrap = document.createElement('div');
+      formWrap.id = 'lfo-quickadd-form';
+      formWrap.style.cssText = `
+        background:var(--bg-card);border:1px solid var(--accent2);
+        border-radius:6px;padding:12px;margin-bottom:10px;
+      `;
+
+      const header = document.createElement('div');
+      header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:10px';
+      header.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:9px;color:var(--accent2)">
+          Quick LFO → ${layer.name} · ${paramLabel || paramId}
+        </span>
+        <button id="lfo-qa-close" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:12px">✕</button>
+      `;
+      formWrap.appendChild(header);
+
+      // Shape selector
+      const SHAPES = ['sine','triangle','square','sawtooth','random'];
+      const shapeRow = document.createElement('div');
+      shapeRow.style.cssText = 'display:flex;gap:4px;margin-bottom:8px';
+      let selectedShape = 'sine';
+      SHAPES.forEach(s => {
+        const b = document.createElement('button');
+        b.style.cssText = `flex:1;background:${s==='sine'?'var(--accent2)':'none'};
+          border:1px solid ${s==='sine'?'var(--accent2)':'var(--border-dim)'};
+          border-radius:3px;color:${s==='sine'?'var(--bg)':'var(--text-dim)'};
+          font-family:var(--font-mono);font-size:8px;padding:4px 2px;cursor:pointer`;
+        b.textContent = s;
+        b.addEventListener('click', () => {
+          selectedShape = s;
+          shapeRow.querySelectorAll('button').forEach(btn => {
+            const active = btn.textContent === s;
+            btn.style.background  = active ? 'var(--accent2)' : 'none';
+            btn.style.borderColor = active ? 'var(--accent2)' : 'var(--border-dim)';
+            btn.style.color       = active ? 'var(--bg)' : 'var(--text-dim)';
+          });
+        });
+        shapeRow.appendChild(b);
+      });
+      formWrap.appendChild(shapeRow);
+
+      // Rate + depth row
+      const controlRow = document.createElement('div');
+      controlRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px';
+
+      const makeField = (label, value, min, max, step) => {
+        const d = document.createElement('div');
+        d.innerHTML = `
+          <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:3px">${label}</div>
+          <input type="number" value="${value}" min="${min}" max="${max}" step="${step}"
+            style="width:100%;background:var(--bg);border:1px solid var(--border-dim);
+                   border-radius:3px;color:var(--text);font-family:var(--font-mono);
+                   font-size:10px;padding:4px 6px">
+        `;
+        return d;
+      };
+      const rateField  = makeField('Rate (Hz)', '0.5', '0.01', '32', '0.1');
+      const depthField = makeField('Depth', '0.5', '-2', '2', '0.05');
+      controlRow.append(rateField, depthField);
+      formWrap.appendChild(controlRow);
+
+      // BPM sync toggle
+      const syncRow = document.createElement('label');
+      syncRow.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-bottom:10px';
+      syncRow.innerHTML = `<input type="checkbox" id="qa-bpm-sync" style="accent-color:var(--accent2)"> BPM sync (¼ note)`;
+      formWrap.appendChild(syncRow);
+
+      // Add button
+      const addBtn = document.createElement('button');
+      addBtn.className   = 'btn accent';
+      addBtn.style.cssText = 'width:100%;font-size:9px';
+      addBtn.textContent = '+ Add LFO';
+      addBtn.addEventListener('click', () => {
+        const rate     = parseFloat(rateField.querySelector('input').value) || 0.5;
+        const depth    = parseFloat(depthField.querySelector('input').value) || 0.5;
+        const syncBpm  = formWrap.querySelector('#qa-bpm-sync')?.checked || false;
+        const lfoProps = {
+          layerId:   layer.id,
+          paramId,
+          shape:     selectedShape,
+          rate,
+          depth,
+          syncToBpm: syncBpm,
+          division:  '1/4',
+          offset:    0.5,
+          bipolar:   false,
+        };
+        _lfoManager.add(new LFO(lfoProps));
+        formWrap.remove();
+        _render();
+        Toast.success(`LFO added: ${paramLabel || paramId}`);
+      });
+      formWrap.appendChild(addBtn);
+
+      // Close button
+      setTimeout(() => {
+        formWrap.querySelector('#lfo-qa-close')?.addEventListener('click', () => formWrap.remove());
+      }, 0);
+
+      _container.insertBefore(formWrap, _container.firstChild);
+      formWrap.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+  }
+
+  return { init, refresh, openQuickAdd };
 
 })();

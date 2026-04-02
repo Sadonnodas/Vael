@@ -10,9 +10,10 @@ class VideoPlayerLayer extends BaseLayer {
     name: 'Video',
     version: '1.0',
     params: [
-      { id: 'audioReact',  label: 'Audio react',     type: 'float', default: 0.0,  min: 0, max: 1 },
-      { id: 'flipH',       label: 'Flip horizontal', type: 'bool',  default: false },
-      { id: 'fitMode',     label: 'Fit',             type: 'enum',  default: 'cover', options: ['cover','contain','stretch'] },
+      { id: 'audioReact',    label: 'Audio react',     type: 'float', default: 0.0,  min: 0,    max: 1   },
+      { id: 'playbackRate',  label: 'Playback speed',  type: 'float', default: 1.0,  min: 0.1,  max: 4.0, step: 0.05 },
+      { id: 'flipH',        label: 'Flip horizontal', type: 'bool',  default: false },
+      { id: 'fitMode',      label: 'Fit',             type: 'enum',  default: 'cover', options: ['cover','contain','stretch'] },
     ],
   };
 
@@ -20,9 +21,10 @@ class VideoPlayerLayer extends BaseLayer {
     super(id, 'Video');
     this._videoEl = videoElement || null;
     this.params   = {
-      audioReact:  0.0,
-      flipH:       false,
-      fitMode:     'cover',
+      audioReact:   0.0,
+      playbackRate: 1.0,
+      flipH:        false,
+      fitMode:      'cover',
     };
     this._audioSmooth = 0;
   }
@@ -34,6 +36,13 @@ class VideoPlayerLayer extends BaseLayer {
   update(audioData, videoData, dt) {
     const av = audioData?.isActive ? (audioData.volume ?? 0) * (this.params.audioReact ?? 0) : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.08);
+    // Apply playback rate to video element
+    if (this._videoEl && this._videoEl.playbackRate !== undefined) {
+      const rate = this.params.playbackRate ?? 1.0;
+      if (Math.abs(this._videoEl.playbackRate - rate) > 0.01) {
+        this._videoEl.playbackRate = rate;
+      }
+    }
   }
 
   render(ctx, width, height) {

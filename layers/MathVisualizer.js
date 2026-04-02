@@ -45,7 +45,7 @@ class MathVisualizer extends BaseLayer {
       { id: 'buildMode',   label: 'Animate digits', type: 'bool',  default: false },
       { id: 'buildMin',    label: 'Start digits',   type: 'int',   default: 1,    min: 1,   max: 500  },
       { id: 'buildSpeed',  label: 'Grow speed',     type: 'float', default: 8,    min: 0.5, max: 120  },
-      { id: 'audioReact',  label: 'Audio react',    type: 'float', default: 0.5,  min: 0,    max: 1     },
+      { id: 'audioReact',  label: 'Audio react',    type: 'float', default: 0.0,  min: 0,    max: 1     },
       { id: 'buildLoop',   label: 'Loop mode',      type: 'enum',  default: 'restart',
         options: ['restart','bounce','once'] },
     ],
@@ -69,7 +69,7 @@ class MathVisualizer extends BaseLayer {
       buildMode:   false,
       buildMin:    1,
       buildSpeed:  8,
-      audioReact:  0.5,
+      audioReact:  0.0,
       buildLoop:   'restart',
     };
     this._time        = 0;

@@ -140,12 +140,19 @@ const VaelMath = (() => {
     return [...p, ...p];
   })();
 
+  // 8-direction gradient table — more isotropic than the classic 4-gradient
+  // Perlin (hash & 3), which causes a visible diagonal bias.
+  // Directions: ±1,0  0,±1  ±√½,±√½  — 8 evenly spaced unit vectors
+  const _GRADS2 = [
+    [ 1, 0], [-1, 0], [ 0, 1], [ 0,-1],
+    [ 0.7071, 0.7071], [-0.7071, 0.7071],
+    [ 0.7071,-0.7071], [-0.7071,-0.7071],
+  ];
+
   function _fade(t) { return t * t * t * (t * (t * 6 - 15) + 10); }
   function _grad(hash, x, y) {
-    const h = hash & 3;
-    const u = h < 2 ? x : y;
-    const v = h < 2 ? y : x;
-    return ((h & 1) ? -u : u) + ((h & 2) ? -v : v);
+    const g = _GRADS2[hash & 7];
+    return g[0] * x + g[1] * y;
   }
 
   function noise2D(x, y) {

@@ -41,14 +41,17 @@ const RecordPanel = (() => {
     // Manual start
     document.getElementById('btn-rec-start')?.addEventListener('click', () => {
       _applyResolution();
-      // Pass _audio so Recorder can capture the AudioContext stream
       _recorder.start(_canvas, parseInt(slFps?.value || 60), _audio);
       _recIdle.style.display   = 'none';
       _recActive.style.display = 'block';
       _recDone.style.display   = 'none';
       _recTimer.textContent    = '0:00';
+      _showFloatStop();
       _recorder._uiTimer = setInterval(() => {
-        _recTimer.textContent = VaelMath.formatTime(_recorder.duration);
+        const t = VaelMath.formatTime(_recorder.duration);
+        _recTimer.textContent = t;
+        const ft = document.getElementById('rec-float-time');
+        if (ft) ft.textContent = t;
       }, 500);
       const hasAudio = _audio?.isPlaying;
       Toast.info(hasAudio ? 'Recording started (video + audio)' : 'Recording started (video only)');
@@ -56,6 +59,11 @@ const RecordPanel = (() => {
 
     // Manual stop
     document.getElementById('btn-rec-stop')?.addEventListener('click', () => {
+      _stopRecording();
+    });
+
+    // Floating stop button
+    document.getElementById('rec-float-stop')?.addEventListener('click', () => {
       _stopRecording();
     });
 
@@ -91,8 +99,12 @@ const RecordPanel = (() => {
         _recActive.style.display = 'block';
         _recDone.style.display   = 'none';
         _recTimer.textContent    = '0:00';
+        _showFloatStop();
         _recorder._uiTimer = setInterval(() => {
-          _recTimer.textContent = VaelMath.formatTime(_recorder.duration);
+          const t = VaelMath.formatTime(_recorder.duration);
+          _recTimer.textContent = t;
+          const ft = document.getElementById('rec-float-time');
+          if (ft) ft.textContent = t;
         }, 500);
 
         const quickStatus = document.getElementById('rec-quick-status');
@@ -174,9 +186,20 @@ const RecordPanel = (() => {
     _renderer._resize?.();
   }
 
+  function _showFloatStop() {
+    const fb = document.getElementById('rec-float-stop');
+    if (fb) { fb.style.display = 'flex'; }
+  }
+
+  function _hideFloatStop() {
+    const fb = document.getElementById('rec-float-stop');
+    if (fb) { fb.style.display = 'none'; }
+  }
+
   function _stopRecording() {
     _recorder.stop();
     clearInterval(_recorder._uiTimer);
+    _hideFloatStop();
     setTimeout(() => {
       _recActive.style.display = 'none';
       _recDone.style.display   = 'block';
@@ -184,7 +207,6 @@ const RecordPanel = (() => {
       const qs = document.getElementById('rec-quick-status');
       if (qs) qs.style.display = 'none';
       Toast.success(`Recording ready — ${_recTimer.textContent}`);
-      // Restore canvas to its natural display resolution
       _restoreResolution();
     }, 200);
   }
@@ -194,6 +216,24 @@ const RecordPanel = (() => {
     setTimeout(() => _stopRecording(), 600);
   }
 
-  return { init, onAudioEnd };
+  // Called every frame by App.js to keep the audio indicator fresh
+  function tick() {
+    const indicator = document.getElementById('rec-audio-indicator');
+    if (!indicator) return;
+    if (_recorder.state === 'recording') {
+      indicator.style.display = 'none';
+      return;
+    }
+    // Audio is always captured when the AudioContext exists (even if not playing
+    // yet) — the track outputs silence until playback starts.
+    const hasAudioCtx = !!_audio?._ctx;
+    indicator.style.display = 'flex';
+    indicator.style.color   = hasAudioCtx ? 'var(--accent)' : 'var(--text-dim)';
+    indicator.textContent   = hasAudioCtx
+      ? '🎵 Audio track ready — output will include audio + video'
+      : '🔇 No audio loaded — output will be video only (load audio first)';
+  }
+
+  return { init, onAudioEnd, tick };
 
 })();

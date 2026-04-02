@@ -18,7 +18,7 @@ class WaveformLayer extends BaseLayer {
     version: '1.0',
     params: [
       { id: 'mode',       label: 'Mode',         type: 'enum',   default: 'waveform', triggersRefresh: true,
-        options: ['waveform','bars','mirror','radial','particles','spectrogram'] },
+        options: ['waveform','bars','mirror','radial','particles','spectrogram','scope','waterfall','ribbon','circle-bars','tunnel','polar','blob','dots-freq','arc'] },
       { id: 'color',      label: 'Color',         type: 'color',  default: '#00d4aa' },
       { id: 'colorMode',  label: 'Color mode',    type: 'enum',   default: 'solid',
         options: ['solid','rainbow','frequency'] },
@@ -123,6 +123,15 @@ class WaveformLayer extends BaseLayer {
       case 'radial':    this._drawRadial(ctx, width, height);     break;
       case 'particles':    this._drawParticles(ctx, width, height);   break;
       case 'spectrogram': this._drawSpectrogram(ctx, width, height); break;
+      case 'scope':       this._drawScope(ctx, width, height);       break;
+      case 'waterfall':   this._drawWaterfall(ctx, width, height);   break;
+      case 'ribbon':      this._drawRibbon(ctx, width, height);      break;
+      case 'circle-bars': this._drawCircleBars(ctx, width, height);  break;
+      case 'tunnel':      this._drawTunnel(ctx, width, height);      break;
+      case 'polar':       this._drawPolar(ctx, width, height);       break;
+      case 'blob':        this._drawBlob(ctx, width, height);        break;
+      case 'dots-freq':   this._drawDotsFreq(ctx, width, height);    break;
+      case 'arc':         this._drawArc(ctx, width, height);         break;
     }
   }
 
@@ -365,6 +374,171 @@ class WaveformLayer extends BaseLayer {
     ctx.stroke();
 
     ctx.restore();
+  }
+
+
+  _drawScope(ctx, W, H) {
+    // Oscilloscope — XY Lissajous using left/right channel simulation
+    if (!this._timeData) return;
+    const rawBuf = this._timeData; const n = rawBuf.length;
+    const buf = Array.from(rawBuf).map(v => (v / 128) - 1);
+    ctx.save(); ctx.translate(-W/2, -H/2);
+    ctx.lineWidth = this.params.lineWidth; ctx.strokeStyle = this._getColor(0.5);
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = (buf[i] + 1) / 2 * W;
+      const y = (buf[(i + Math.floor(n/4)) % n] + 1) / 2 * H;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.stroke(); ctx.restore();
+  }
+
+  _drawWaterfall(ctx, W, H) {
+    // Scrolling waterfall — same as spectrogram but horizontal scroll
+    this._drawSpectrogram(ctx, W, H); // reuse for now
+  }
+
+  _drawRibbon(ctx, W, H) {
+    // Thick ribbon with fill between waveform and midline
+    if (!this._timeData) return;
+    const rawBuf = this._timeData; const n = rawBuf.length;
+    const buf = Array.from(rawBuf).map(v => (v / 128) - 1);
+    const sc = this.params.scale;
+    ctx.save(); ctx.translate(-W/2, -H/2);
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const x = (i / n) * W;
+      const y = H/2 - buf[i] * H/2 * sc;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    for (let i = n-1; i >= 0; i--) {
+      const x = (i / n) * W;
+      const y = H/2;
+      ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    const grad = ctx.createLinearGradient(0, 0, W, 0);
+    for (let i = 0; i <= 8; i++) grad.addColorStop(i/8, this._getColor(i/8));
+    ctx.fillStyle = grad; ctx.globalAlpha = 0.7; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.restore();
+  }
+
+  _drawCircleBars(ctx, W, H) {
+    // Bars radiating from a circle
+    if (!this._smoothedBars) return;
+    const buf = this._smoothedBars;
+    const n = Math.min(this.params.barCount, buf.length);
+    const sc = this.params.scale; const lw = this.params.lineWidth;
+    const baseR = Math.min(W, H) * 0.2;
+    ctx.lineWidth = lw;
+    for (let i = 0; i < n; i++) {
+      const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+      const amp = buf[Math.floor(i / n * buf.length)] * sc;
+      const r1 = baseR, r2 = baseR + amp * Math.min(W, H) * 0.3;
+      ctx.strokeStyle = this._getColor(i / n);
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(angle) * r1, Math.sin(angle) * r1);
+      ctx.lineTo(Math.cos(angle) * r2, Math.sin(angle) * r2);
+      ctx.stroke();
+    }
+  }
+
+  _drawTunnel(ctx, W, H) {
+    // Frequency rings creating a tunnel perspective
+    const buf = this._smoothedBars || new Float32Array(64);
+    const rings = 16;
+    for (let r = rings; r >= 1; r--) {
+      const t2 = r / rings;
+      const idx = Math.floor(t2 * buf.length);
+      const amp = (buf[idx] || 0) * this.params.scale;
+      const radius = t2 * Math.min(W, H) * 0.5 * (1 + amp * 0.3);
+      ctx.beginPath();
+      ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      ctx.strokeStyle = this._getColor(1 - t2);
+      ctx.lineWidth   = this.params.lineWidth * (1 + amp * 2);
+      ctx.globalAlpha = t2 * 0.8;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  _drawPolar(ctx, W, H) {
+    // Polar waveform — waveform mapped onto a circle
+    if (!this._timeData) return;
+    const rawBuf = this._timeData; const n = rawBuf.length;
+    const buf = Array.from(rawBuf).map(v => (v / 128) - 1);
+    const sc = this.params.scale; const baseR = Math.min(W, H) * 0.25;
+    ctx.lineWidth = this.params.lineWidth;
+    ctx.beginPath();
+    for (let i = 0; i <= n; i++) {
+      const angle = (i / n) * Math.PI * 2 - Math.PI / 2;
+      const r = baseR + buf[i % n] * baseR * sc;
+      const x = Math.cos(angle) * r;
+      const y = Math.sin(angle) * r;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.strokeStyle = this._getColor(0.5); ctx.stroke();
+  }
+
+  _drawBlob(ctx, W, H) {
+    // Morphing blob driven by frequency bands
+    const buf = this._smoothedBars || new Float32Array(64);
+    const sc = this.params.scale;
+    const pts = 32; const baseR = Math.min(W, H) * 0.28;
+    ctx.beginPath();
+    for (let i = 0; i <= pts; i++) {
+      const angle = (i / pts) * Math.PI * 2;
+      const idx = Math.floor((i / pts) * buf.length);
+      const r = baseR + buf[idx] * baseR * sc * 0.8;
+      const x = Math.cos(angle) * r;
+      const y = Math.sin(angle) * r;
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    const grad = ctx.createRadialGradient(0, 0, 0, 0, 0, baseR * 1.5);
+    grad.addColorStop(0, this._getColor(0.3));
+    grad.addColorStop(1, this._getColor(0.8));
+    ctx.fillStyle = grad; ctx.globalAlpha = 0.7; ctx.fill(); ctx.globalAlpha = 1;
+    ctx.strokeStyle = this._getColor(0.5); ctx.lineWidth = this.params.lineWidth; ctx.stroke();
+  }
+
+  _drawDotsFreq(ctx, W, H) {
+    // Frequency dots — grid of dots, amplitude controls size
+    const buf = this._smoothedBars || new Float32Array(64);
+    const cols = this.params.barCount; const rows = 8;
+    const cw = W / cols; const ch = H / rows;
+    for (let c = 0; c < cols; c++) {
+      const amp = buf[Math.floor(c / cols * buf.length)] * this.params.scale;
+      for (let r = 0; r < rows; r++) {
+        const active = (rows - r) / rows <= amp;
+        if (!active) continue;
+        const x = c * cw - W/2 + cw/2;
+        const y = r * ch - H/2 + ch/2;
+        ctx.beginPath(); ctx.arc(x, y, Math.min(cw, ch) * 0.35, 0, Math.PI * 2);
+        ctx.fillStyle = this._getColor(c / cols); ctx.fill();
+      }
+    }
+  }
+
+  _drawArc(ctx, W, H) {
+    // Bars arranged in a semicircle arc
+    const buf = this._smoothedBars || new Float32Array(64);
+    const n = Math.min(this.params.barCount, buf.length);
+    const sc = this.params.scale; const lw = this.params.lineWidth * 2;
+    const arcR = Math.min(W, H) * 0.35;
+    ctx.lineWidth = lw; ctx.lineCap = 'round';
+    for (let i = 0; i < n; i++) {
+      const t2 = i / n;
+      const angle = -Math.PI + t2 * Math.PI;
+      const amp = buf[Math.floor(t2 * buf.length)] * sc;
+      const x1 = Math.cos(angle) * arcR;
+      const y1 = Math.sin(angle) * arcR;
+      const x2 = Math.cos(angle) * (arcR + amp * arcR * 0.8);
+      const y2 = Math.sin(angle) * (arcR + amp * arcR * 0.8);
+      ctx.strokeStyle = this._getColor(t2);
+      ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+    }
   }
 
   toJSON() { return { ...super.toJSON(), params: { ...this.params } }; }
