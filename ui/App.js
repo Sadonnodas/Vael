@@ -507,6 +507,20 @@
     if (layer instanceof ImageLayer) {
       setTimeout(() => LibraryPanel.showAddImagePrompt(layer), 100);
     }
+    // Log to history (skip default startup layers which fire before history is ready)
+    if (window._vaelHistory) {
+      window._vaelHistory.onLayerAdded(layer.name || layer.constructor.name.replace('Layer',''));
+    }
+  };
+
+  const _origLayersRemove = layers.remove.bind(layers);
+  layers.remove = (id) => {
+    const layer = layers.layers.find(l => l.id === id);
+    const name  = layer?.name || id;
+    _origLayersRemove(id);
+    if (window._vaelHistory) {
+      window._vaelHistory.onLayerRemoved(name);
+    }
   };
 
   function renderLayerList() { LayerPanel.renderLayerList(); }

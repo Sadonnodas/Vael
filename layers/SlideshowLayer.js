@@ -71,6 +71,7 @@ class SlideshowLayer extends BaseLayer {
     // Build a map of existing transforms by URL so they survive a reload
     const existingTransforms = new Map(this._images.map(e => [e.url, e.transform]));
     this._images = [];
+    this._entryCount = entries.length; // synchronous count for UI before images load
     entries.forEach(entry => {
       const img = new Image();
       const savedTransform = existingTransforms.get(entry.url) || entry.transform;
@@ -196,6 +197,139 @@ class SlideshowLayer extends BaseLayer {
       });
     };
 
+    // ── Transform editor: opens inside selEl replacing the list ────
+    const _openTransformEditor = (entry, i) => {
+      if (!entry.transform) entry.transform = { offsetX: 0, offsetY: 0, scale: 1 };
+      const tr = entry.transform;
+      selEl.innerHTML = '';
+
+      // Header
+      const hdr = document.createElement('div');
+      hdr.style.cssText = 'display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--border-dim)';
+      hdr.innerHTML = `
+        <button id="tr-back" style="background:none;border:1px solid var(--border-dim);border-radius:4px;
+          color:var(--text-dim);font-family:var(--font-mono);font-size:9px;padding:3px 8px;cursor:pointer">← Back</button>
+        <img src="${entry.url}" style="width:32px;height:22px;object-fit:cover;border-radius:3px;flex-shrink:0">
+        <span style="font-family:var(--font-mono);font-size:9px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${entry.name}</span>
+      `;
+      selEl.appendChild(hdr);
+      hdr.querySelector('#tr-back').addEventListener('click', () => _renderSel());
+
+      // Live preview canvas — 16:9 aspect, fills the panel width
+      const previewWrap = document.createElement('div');
+      previewWrap.style.cssText = 'padding:12px;background:var(--bg)';
+      const previewCanvas = document.createElement('canvas');
+      const PW = 240, PH = 135; // 16:9 preview
+      previewCanvas.width  = PW;
+      previewCanvas.height = PH;
+      previewCanvas.style.cssText = `width:100%;aspect-ratio:16/9;display:block;
+        border-radius:6px;border:1px solid var(--border-dim);background:#0a0a10`;
+      previewWrap.appendChild(previewCanvas);
+      selEl.appendChild(previewWrap);
+
+      const pCtx = previewCanvas.getContext('2d');
+      const img  = new Image();
+      img.src    = entry.url;
+
+      const _drawPreview = () => {
+        pCtx.clearRect(0, 0, PW, PH);
+        pCtx.fillStyle = '#0a0a10';
+        pCtx.fillRect(0, 0, PW, PH);
+        if (!img.complete || !img.naturalWidth) return;
+
+        // Draw image with cover fit + transform offsets (scaled to preview)
+        const scaleX = PW / 1920; // treat canvas as 1920-wide for offset mapping
+        const imgAspect = img.naturalWidth / img.naturalHeight;
+        const canvasAspect = PW / PH;
+
+        let dw, dh;
+        if (imgAspect > canvasAspect) {
+          dh = PH * tr.scale;
+          dw = dh * imgAspect;
+        } else {
+          dw = PW * tr.scale;
+          dh = dw / imgAspect;
+        }
+        const dx = (PW - dw) / 2 + tr.offsetX * scaleX;
+        const dy = (PH - dh) / 2 + tr.offsetY * scaleX;
+
+        pCtx.save();
+        pCtx.beginPath();
+        pCtx.rect(0, 0, PW, PH);
+        pCtx.clip();
+        pCtx.drawImage(img, dx, dy, dw, dh);
+        pCtx.restore();
+
+        // Draw canvas border indicator
+        pCtx.strokeStyle = 'rgba(0,212,170,0.3)';
+        pCtx.lineWidth = 1;
+        pCtx.strokeRect(0.5, 0.5, PW - 1, PH - 1);
+      };
+      img.onload = _drawPreview;
+      if (img.complete) _drawPreview();
+
+      // Sliders
+      const sliderWrap = document.createElement('div');
+      sliderWrap.style.cssText = 'padding:12px;display:flex;flex-direction:column;gap:14px';
+
+      const _slider = (label, key, min, max, step, fmt) => {
+        const wrap2 = document.createElement('div');
+        const val   = tr[key];
+        wrap2.innerHTML = `
+          <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+            <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim)">${label}</span>
+            <span class="sv" style="font-family:var(--font-mono);font-size:9px;color:var(--accent)">${fmt(val)}</span>
+          </div>
+          <input type="range" min="${min}" max="${max}" step="${step}" value="${val}"
+            style="width:100%;accent-color:var(--accent);height:6px">
+        `;
+        wrap2.querySelector('input').addEventListener('input', e => {
+          const v = parseFloat(e.target.value);
+          tr[key] = v;
+          wrap2.querySelector('.sv').textContent = fmt(v);
+          _drawPreview();
+        });
+        return wrap2;
+      };
+
+      sliderWrap.appendChild(_slider('X offset', 'offsetX', -500, 500, 1,  v => v + 'px'));
+      sliderWrap.appendChild(_slider('Y offset', 'offsetY', -500, 500, 1,  v => v + 'px'));
+      sliderWrap.appendChild(_slider('Scale',    'scale',   0.1,  3,   0.01, v => v.toFixed(2) + '×'));
+      selEl.appendChild(sliderWrap);
+
+      // Reset + nav buttons
+      const foot = document.createElement('div');
+      foot.style.cssText = 'padding:10px 12px;border-top:1px solid var(--border-dim);display:flex;gap:8px';
+      const resetBtn = document.createElement('button');
+      resetBtn.className = 'btn';
+      resetBtn.style.cssText = 'font-size:9px;flex:1';
+      resetBtn.textContent = 'Reset';
+      resetBtn.addEventListener('click', () => {
+        tr.offsetX = 0; tr.offsetY = 0; tr.scale = 1;
+        sliderWrap.querySelectorAll('input').forEach((sl, idx) => {
+          sl.value = [0, 0, 1][idx];
+        });
+        sliderWrap.querySelectorAll('.sv').forEach((sp, idx) => {
+          sp.textContent = ['0px', '0px', '1.00×'][idx];
+        });
+        _drawPreview();
+      });
+
+      // Prev / Next image buttons
+      const prevBtn = document.createElement('button');
+      prevBtn.className = 'btn'; prevBtn.textContent = '← Prev'; prevBtn.style.cssText = 'font-size:9px';
+      prevBtn.disabled = i === 0;
+      prevBtn.addEventListener('click', () => _openTransformEditor(selected[i - 1], i - 1));
+
+      const nextBtn = document.createElement('button');
+      nextBtn.className = 'btn'; nextBtn.textContent = 'Next →'; nextBtn.style.cssText = 'font-size:9px';
+      nextBtn.disabled = i === selected.length - 1;
+      nextBtn.addEventListener('click', () => _openTransformEditor(selected[i + 1], i + 1));
+
+      foot.append(prevBtn, resetBtn, nextBtn);
+      selEl.appendChild(foot);
+    };
+
     const _renderSel = () => {
       selEl.innerHTML = '';
       if (selected.length === 0) {
@@ -203,89 +337,37 @@ class SlideshowLayer extends BaseLayer {
         return;
       }
       selected.forEach((entry, i) => {
-        // Ensure transform exists
         if (!entry.transform) entry.transform = { offsetX: 0, offsetY: 0, scale: 1 };
         const tr = entry.transform;
+        const hasTransform = tr.offsetX !== 0 || tr.offsetY !== 0 || tr.scale !== 1;
 
         const wrap = document.createElement('div');
         wrap.style.cssText = 'margin-bottom:4px;border:1px solid var(--border-dim);border-radius:4px;overflow:hidden';
 
         const row = document.createElement('div');
         row.draggable = true;
-        row.dataset.idx = i;
-        row.style.cssText = `display:flex;align-items:center;gap:8px;padding:5px;
-          cursor:grab;background:var(--bg-card)`;
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:6px 8px;cursor:grab;background:var(--bg-card)';
         row.innerHTML = `
-          <span style="font-size:9px;color:var(--text-dim);min-width:14px">${i+1}</span>
-          <img src="${entry.url}" style="width:40px;height:28px;object-fit:cover;border-radius:3px;flex-shrink:0">
+          <span style="font-size:8px;color:var(--text-dim);min-width:14px;flex-shrink:0">${i + 1}</span>
+          <img src="${entry.url}" style="width:44px;height:30px;object-fit:cover;border-radius:3px;flex-shrink:0;cursor:pointer" class="tr-thumb" title="Click to edit transform">
           <span style="font-size:9px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1">${entry.name}</span>
-          <button class="tr-toggle" style="background:none;border:none;cursor:pointer;color:var(--text-dim);font-size:9px" title="Edit transform">⚙</button>
-          <button data-rm="${i}" style="background:none;border:none;cursor:pointer;color:#ff4444;font-size:10px">✕</button>
+          <button class="tr-edit" style="background:${hasTransform ? 'var(--accent)' : 'none'};
+            border:1px solid ${hasTransform ? 'var(--accent)' : 'var(--border-dim)'};
+            border-radius:4px;color:${hasTransform ? 'var(--bg)' : 'var(--text-dim)'};
+            font-family:var(--font-mono);font-size:8px;padding:3px 8px;cursor:pointer;flex-shrink:0"
+            title="Edit position and scale">
+            ${hasTransform ? '✎ edited' : '✎ fit'}
+          </button>
+          <button data-rm="${i}" style="background:none;border:none;cursor:pointer;color:#ff4444;font-size:12px;flex-shrink:0">✕</button>
         `;
 
-        // Transform expand panel
-        const trPanel = document.createElement('div');
-        trPanel.style.cssText = 'display:none;padding:8px;background:var(--bg);border-top:1px solid var(--border-dim)';
-        trPanel.innerHTML = `
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
-            <div>
-              <div style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim);margin-bottom:2px">X offset</div>
-              <input type="range" class="tr-x" min="-500" max="500" step="1" value="${tr.offsetX}"
-                style="width:100%;accent-color:var(--accent)">
-              <span class="tr-xv" style="font-family:var(--font-mono);font-size:7px;color:var(--accent)">${tr.offsetX}px</span>
-            </div>
-            <div>
-              <div style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim);margin-bottom:2px">Y offset</div>
-              <input type="range" class="tr-y" min="-500" max="500" step="1" value="${tr.offsetY}"
-                style="width:100%;accent-color:var(--accent)">
-              <span class="tr-yv" style="font-family:var(--font-mono);font-size:7px;color:var(--accent)">${tr.offsetY}px</span>
-            </div>
-            <div>
-              <div style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim);margin-bottom:2px">Scale</div>
-              <input type="range" class="tr-s" min="0.1" max="3" step="0.05" value="${tr.scale}"
-                style="width:100%;accent-color:var(--accent)">
-              <span class="tr-sv" style="font-family:var(--font-mono);font-size:7px;color:var(--accent)">${tr.scale.toFixed(2)}×</span>
-            </div>
-          </div>
-          <button class="tr-reset" style="background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:7px;padding:1px 6px;cursor:pointer;margin-top:4px">Reset</button>
-        `;
-
-        // Wire transform sliders
-        trPanel.querySelector('.tr-x').addEventListener('input', e => {
-          tr.offsetX = parseInt(e.target.value);
-          trPanel.querySelector('.tr-xv').textContent = tr.offsetX + 'px';
-        });
-        trPanel.querySelector('.tr-y').addEventListener('input', e => {
-          tr.offsetY = parseInt(e.target.value);
-          trPanel.querySelector('.tr-yv').textContent = tr.offsetY + 'px';
-        });
-        trPanel.querySelector('.tr-s').addEventListener('input', e => {
-          tr.scale = parseFloat(e.target.value);
-          trPanel.querySelector('.tr-sv').textContent = tr.scale.toFixed(2) + '×';
-        });
-        trPanel.querySelector('.tr-reset').addEventListener('click', () => {
-          tr.offsetX = 0; tr.offsetY = 0; tr.scale = 1;
-          trPanel.querySelector('.tr-x').value = 0;
-          trPanel.querySelector('.tr-y').value = 0;
-          trPanel.querySelector('.tr-s').value = 1;
-          trPanel.querySelector('.tr-xv').textContent = '0px';
-          trPanel.querySelector('.tr-yv').textContent = '0px';
-          trPanel.querySelector('.tr-sv').textContent = '1.00×';
-        });
-
-        // Toggle transform panel
-        row.querySelector('.tr-toggle').addEventListener('click', e => {
-          e.stopPropagation();
-          const open = trPanel.style.display !== 'none';
-          trPanel.style.display = open ? 'none' : 'block';
-          e.target.style.color = open ? 'var(--text-dim)' : 'var(--accent)';
-        });
+        // Click image thumb or edit button → open transform editor
+        const openEditor = () => _openTransformEditor(entry, i);
+        row.querySelector('.tr-thumb').addEventListener('click', e => { e.stopPropagation(); openEditor(); });
+        row.querySelector('.tr-edit').addEventListener('click',  e => { e.stopPropagation(); openEditor(); });
 
         // Drag to reorder
-        row.addEventListener('dragstart', e => {
-          e.dataTransfer.setData('text/plain', String(i));
-          wrap.style.opacity = '0.4';
-        });
+        row.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', String(i)); wrap.style.opacity = '0.4'; });
         row.addEventListener('dragend',   () => { wrap.style.opacity = '1'; });
         wrap.addEventListener('dragover',  e => { e.preventDefault(); wrap.style.borderColor = 'var(--accent)'; });
         wrap.addEventListener('dragleave', () => { wrap.style.borderColor = 'var(--border-dim)'; });
@@ -299,6 +381,7 @@ class SlideshowLayer extends BaseLayer {
             _renderSel();
           }
         });
+
         row.querySelector('[data-rm]').addEventListener('click', e => {
           e.stopPropagation();
           selected.splice(i, 1);
@@ -307,7 +390,6 @@ class SlideshowLayer extends BaseLayer {
         });
 
         wrap.appendChild(row);
-        wrap.appendChild(trPanel);
         selEl.appendChild(wrap);
       });
     };

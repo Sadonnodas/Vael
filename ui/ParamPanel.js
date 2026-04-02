@@ -72,7 +72,7 @@ const ParamPanel = (() => {
       editBtn.style.cssText = 'width:100%;font-size:9px;margin-bottom:10px';
       // Count updates once images finish loading (they load asynchronously)
       const _updateCount = () => {
-        const n = layer._images?.length ?? 0;
+        const n = layer._entryCount ?? layer._images?.length ?? 0;
         editBtn.textContent = `🖼 Edit images (${n})`;
       };
       _updateCount();

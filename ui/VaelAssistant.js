@@ -223,52 +223,42 @@ Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candleligh
     }
   }
 
-  const API_KEY_STORAGE = 'vael-claude-api-key';
+  const API_KEY_STORAGE   = 'vael-claude-api-key';
+  const PROXY_URL_STORAGE = 'vael-claude-proxy-url';
 
-  function _getApiKey() {
-    return localStorage.getItem(API_KEY_STORAGE) || '';
-  }
-
-  function _setApiKey(key) {
-    localStorage.setItem(API_KEY_STORAGE, key);
-  }
+  function _getApiKey()  { return localStorage.getItem(API_KEY_STORAGE)   || ''; }
+  function _getProxyUrl(){ return (localStorage.getItem(PROXY_URL_STORAGE) || '').replace(/\/$/, ''); }
+  function _setApiKey(key) { localStorage.setItem(API_KEY_STORAGE, key); }
+  function _setProxyUrl(url) { localStorage.setItem(PROXY_URL_STORAGE, url.trim().replace(/\/$/, '')); }
 
   // ── API call ─────────────────────────────────────────────────
 
   async function _callClaude(userMessage) {
-    const apiKey = _getApiKey();
+    const apiKey  = _getApiKey();
     if (!apiKey) throw new Error('No API key set — click ⚙ to add your Claude API key');
+
+    const proxyUrl  = _getProxyUrl();
+    const endpoint  = proxyUrl
+      ? `${proxyUrl}/v1/messages`
+      : 'https://api.anthropic.com/v1/messages';
 
     const systemPrompt = _buildSystemPrompt();
 
-    let response;
-    try {
-      response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key':    apiKey,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-io': 'true',
-        },
-        body: JSON.stringify({
-          model:      'claude-sonnet-4-20250514',
-          max_tokens: 1000,
-          system:     systemPrompt,
-          messages:   _messages.concat([{ role: 'user', content: userMessage }]),
-        }),
-      });
-    } catch (networkErr) {
-      // CORS or network failure — usually means running from file:// or a
-      // domain that isn't allowlisted by Anthropic for direct browser access.
-      throw new Error(
-        'Cannot reach the Anthropic API from this page. ' +
-        'This usually means the page is served from a domain not permitted ' +
-        'for direct browser API calls. ' +
-        'Try opening Vael from localhost or your GitHub Pages URL, ' +
-        'and make sure your API key is correct.'
-      );
-    }
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type':        'application/json',
+        'x-api-key':           apiKey,
+        'anthropic-version':   '2023-06-01',
+        ...(proxyUrl ? {} : { 'anthropic-dangerous-direct-browser-io': 'true' }),
+      },
+      body: JSON.stringify({
+        model:      'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        system:     systemPrompt,
+        messages:   _messages.concat([{ role: 'user', content: userMessage }]),
+      }),
+    });
 
     if (!response.ok) {
       const err = await response.json().catch(() => ({}));
@@ -336,10 +326,21 @@ Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candleligh
                    color:var(--text);font-family:var(--font-mono);font-size:10px;padding:6px 8px" />
           <button id="va-key-save" class="btn accent" style="font-size:9px;flex-shrink:0">Save</button>
         </div>
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin:10px 0 6px">
+          PROXY URL <span style="color:var(--text-dim);font-size:8px">(optional — needed on GitHub Pages)</span>
+        </div>
+        <div style="display:flex;gap:8px">
+          <input type="text" id="va-proxy-input" placeholder="https://your-worker.workers.dev"
+            style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:4px;
+                   color:var(--text);font-family:var(--font-mono);font-size:10px;padding:6px 8px" />
+          <button id="va-proxy-save" class="btn" style="font-size:9px;flex-shrink:0">Save</button>
+        </div>
         <p style="font-size:9px;color:var(--text-dim);margin-top:6px;line-height:1.5">
           Get a key at <a href="https://console.anthropic.com" target="_blank"
           style="color:var(--accent)">console.anthropic.com</a>.
           Stored locally in your browser only.
+          For the proxy, deploy <code>cloudflare-worker.js</code> to
+          <a href="https://workers.cloudflare.com" target="_blank" style="color:var(--accent)">Cloudflare Workers</a> (free).
         </p>
       </div>
 
@@ -493,9 +494,11 @@ Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candleligh
     _panel.querySelector('#va-settings').addEventListener('click', () => {
       const kp = _panel.querySelector('#va-key-panel');
       kp.style.display = kp.style.display === 'none' ? 'block' : 'none';
-      // Pre-fill with existing key (masked)
+      // Pre-fill with existing key (masked) and existing proxy URL
       const existing = _getApiKey();
       if (existing) _panel.querySelector('#va-key-input').placeholder = '••••••••' + existing.slice(-4);
+      const existingProxy = _getProxyUrl();
+      if (existingProxy) _panel.querySelector('#va-proxy-input').value = existingProxy;
     });
 
     _panel.querySelector('#va-key-save').addEventListener('click', () => {
@@ -506,6 +509,12 @@ Organic, warm, earthy. Think: fireflies, aurora borealis, starfields, candleligh
         _panel.querySelector('#va-key-input').value = '';
         Toast.success('API key saved');
       }
+    });
+
+    _panel.querySelector('#va-proxy-save').addEventListener('click', () => {
+      const val = _panel.querySelector('#va-proxy-input').value.trim();
+      _setProxyUrl(val);
+      Toast.success(val ? `Proxy saved: ${val}` : 'Proxy cleared — using direct API');
     });
 
     // Enter to save key
