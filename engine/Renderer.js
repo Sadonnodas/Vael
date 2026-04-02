@@ -154,41 +154,64 @@ class Renderer {
 
       // Apply clip shape — punch out everything outside rect/ellipse
       if (layer.clipShape?.type && layer.clipShape.type !== 'none') {
-        const cs  = layer.clipShape;
-        const t2  = layer.transform || {};
-        const cx2 = W / 2 + (t2.x || 0);
-        const cy2 = H / 2 + (t2.y || 0);
-        const cw  = W * (cs.w ?? 0.5);
-        const ch  = H * (cs.h ?? 0.5);
-        const isOutline = cs.type.includes('outline');
+        const cs      = layer.clipShape;
+        const t2      = layer.transform || {};
+        const cx2     = W / 2 + (t2.x || 0);
+        const cy2     = H / 2 + (t2.y || 0);
+        const cw      = W * (cs.w ?? 0.5);
+        const ch      = H * (cs.h ?? 0.5);
         const isEllipse = cs.type.includes('ellipse');
+        const lw      = cs.lineWidth ?? 3;
 
-        if (isOutline) {
-          // Outline mode: draw the shape as a stroke on top of the layer
+        // Build a mask canvas with the shape drawn as needed
+        const tmp    = document.createElement('canvas');
+        tmp.width    = W; tmp.height = H;
+        const tc     = tmp.getContext('2d');
+
+        const _drawShape = (ctx) => {
+          ctx.beginPath();
+          if (isEllipse) {
+            ctx.ellipse(cx2, cy2, cw, ch, 0, 0, Math.PI * 2);
+          } else {
+            ctx.rect(cx2 - cw, cy2 - ch, cw * 2, ch * 2);
+          }
+        };
+
+        if (cs.type === 'rect-inside' || cs.type === 'ellipse-inside' ||
+            cs.type === 'rect'        || cs.type === 'ellipse') {
+          // Inside: keep only pixels within the shape
+          tc.fillStyle = '#fff';
+          _drawShape(tc);
+          tc.fill();
           offCtx.save();
-          offCtx.strokeStyle = '#ffffff';
-          offCtx.lineWidth   = cs.lineWidth ?? 3;
-          offCtx.beginPath();
-          if (isEllipse) {
-            offCtx.ellipse(cx2, cy2, cw, ch, 0, 0, Math.PI * 2);
-          } else {
-            offCtx.rect(cx2 - cw, cy2 - ch, cw * 2, ch * 2);
-          }
-          offCtx.stroke();
+          offCtx.globalCompositeOperation = 'destination-in';
+          offCtx.drawImage(tmp, 0, 0);
           offCtx.restore();
-        } else {
-          // Fill clip mode: keep only pixels inside the shape
-          const tmp    = document.createElement('canvas');
-          tmp.width    = W; tmp.height = H;
-          const tmpCtx = tmp.getContext('2d');
-          tmpCtx.fillStyle = '#fff';
-          tmpCtx.beginPath();
-          if (isEllipse) {
-            tmpCtx.ellipse(cx2, cy2, cw, ch, 0, 0, Math.PI * 2);
-          } else {
-            tmpCtx.rect(cx2 - cw, cy2 - ch, cw * 2, ch * 2);
-          }
-          tmpCtx.fill();
+
+        } else if (cs.type === 'rect-outside' || cs.type === 'ellipse-outside') {
+          // Outside: keep only pixels OUTSIDE the shape (punch hole)
+          // Fill everything white, then fill shape black → invert via destination-out
+          tc.fillStyle = '#fff';
+          tc.fillRect(0, 0, W, H);
+          tc.globalCompositeOperation = 'destination-out';
+          tc.fillStyle = '#000';
+          _drawShape(tc);
+          tc.fill();
+          tc.globalCompositeOperation = 'source-over';
+          offCtx.save();
+          offCtx.globalCompositeOperation = 'destination-in';
+          offCtx.drawImage(tmp, 0, 0);
+          offCtx.restore();
+
+        } else if (cs.type === 'rect-line' || cs.type === 'ellipse-line') {
+          // On-line: keep only pixels that fall on the stroke of the shape
+          // Draw the stroke as a thick white line on black → use as mask
+          tc.fillStyle = '#000';
+          tc.fillRect(0, 0, W, H);
+          tc.strokeStyle = '#fff';
+          tc.lineWidth   = lw;
+          _drawShape(tc);
+          tc.stroke();
           offCtx.save();
           offCtx.globalCompositeOperation = 'destination-in';
           offCtx.drawImage(tmp, 0, 0);

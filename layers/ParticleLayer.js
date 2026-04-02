@@ -227,38 +227,19 @@ class ParticleLayer extends BaseLayer {
   }
 
   render(ctx, width, height) {
-    // Reinitialise only when mode changes or canvas size changes significantly.
-    // Count changes are handled softly below (add/remove particles without reset).
-    // Guard: don't initialise until we have real canvas dimensions
-    if (width < 10 || height < 10) return;
-
-    // Only reinit on genuine size change (>50px), not sub-pixel layout flicker.
-    // The sidebar repaint causes canvas.clientWidth to fluctuate by 1-2px,
-    // which was triggering _initParticles and clearing the trail canvas.
-    const sizeChanged = Math.abs(width  - (this._prevWidth  ?? 0)) > 50 ||
-                        Math.abs(height - (this._prevHeight ?? 0)) > 50;
-    const modeChanged = this._prevMode  !== this.params.mode;
-    const forceReinit = this.softUpdate === false && this._prevCount !== this.params.count;
-
-    const firstRun = this._particles.length === 0;
-
-    if (modeChanged || firstRun || forceReinit) {
-      // Full reinit: mode/first-run/instant-count. firstRun takes priority over
-      // sizeChanged so particles always spawn at the real canvas size.
-      this._initParticles(width, height, modeChanged || firstRun);
+    // Reinitialise if count/mode changed, particles are empty, OR canvas size
+    // changed significantly (e.g. first render after startup when offscreen
+    // canvas was created at the 800x600 fallback size).
+    // Threshold >10px catches size mismatch without firing on 1-2px sidebar reflows.
+    const sizeChanged = Math.abs(width  - (this._prevWidth  ?? 0)) > 10 ||
+                        Math.abs(height - (this._prevHeight ?? 0)) > 10;
+    if (this._prevMode  !== this.params.mode  ||
+        this._particles.length === 0 ||
+        sizeChanged) {
+      // Full reinit: mode changed, first run, or canvas size mismatch
+      this._initParticles(width, height);
       this._prevWidth  = width;
       this._prevHeight = height;
-    } else if (sizeChanged) {
-      // Canvas was genuinely resized — only resize the trail canvas, don't respawn particles
-      this._prevWidth  = width;
-      this._prevHeight = height;
-      if (this.params.mode === 'trails' && this._trailCanvas &&
-          (this._trailCanvas.width !== width || this._trailCanvas.height !== height)) {
-        this._trailCanvas.width  = width;
-        this._trailCanvas.height = height;
-        this._trailCtx.fillStyle = '#000';
-        this._trailCtx.fillRect(0, 0, width, height);
-      }
     } else {
       // Soft count adjustment — add or remove particles without full reset
       const target = this.params.count;

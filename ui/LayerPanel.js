@@ -1036,10 +1036,15 @@ const LayerPanel = (() => {
         ctx.fillStyle = '#0a0a10';
         ctx.fillRect(0, 0, 72, 48);
 
-        if (typeof layer.render === 'function') {
+        // Never call render() on stateful particle/canvas layers for thumbnails —
+        // it causes reinit at the wrong size. These layers cache their thumb
+        // from the main render loop instead (see _updateThumbFromQuad).
+        const isStateful = layer._particles !== undefined ||
+                           layer.constructor?.name === 'CanvasPaintLayer';
+
+        if (!isStateful && typeof layer.render === 'function') {
           ctx.save();
           ctx.translate(36, 24);
-          // Temporarily set a small scale so layer fits in thumb
           ctx.scale(0.08, 0.08);
           layer.render(ctx, 900, 600);
           ctx.restore();
@@ -1167,6 +1172,24 @@ const LayerPanel = (() => {
       const dy = e.clientY - _dragStartY;
       _dragLayer.transform.x = _dragOrigX + dx;
       _dragLayer.transform.y = _dragOrigY + dy;
+
+      // Record transform changes into AutomationTimeline when recording
+      if (window._vaelTimeline?.isRecording && _dragLayer.id) {
+        const renderer = window._vaelRenderer;
+        const W = renderer?.width  || 800;
+        const H = renderer?.height || 600;
+        // Normalise to 0-1 range for timeline recording
+        window._vaelTimeline.recordPoint(
+          _dragLayer.id, 'transform.x',
+          _dragLayer.transform.x,
+          { label: 'X position', min: -W/2, max: W/2 }
+        );
+        window._vaelTimeline.recordPoint(
+          _dragLayer.id, 'transform.y',
+          _dragLayer.transform.y,
+          { label: 'Y position', min: -H/2, max: H/2 }
+        );
+      }
     });
 
     document.addEventListener('mouseup', () => {

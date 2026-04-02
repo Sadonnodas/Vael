@@ -517,6 +517,20 @@
   renderer.start();
   LFOPanel.refresh();
 
+  // Wait for the renderer to complete its first frame (which calls _resize() and
+  // sets _cssW/_cssH to the real canvas dimensions) before adding any layers.
+  // Without this wait, offscreen canvases are created at the 800×600 fallback size.
+  const _waitForDimensions = (cb) => {
+    const check = () => {
+      if (renderer.width > 0 && renderer.height > 0) {
+        cb();
+      } else {
+        requestAnimationFrame(check);
+      }
+    };
+    requestAnimationFrame(check);
+  };
+
   const _hasSave = (() => {
     try {
       const s = localStorage.getItem('vael-autosave');
@@ -543,11 +557,11 @@
   }
 
   if (_hasSave) {
-    // Show the dialog immediately — don't add default layers yet
-    setTimeout(() => _restoreAutoSave(_addDefaultLayers), 50);
+    // Show the dialog — wait for dimensions first so restored layers spawn correctly
+    _waitForDimensions(() => setTimeout(() => _restoreAutoSave(_addDefaultLayers), 50));
   } else {
-    // No save — go straight to default scene
-    _addDefaultLayers();
+    // No save — wait for dimensions, then add defaults
+    _waitForDimensions(_addDefaultLayers);
   }
 
   // ── Preset save / load ────────────────────────────────────────

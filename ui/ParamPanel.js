@@ -70,12 +70,20 @@ const ParamPanel = (() => {
       const editBtn = document.createElement('button');
       editBtn.className   = 'btn accent';
       editBtn.style.cssText = 'width:100%;font-size:9px;margin-bottom:10px';
-      editBtn.textContent = `🖼 Edit images (${layer._images?.length ?? 0})`;
+      // Count updates once images finish loading (they load asynchronously)
+      const _updateCount = () => {
+        const n = layer._images?.length ?? 0;
+        editBtn.textContent = `🖼 Edit images (${n})`;
+      };
+      _updateCount();
+      // Recheck after a short delay for async image loads
+      setTimeout(_updateCount, 500);
+      setTimeout(_updateCount, 1500);
       editBtn.addEventListener('click', () => {
         const currentUrls = (layer._images || []).map(e => e.url).filter(Boolean);
         SlideshowLayer.showPickerModal(currentUrls, selected => {
           layer.loadEntries(selected);
-          editBtn.textContent = `🖼 Edit images (${selected.length})`;
+          setTimeout(_updateCount, 500);
           Toast.success(`Slideshow: ${selected.length} image${selected.length!==1?'s':''}`);
         });
       });
@@ -204,7 +212,7 @@ const ParamPanel = (() => {
 
     // Opacity — writes to layer.opacity
     container.appendChild(buildSlider(
-      { id: 'opacity', label: 'Opacity', type: 'float', min: 0, max: 1, step: 0.01 },
+      { id: 'opacity', label: 'Opacity', type: 'float', min: 0, max: 1, step: 0.01, default: 1 },
       layer.opacity ?? 1, layer,
       v => { layer.opacity = v; if (window._vaelHistory) window._vaelHistory.onOpacityChange(layer, v); }
     ));
@@ -222,31 +230,57 @@ const ParamPanel = (() => {
     const xyRow = document.createElement('div');
     xyRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
     xyRow.appendChild(buildSlider(
-      { id: '_tx', label: 'X', type: 'float', min: -800, max: 800, step: 1 },
+      { id: '_tx', label: 'X', type: 'float', min: -800, max: 800, step: 1, default: 0 },
       t.x ?? 0, layer, v => { layer.transform.x = v; if (window._vaelHistory) window._vaelHistory.onTransformChange(layer); }
     ));
     xyRow.appendChild(buildSlider(
-      { id: '_ty', label: 'Y', type: 'float', min: -450, max: 450, step: 1 },
+      { id: '_ty', label: 'Y', type: 'float', min: -450, max: 450, step: 1, default: 0 },
       t.y ?? 0, layer, v => { layer.transform.y = v; if (window._vaelHistory) window._vaelHistory.onTransformChange(layer); }
     ));
     container.appendChild(xyRow);
 
     // Scale X / Y — two-column
     const scaleRow = document.createElement('div');
-    scaleRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
-    scaleRow.appendChild(buildSlider(
-      { id: '_tscaleX', label: 'Scale X', type: 'float', min: 0.1, max: 4, step: 0.01 },
-      t.scaleX ?? 1, layer, v => { layer.transform.scaleX = v; if (window._vaelHistory) window._vaelHistory.onTransformChange(layer); }
-    ));
-    scaleRow.appendChild(buildSlider(
-      { id: '_tscaleY', label: 'Scale Y', type: 'float', min: 0.1, max: 4, step: 0.01 },
-      t.scaleY ?? 1, layer, v => { layer.transform.scaleY = v; if (window._vaelHistory) window._vaelHistory.onTransformChange(layer); }
-    ));
+    scaleRow.style.cssText = 'display:grid;grid-template-columns:1fr auto 1fr;gap:4px;align-items:center';
+
+    let _scaleLinked = layer._scaleLinked ?? true;
+
+    const scaleXEl = buildSlider(
+      { id: '_tscaleX', label: 'Scale X', type: 'float', min: 0.1, max: 4, step: 0.01, default: 1 },
+      t.scaleX ?? 1, layer, v => {
+        layer.transform.scaleX = v;
+        if (_scaleLinked) layer.transform.scaleY = v;
+        if (window._vaelHistory) window._vaelHistory.onTransformChange(layer);
+      }
+    );
+    const linkBtn = document.createElement('button');
+    linkBtn.style.cssText = `background:${_scaleLinked?'color-mix(in srgb,var(--accent) 15%,transparent)':'none'};border:1px solid ${_scaleLinked?'var(--accent)':'var(--border-dim)'};border-radius:3px;color:${_scaleLinked?'var(--accent)':'var(--text-dim)'};font-size:10px;padding:2px 4px;cursor:pointer;align-self:center;margin-top:12px`;
+    linkBtn.textContent = '🔗';
+    linkBtn.title = 'Link Scale X and Y together';
+    linkBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      _scaleLinked = !_scaleLinked;
+      layer._scaleLinked = _scaleLinked;
+      linkBtn.style.background  = _scaleLinked ? 'color-mix(in srgb,var(--accent) 15%,transparent)' : 'none';
+      linkBtn.style.borderColor = _scaleLinked ? 'var(--accent)' : 'var(--border-dim)';
+      linkBtn.style.color       = _scaleLinked ? 'var(--accent)' : 'var(--text-dim)';
+    });
+    const scaleYEl = buildSlider(
+      { id: '_tscaleY', label: 'Scale Y', type: 'float', min: 0.1, max: 4, step: 0.01, default: 1 },
+      t.scaleY ?? 1, layer, v => {
+        layer.transform.scaleY = v;
+        if (_scaleLinked) layer.transform.scaleX = v;
+        if (window._vaelHistory) window._vaelHistory.onTransformChange(layer);
+      }
+    );
+    scaleRow.appendChild(scaleXEl);
+    scaleRow.appendChild(linkBtn);
+    scaleRow.appendChild(scaleYEl);
     container.appendChild(scaleRow);
 
     // Rotation
     container.appendChild(buildSlider(
-      { id: '_trot', label: 'Rotation', type: 'float', min: -180, max: 180, step: 0.5 },
+      { id: '_trot', label: 'Rotation', type: 'float', min: -180, max: 180, step: 0.5, default: 0 },
       t.rotation ?? 0, layer, v => { layer.transform.rotation = v; if (window._vaelHistory) window._vaelHistory.onTransformChange(layer); }
     ));
 
@@ -337,9 +371,32 @@ const ParamPanel = (() => {
       }
     };
 
-    // Shapes: none=full, rect/ellipse=fill clip, rect-outline/ellipse-outline=stroke only
-    const CLIP_SHAPES = ['none','rect','ellipse','rect-outline','ellipse-outline'];
-    const CLIP_LABELS = { none:'Full', rect:'▭ Fill', ellipse:'◯ Fill', 'rect-outline':'▭ Line', 'ellipse-outline':'◯ Line' };
+    // Clip shapes: two shapes × three modes each
+    const CLIP_SHAPES = ['none','rect-inside','rect-outside','ellipse-inside','ellipse-outside'];
+    const CLIP_LABELS = {
+      none:             'Full',
+      'rect-inside':    '▭ In',
+      'rect-outside':   '▭ Out',
+      'rect-line':      '▭ On',
+      'ellipse-inside': '◯ In',
+      'ellipse-outside':'◯ Out',
+      'ellipse-line':   '◯ On',
+    };
+    const CLIP_TIPS = {
+      none:             'Full canvas — no clipping',
+      'rect-inside':    'Rectangle: show only INSIDE the shape',
+      'rect-outside':   'Rectangle: show only OUTSIDE the shape (punch hole)',
+      'rect-line':      'Rectangle: show only ON the shape outline (stroke mask)',
+      'ellipse-inside': 'Ellipse: show only INSIDE the shape',
+      'ellipse-outside':'Ellipse: show only OUTSIDE the shape (punch hole)',
+      'ellipse-line':   'Ellipse: show only ON the shape outline (stroke mask)',
+    };
+    // Migrate old type names
+    if (layer.clipShape?.type === 'rect')            layer.clipShape.type = 'rect-inside';
+    if (layer.clipShape?.type === 'ellipse')         layer.clipShape.type = 'ellipse-inside';
+    if (layer.clipShape?.type === 'rect-outline')    layer.clipShape.type = 'rect-inside';
+    if (layer.clipShape?.type === 'ellipse-outline') layer.clipShape.type = 'ellipse-inside';
+
     CLIP_SHAPES.forEach(shape => {
       const btn = document.createElement('button');
       btn.dataset.shape = shape;
@@ -349,13 +406,11 @@ const ParamPanel = (() => {
         border-radius:3px;color:${isActive?'var(--bg)':'var(--text-dim)'};
         font-family:var(--font-mono);font-size:7px;padding:2px 4px;cursor:pointer;flex:1`;
       btn.textContent = CLIP_LABELS[shape] || shape;
-      btn.title = shape === 'none' ? 'Full canvas — no clipping' :
-                  shape.includes('outline') ? 'Show only the shape outline (stroke)' :
-                  'Clip to this shape (everything outside is hidden)';
+      btn.title = CLIP_TIPS[shape] || shape;
       btn.addEventListener('click', e => {
         e.stopPropagation();
         layer.clipShape = shape === 'none' ? null
-          : { type: shape, w: layer.clipShape?.w ?? 0.5, h: layer.clipShape?.h ?? 0.5, lineWidth: layer.clipShape?.lineWidth ?? 3 };
+          : { type: shape, w: layer.clipShape?.w ?? 0.5, h: layer.clipShape?.h ?? 0.5, lineWidth: layer.clipShape?.lineWidth ?? 10 };
         _refreshClip();
       });
       clipTypeRow.appendChild(btn);

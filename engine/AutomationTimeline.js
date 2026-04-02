@@ -277,11 +277,17 @@ class AutomationTimeline {
   _applyClip(clip, t) {
     clip.lanes.forEach(lane => {
       const layer = this._layers.layers.find(l => l.id === lane.layerId);
-      if (!layer || !layer.params) return;
+      if (!layer) return;
       const v = this._interpolate(lane.points, t);
       if (v === null) return;
-      const range = lane.max - lane.min;
-      layer.params[lane.paramId] = lane.min + v * range;
+      const value = lane.min + v * (lane.max - lane.min);
+      if (lane.paramId.startsWith('transform.')) {
+        const key = lane.paramId.split('.')[1];
+        if (!layer.transform) layer.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+        layer.transform[key] = value;
+      } else if (layer.params) {
+        layer.params[lane.paramId] = value;
+      }
     });
   }
 
@@ -289,17 +295,20 @@ class AutomationTimeline {
     if (!this._activeClip) return;
     this._activeClip.lanes.forEach(lane => {
       const layer = this._layers.layers.find(l => l.id === lane.layerId);
-      if (!layer || !layer.params) return;
+      if (!layer) return;
 
       const v = this._interpolate(lane.points, t);
       if (v === null) return;
 
-      // Denormalise
       const range = lane.max - lane.min;
       const value = lane.min + v * range;
-      layer.params[lane.paramId] = value;
-      if (typeof layer.setParam === 'function') {
-        // Bypass normal setParam to avoid re-recording
+
+      // Handle transform targets (recorded via canvas drag)
+      if (lane.paramId.startsWith('transform.')) {
+        const key = lane.paramId.split('.')[1]; // 'x', 'y', 'scaleX', etc.
+        if (!layer.transform) layer.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+        layer.transform[key] = value;
+      } else if (layer.params) {
         layer.params[lane.paramId] = value;
       }
     });
