@@ -700,6 +700,9 @@ const LayerPanel = (() => {
       scaleSl?.addEventListener('input', () => {
         applyUnifiedScale(parseInt(scaleSl.value));
       });
+      // Cmd/Ctrl+click or dblclick resets scale to 100%
+      scaleSl?.addEventListener('dblclick', () => { applyUnifiedScale(100); Toast.info('Scale → 100%'); });
+      scaleSl?.addEventListener('click', e => { if (e.metaKey || e.ctrlKey) { applyUnifiedScale(100); Toast.info('Scale → 100%'); } });
 
       scaleNum?.addEventListener('change', () => {
         const raw = scaleNum.value.replace('%','');
@@ -741,6 +744,8 @@ const LayerPanel = (() => {
       row.querySelectorAll('.tr-x,.tr-y').forEach(el => {
         el.addEventListener('input',  () => setTransform(null));
         el.addEventListener('change', () => setTransform(null));
+        el.addEventListener('dblclick', () => { el.value = 0; setTransform(null); Toast.info('Position → 0'); });
+        el.addEventListener('click', e => { if (e.metaKey || e.ctrlKey) { el.value = 0; setTransform(null); Toast.info('Position → 0'); } });
       });
 
       // Rotation slider + number input sync
@@ -751,6 +756,8 @@ const LayerPanel = (() => {
         layer.transform.rotation = v;
         if (rotNum) rotNum.value = v;
       });
+      rotSl?.addEventListener('dblclick', () => { layer.transform.rotation = 0; if (rotSl) rotSl.value = 0; if (rotNum) rotNum.value = 0; Toast.info('Rotation → 0°'); });
+      rotSl?.addEventListener('click', e => { if (e.metaKey || e.ctrlKey) { layer.transform.rotation = 0; if (rotSl) rotSl.value = 0; if (rotNum) rotNum.value = 0; Toast.info('Rotation → 0°'); } });
       rotNum?.addEventListener('change', () => {
         const v = Math.max(-180, Math.min(180, parseFloat(rotNum.value) || 0));
         layer.transform.rotation = v;

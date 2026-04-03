@@ -47,10 +47,15 @@ class ShaderLayer extends BaseLayer {
       { id: 'colorA',      label: 'Color A',     type: 'color', default: '#00d4aa'               },
       { id: 'colorB',      label: 'Color B',     type: 'color', default: '#7c3ff0'               },
       { id: 'hueShift',    label: 'Hue shift',   type: 'float', default: 0,   min: 0,   max: 360 },
-      { id: 'audioReact',  label: 'Audio react', type: 'float', default: 1.0, min: 0,   max: 1,
+      { id: 'audioReact',     label: 'Audio react',     type: 'float', default: 1.0, min: 0,    max: 1,
         // 0 = audio uniforms (iBass etc.) are always 0 in built-in shader response.
         // 1 = full audio feeds uniforms. Shader GLSL still receives real values via
         //     iBass/iMid/iTreble regardless — this only gates the speed/beat reaction.
+      },
+      { id: 'audioSmoothing', label: 'Audio smoothing', type: 'float', default: 0.08, min: 0.01, max: 1, step: 0.01,
+        // How quickly audio values chase their target each frame.
+        // 0.01 = very smooth/slow (buttery, no jitter). 1.0 = instant/raw (maximum reactivity, can be jerky).
+        // Default 0.08 gives gentle smoothing that eliminates per-frame spikes without killing responsiveness.
       },
       { id: 'speed',       label: 'Speed',       type: 'float', default: 1.0, min: 0,   max: 4   },
       { id: 'intensity',   label: 'Intensity',   type: 'float', default: 1.0, min: 0,   max: 2   },
@@ -71,15 +76,19 @@ class ShaderLayer extends BaseLayer {
     this.params = {
       param1: 0.5, param2: 0.5, param3: 0.5,
       colorA: '#00d4aa', colorB: '#7c3ff0', hueShift: 0,
-      audioReact: 1.0, speed: 1.0, intensity: 1.0, scale: 1.0,
+      audioReact: 1.0, audioSmoothing: 0.08, speed: 1.0, intensity: 1.0, scale: 1.0,
     };
 
     this._shaderName  = 'plasma';
     this._customGLSL  = null;
     this._time        = 0;
-    this._audioSmooth = 0;
-    this._beatPulse   = 0;
-    this._audioData   = null;
+    this._audioSmooth  = 0;
+    this._bassSmooth   = 0;
+    this._midSmooth    = 0;
+    this._trebleSmooth = 0;
+    this._volumeSmooth = 0;
+    this._beatPulse    = 0;
+    this._audioData    = null;
 
     this._threeRenderer = null;
     this._threeScene    = null;
@@ -193,10 +202,16 @@ class ShaderLayer extends BaseLayer {
   update(audioData, videoData, dt) {
     this._time += dt * (this.params.speed ?? 1);
     this._audioData = audioData;
-    // Audio smoothing — gated by audioReact param (0=none, 1=full)
     const react = this.params.audioReact ?? 1.0;
-    const av    = audioData?.isActive ? (audioData.bass ?? 0) * react : 0;
-    this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.08);
+    // audioSmoothing: 0.01=very smooth/slow, 1.0=instant/raw
+    // Default 0.08 gives gentle smoothing — user can go lower for buttery or higher for snappy
+    const lag = Math.max(0.01, Math.min(1.0, this.params.audioSmoothing ?? 0.08));
+    const active = audioData?.isActive;
+    this._bassSmooth   = VaelMath.lerp(this._bassSmooth,   active ? (audioData.bass   ?? 0) * react : 0, lag);
+    this._midSmooth    = VaelMath.lerp(this._midSmooth,    active ? (audioData.mid    ?? 0) * react : 0, lag);
+    this._trebleSmooth = VaelMath.lerp(this._trebleSmooth, active ? (audioData.treble ?? 0) * react : 0, lag);
+    this._volumeSmooth = VaelMath.lerp(this._volumeSmooth, active ? (audioData.volume ?? 0) * react : 0, lag);
+    this._audioSmooth  = this._bassSmooth; // keep compat
     if (audioData?.isBeat) this._beatPulse = react > 0 ? 1.0 : 0;
     this._beatPulse = Math.max(0, this._beatPulse - dt * 6);
   }
@@ -211,10 +226,11 @@ class ShaderLayer extends BaseLayer {
     u.iTime.value      = this._time;
     u.iResolution.value.set(width, height);
 
-    u.iBass.value      = ad?.isActive ? (ad.bass    ?? 0) : this._audioSmooth;
-    u.iMid.value       = ad?.isActive ? (ad.mid     ?? 0) : 0;
-    u.iTreble.value    = ad?.isActive ? (ad.treble  ?? 0) : 0;
-    u.iVolume.value    = ad?.isActive ? (ad.volume  ?? 0) : 0;
+    // Always use pre-smoothed values — eliminates per-frame spikes that cause jerkiness
+    u.iBass.value      = this._bassSmooth;
+    u.iMid.value       = this._midSmooth;
+    u.iTreble.value    = this._trebleSmooth;
+    u.iVolume.value    = this._volumeSmooth;
     u.iBeat.value      = this._beatPulse;
     u.iBpm.value       = ad?.bpm ?? 120;
     u.iMouseX.value    = this.uniforms?.iMouseX ?? 0.5;
@@ -290,11 +306,11 @@ ShaderLayer.BUILTINS = {
 
   plasma: `
 void main() {
-  vec2 uv = (vUv - .5) * iScale;
-  float t = iTime * iSpeed;
+  vec2 uv = vUv * iScale;
+  float t = iTime;
   float v = sin(uv.x*6.+t) + sin(uv.y*6.+t*.7)
           + sin((uv.x+uv.y)*4.+t*1.3)
-          + sin(length(uv)*8.+t+iBass*4.);
+          + sin(length(uv-.5)*8.+t+iBass*4.);
   float h = v*.25+.5+iBass*.2;
   float r = abs(sin(h*3.14159));
   float g = abs(sin(h*3.14159+2.094));
@@ -307,7 +323,7 @@ void main() {
   vec2 uv  = vUv - .5;
   float d  = length(uv);
   float bp = iBeat * 4. + iBass * 8.;
-  float w  = sin(d * 20. * iScale - iTime * iSpeed * 3. + bp);
+  float w  = sin(d * 20. * iScale - iTime * 3. + bp);
   float v  = (w + 1.) * .5;
   float h  = .55 + v * .2;
   gl_FragColor = vec4(0., h*.8, h, .9);
@@ -321,33 +337,35 @@ float _noise(vec2 p){
              mix(_hash(i+vec2(0,1)),_hash(i+vec2(1,1)),f.x),f.y);
 }
 void main() {
-  float t   = iTime * iSpeed * .4;
-  float e   = iIntensity * .15 * (1. + iBass * 1.5 + iBeat * 2.);
-  vec2 d    = vec2(_noise(vUv*3.*iScale+vec2(t,0))-.5,
-                   _noise(vUv*3.*iScale+vec2(0,t+1.7))-.5)*e;
-  vec2 uv   = vUv + d;
-  float h   = _noise(uv * 2.) * .5 + iBass * .3;
-  float v   = _noise(uv * 4. + t) * .5 + .5;
-  float bp  = iBeat * .2 + iBass * .4;
-  gl_FragColor = vec4(mix(iColorA, iColorB, h + bp) * v * iIntensity, 1.);
+  float t  = iTime * .4;
+  float e  = iIntensity * .15 * (1. + iBass * 1.5 + iBeat * 2.);
+  vec2 d   = vec2(_noise(vUv*3.*iScale+vec2(t,0))-.5,
+                  _noise(vUv*3.*iScale+vec2(0,t+1.7))-.5)*e;
+  vec2 uv  = vUv + d;
+  float h  = _noise(uv * 2.) * .5 + iBass * .3;
+  gl_FragColor = vec4(h*.2, h*.4+.1, h*.8+.2, .9);
 }`,
 
   bloom: `
 void main() {
   vec2 uv  = vUv - .5;
-  float off = (.003 + iBeat * .008 + iBass * .003) * iScale;
-  float t = iTime * iSpeed * .5;
-  float r = sin((uv.x+off)*8.+t) * sin((uv.y+off)*6.+t*.8);
-  float g = sin(uv.x*8.+t)       * sin(uv.y*6.+t*.8);
-  float b = sin((uv.x-off)*8.+t) * sin((uv.y-off)*6.+t*.8);
-  gl_FragColor = vec4(r*.5+.5, g*.5+.5, b*.5+.5, .9);
+  float bp = iBeat * .2 + iBass * .4;
+  float r  = (.2 + bp) * max(iResolution.x, iResolution.y) / iResolution.x;
+  float d  = length(uv);
+  float h  = .45 + iTime * .03;
+  float glow = exp(-d * d / (r * r * .1)) * iIntensity * (1. + iBass * .5);
+  float hue  = h + iBass * .1;
+  float rv   = abs(sin(hue * 6.28));
+  float gv   = abs(sin(hue * 6.28 + 2.09));
+  float bv   = abs(sin(hue * 6.28 + 4.19));
+  gl_FragColor = vec4(rv*glow, gv*glow, bv*glow, glow);
 }`,
 
   chromatic: `
 void main() {
-  vec2 uv = vUv - .5;
+  vec2 uv = vUv;
   float off = (.003 + iBeat * .008 + iBass * .003) * iScale;
-  float t = iTime * iSpeed * .5;
+  float t = iTime * .5;
   float r = sin((uv.x+off)*8.+t) * sin((uv.y+off)*6.+t*.8);
   float g = sin(uv.x*8.+t)       * sin(uv.y*6.+t*.8);
   float b = sin((uv.x-off)*8.+t) * sin((uv.y-off)*6.+t*.8);
@@ -357,17 +375,22 @@ void main() {
   kaleidoscope: `
 void main() {
   vec2 uv   = vUv - .5;
-  float segments = max(2., floor(iParam1 * 14.) + 2.);
-  float angle = atan(uv.y, uv.x);
-  float r     = length(uv);
-  float segAngle = 3.14159 * 2. / segments;
+  float segments = max(2., floor(iParam1 * 14.) + 2.); // 2-16 segments via param1
+  float angle     = atan(uv.y, uv.x);
+  float r         = length(uv);
+  float segAngle  = 3.14159 * 2. / segments;
   angle = mod(angle, segAngle);
   if (angle > segAngle * .5) angle = segAngle - angle;
-  vec2 sym = vec2(cos(angle), sin(angle)) * r * iScale + .5;
+  vec2 sym = vec2(cos(angle), sin(angle)) * r;
+  sym = sym * iScale + .5;
   float t  = iTime * iSpeed * .3;
   float v  = sin(sym.x * 8. + t) * sin(sym.y * 8. + t * .7)
            + sin((sym.x + sym.y) * 6. + t * 1.3 + iBass * 3.);
-  vec3 col = mix(iColorA, iColorB, clamp(v * .5 + .5 + iBass * .15, 0., 1.)) * iIntensity;
+  float hue = v * .25 + .5 + iBeat * .08;
+  vec3 cA = iColorA, cB = iColorB;
+  float blend = v * .5 + .5 + iBass * .15;
+  vec3 col = mix(cA, cB, clamp(blend, 0., 1.));
+  col *= iIntensity;
   gl_FragColor = vec4(col, 1.);
 }`,
 
@@ -377,183 +400,78 @@ void main() {
   float t  = iTime * iSpeed * .4;
   float a  = atan(uv.y, uv.x);
   float r  = length(uv);
-  vec2 tuv = vec2(a / 3.14159, .15 / r + t) * iScale;
+  // Map to tunnel coordinates: z goes forward with time
+  vec2 tuv = vec2(a / 3.14159, .15 / r + t);
+  tuv *= iScale;
   float bri = sin(tuv.x * 6. + t) * .5 + .5;
   float dep = sin(tuv.y * 4.)      * .5 + .5;
-  bri *= dep * (1. + iBass * .3 + iBeat * .15);
-  vec3 col = mix(iColorA, iColorB, a / 3.14159 * .5 + .5) * bri * iIntensity;
+  float pulse = 1. + iBass * .3 + iBeat * .15;
+  bri *= dep * pulse;
+  // Colour from iColorA/B blended by angle
+  float blend = a / 3.14159 * .5 + .5;
+  vec3 col = mix(iColorA, iColorB, blend) * bri * iIntensity;
+  // Vignette at the mouth
   col *= smoothstep(.5, .1, r);
   gl_FragColor = vec4(col, 1.);
 }`,
 
   voronoi: `
-vec2 _vh2(vec2 p){
-  p=vec2(dot(p,vec2(127.1,311.7)),dot(p,vec2(269.5,183.3)));
+vec2 _hash2(vec2 p) {
+  p = vec2(dot(p,vec2(127.1,311.7)), dot(p,vec2(269.5,183.3)));
   return fract(sin(p)*43758.5453);
 }
 void main() {
-  vec2 uv  = (vUv - .5) * iScale * 4. + .5;
-  float t  = iTime * iSpeed * .15;
-  float md = 1e9, md2 = 1e9;
-  vec2 cell = floor(uv);
-  for(int y=-1;y<=1;y++) for(int x=-1;x<=1;x++){
-    vec2 nb=cell+vec2(x,y);
-    vec2 pt=nb+_vh2(nb+floor(t));
-    pt+=.45*sin(6.28*_vh2(nb)+t+iBass*2.);
-    float d=length(uv-pt);
-    if(d<md){md2=md;md=d;} else if(d<md2) md2=d;
+  vec2 uv   = (vUv - .5) * iScale * 4. + .5;
+  float t   = iTime * iSpeed * .15;
+  float minD = 1e9, minD2 = 1e9;
+  vec2  minP;
+  vec2  cell = floor(uv);
+  for (int y = -1; y <= 1; y++) {
+    for (int x = -1; x <= 1; x++) {
+      vec2 nb = cell + vec2(x, y);
+      vec2 pt = nb + _hash2(nb + floor(t));
+      // Animate: cells drift with time and audio
+      pt += .45 * sin(6.28 * _hash2(nb) + t + iBass * 2.);
+      float d = length(uv - pt);
+      if (d < minD) { minD2 = minD; minD = d; minP = pt; }
+      else if (d < minD2) { minD2 = d; }
+    }
   }
-  float edge=md2-md;
-  float glow=exp(-edge*12.)*(1.+iBeat*.5);
-  vec3 col=mix(iColorA*(1.-smoothstep(.45,.5,md)*.6),iColorB,glow)*iIntensity;
-  gl_FragColor=vec4(col,1.);
+  // Edge = distance difference between nearest two cells
+  float edge  = minD2 - minD;
+  float glow  = exp(-edge * 12.) * (1. + iBeat * .5);
+  float cells = smoothstep(.45, .5, minD);
+  // Colour: cell interior from iColorA, edges from iColorB
+  vec3 col = mix(iColorA * (1. - cells * .6), iColorB, glow);
+  col *= iIntensity;
+  gl_FragColor = vec4(col, 1.);
 }`,
 
+  // Reaction-diffusion (Gray-Scott) — GPU ping-pong approximation via noise
+  // True R-D needs framebuffer ping-pong; this is a convincing one-pass fake
+  // using layered noise to mimic the characteristic spotted/striped patterns.
   turing: `
-float _th(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5);}
-float _tn(vec2 p){
-  vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
-  return mix(mix(_th(i),_th(i+vec2(1,0)),f.x),
-             mix(_th(i+vec2(0,1)),_th(i+vec2(1,1)),f.x),f.y);
+float _hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5); }
+float _n(vec2 p){
+  vec2 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);
+  return mix(mix(_hash(i),_hash(i+vec2(1,0)),f.x),
+             mix(_hash(i+vec2(0,1)),_hash(i+vec2(1,1)),f.x),f.y);
 }
 void main() {
-  vec2 uv = vUv * iScale * 3.;
-  float t = iTime * iSpeed * .08;
-  float f = iParam1 * 0.06 + 0.01;
-  float a1=_tn(uv*2.+vec2(t,0.));
-  float a2=_tn(uv*5.+vec2(0.,t*1.3));
-  float a3=_tn(uv*12.+vec2(t*.7,t*.5));
-  float act=smoothstep(.45+f,.55+f,a1*.5+a2*.3+a3*.2);
-  act=mix(act,1.-act,step(.5,_tn(uv*.3+t*.05)));
-  act=smoothstep(0.,1.,act+iBass*.2+iBeat*.1);
-  gl_FragColor=vec4(mix(iColorA,iColorB,act)*iIntensity,1.);
+  vec2 uv  = vUv * iScale * 3.;
+  float t  = iTime * iSpeed * .08;
+  float f  = iParam1 * 0.06 + 0.01;   // feed rate proxy — controls spot/stripe balance
+  // Multi-scale noise layers to mimic activator–inhibitor separation
+  float a1 = _n(uv * 2.  + vec2(t, 0.));
+  float a2 = _n(uv * 5.  + vec2(0., t * 1.3));
+  float a3 = _n(uv * 12. + vec2(t * .7, t * .5));
+  // Activator: sharp threshold on combined layers
+  float activator = smoothstep(.45 + f, .55 + f, a1 * .5 + a2 * .3 + a3 * .2);
+  activator = mix(activator, 1. - activator, step(.5, _n(uv * .3 + t * .05)));
+  // Audio drives the threshold, making patterns shift on beats
+  activator = smoothstep(.0, 1., activator + iBass * .2 + iBeat * .1);
+  vec3 col = mix(iColorA, iColorB, activator) * iIntensity;
+  gl_FragColor = vec4(col, 1.);
 }`,
 
-  fbm: `
-float _fh(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5);}
-float _fn(vec2 p){
-  vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
-  return mix(mix(_fh(i),_fh(i+vec2(1,0)),f.x),
-             mix(_fh(i+vec2(0,1)),_fh(i+vec2(1,1)),f.x),f.y);
-}
-float fbm(vec2 p){
-  float v=0.,a=.5;
-  for(int i=0;i<6;i++){v+=a*_fn(p);p=p*2.+vec2(1.7,9.2);a*=.5;}
-  return v;
-}
-void main(){
-  vec2 uv=(vUv-.5)*iScale*2.;
-  float t=iTime*iSpeed*.05;
-  vec2 q=vec2(fbm(uv+t),fbm(uv+vec2(1.7,9.2)+t));
-  vec2 r=vec2(fbm(uv+2.*q+vec2(.15+t*.3,.125+t*.1)),
-              fbm(uv+2.*q+vec2(.8+t*.2,.2+t*.1)));
-  float f=fbm(uv+2.*r+iBass*.3);
-  vec3 col=mix(iColorA,iColorB,clamp(f*2.,0.,1.))*iIntensity;
-  gl_FragColor=vec4(col,1.);
-}`,
-
-  rings: `
-void main(){
-  vec2 uv=(vUv-.5)*iScale;
-  float t=iTime*iSpeed;
-  float r=length(uv);
-  float freq=5.+iParam1*25.;
-  float ring=sin(r*freq-t*4.+iBass*6.);
-  float pulse=sin(r*freq*.5+t*2.-iBeat*3.);
-  vec3 col=mix(iColorA*(ring*.5+.5),iColorB*(pulse*.5+.5),smoothstep(0.,1.,r*2.));
-  float twist=atan(uv.y,uv.x)*(iParam2*6.);
-  col+=iColorA*max(0.,sin(r*freq+twist-t*3.))*.3;
-  gl_FragColor=vec4(col*iIntensity,1.);
-}`,
-
-  aurora: `
-float _ah(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5);}
-float _an(vec2 p){
-  vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);
-  return mix(mix(_ah(i),_ah(i+vec2(1,0)),f.x),
-             mix(_ah(i+vec2(0,1)),_ah(i+vec2(1,1)),f.x),f.y);
-}
-void main(){
-  vec2 uv=vUv;
-  float t=iTime*iSpeed*.12;
-  float bands=2.+iParam1*8.;
-  float wave=_an(vec2(uv.x*iScale*3.+t,0.))*2.-1.;
-  float curtain=uv.y+wave*.15+iBass*.08;
-  float v=sin(curtain*bands*3.14159+t*2.)*.5+.5;
-  float beam=exp(-pow((uv.y-.5+wave*.2)*4.,2.));
-  beam*=1.+iBeat*.6+iBass*.3;
-  vec3 col=mix(iColorA,iColorB,v)*beam*iIntensity;
-  col+=vec3(0.,.15+iParam2*.6,.1)*beam*v*iIntensity;
-  gl_FragColor=vec4(col,1.);
-}`,
-
-  julia: `
-vec2 cmul(vec2 a,vec2 b){return vec2(a.x*b.x-a.y*b.y,a.x*b.y+a.y*b.x);}
-void main(){
-  vec2 uv=(vUv-.5)*3.5*iScale;
-  float cx=cos(iTime*iSpeed*.07+iParam1*6.28)*.75;
-  float cy=sin(iTime*iSpeed*.05+iParam2*6.28)*.75;
-  vec2 c=vec2(cx,cy), z=uv;
-  float n=0.;
-  for(int i=0;i<64;i++){
-    z=cmul(z,z)+c;
-    if(dot(z,z)>4.){n=float(i)/64.;break;}
-  }
-  float sn=clamp(n+1.-log2(log2(dot(z,z)+1e-5))/log2(2.),0.,1.);
-  sn+=iBass*.1+iBeat*.05;
-  gl_FragColor=vec4(mix(iColorA,iColorB,clamp(sn,0.,1.))*iIntensity,1.);
-}`,
-
-  lissajous: `
-void main(){
-  vec2 uv=(vUv-.5)*2.;
-  float fx=1.+floor(iParam1*4.);
-  float fy=1.+floor(iParam2*4.);
-  float t=iTime*iSpeed;
-  float glow=0.;
-  for(float k=0.;k<8.;k++){
-    float phase=k*3.14159/4.+iParam3*6.28;
-    vec2 p=vec2(sin(fx*t+phase),sin(fy*t))*.85*iScale;
-    p+=vec2(iBass*.15*sin(t*3.+k),iMid*.1*cos(t*2.+k));
-    glow+=(.004+iBass*.004)/max(length(uv-p),.001);
-  }
-  glow*=1.+iBeat*1.5;
-  gl_FragColor=vec4(clamp(mix(iColorA,iColorB,clamp(uv.x*.5+.5,0.,1.))*glow*iIntensity,0.,1.),1.);
-}`,
-
-};
-
-// ── Per-shader parameter metadata ────────────────────────────────
-// Tells ParamPanel what each iParam1/2/3 slider actually does
-// for each builtin, so labels are meaningful instead of "Param 1".
-
-ShaderLayer.SHADER_META = {
-  plasma:       { param1: null, param2: null, param3: null,
-                  note: 'All sliders active: Scale, Speed, Intensity, Color A/B, Hue shift' },
-  ripple:       { param1: null, param2: null, param3: null,
-                  note: 'Scale = ring spacing. Speed = expansion rate. Bass = ring burst' },
-  distort:      { param1: null, param2: null, param3: null,
-                  note: 'Intensity = warp amount. Scale = warp size. Color A/B = palette' },
-  bloom:        { param1: null, param2: null, param3: null,
-                  note: 'Scale = pattern size. Beat/Bass drive chromatic offset' },
-  chromatic:    { param1: null, param2: null, param3: null,
-                  note: 'Scale = pattern size. Beat/Bass drive RGB offset separation' },
-  kaleidoscope: { param1: 'Segments (2–16)', param2: null, param3: null,
-                  note: 'Param 1 = number of mirror segments. Scale + Speed active' },
-  tunnel:       { param1: null, param2: null, param3: null,
-                  note: 'Scale = tunnel tightness. Speed = fly-through speed. Bass = pulse' },
-  voronoi:      { param1: null, param2: null, param3: null,
-                  note: 'Scale = cell size. Speed = drift speed. Color A/B = cell/edge colour' },
-  turing:       { param1: 'Feed rate (spots↔stripes)', param2: null, param3: null,
-                  note: 'Param 1 = spot vs stripe balance. Bass shifts the threshold' },
-  fbm:          { param1: null, param2: null, param3: null,
-                  note: 'Scale = cloud size. Speed = drift. Color A = shadows, B = highlights' },
-  rings:        { param1: 'Ring density (5–30)', param2: 'Spiral twist', param3: null,
-                  note: 'Param 1 = ring count. Param 2 = adds spiral rotation. Bass = pulse' },
-  aurora:       { param1: 'Band count (2–10)', param2: 'Green shimmer', param3: null,
-                  note: 'Param 1 = curtain bands. Param 2 = classic aurora green overlay' },
-  julia:        { param1: 'C real offset', param2: 'C imag offset', param3: null,
-                  note: 'Param 1 & 2 shift the Julia constant — changes fractal shape' },
-  lissajous:    { param1: 'X frequency (1–5)', param2: 'Y frequency (1–5)', param3: 'Phase offset',
-                  note: 'Param 1/2 = frequency ratios. Param 3 = phase. Bass deforms path' },
 };

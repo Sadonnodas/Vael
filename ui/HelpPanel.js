@@ -314,10 +314,11 @@ const HelpPanel = (() => {
     `;
 
     const sections = [
-      { id: 'ref',   label: 'Tab guide' },
-      { id: 'tut',   label: 'Tutorials' },
-      { id: 'mod',   label: 'Modulations' },
-      { id: 'keys',  label: 'Shortcuts' },
+      { id: 'ref',     label: 'Tab guide' },
+      { id: 'tut',     label: 'Tutorials' },
+      { id: 'mod',     label: 'Modulations' },
+      { id: 'shaders', label: 'Shaders' },
+      { id: 'keys',    label: 'Shortcuts' },
     ];
 
     const content = document.createElement('div');
@@ -362,8 +363,9 @@ const HelpPanel = (() => {
     switch (section) {
       case 'ref':   _renderTabRef(container);   break;
       case 'tut':   _renderTutorials(container); break;
-      case 'mod':   _renderModExplainer(container); break;
-      case 'keys':  _renderShortcuts(container); break;
+      case 'mod':     _renderModExplainer(container); break;
+      case 'shaders': _renderShaderGuide(container);  break;
+      case 'keys':    _renderShortcuts(container);    break;
     }
   }
 
@@ -610,6 +612,141 @@ const HelpPanel = (() => {
         `;
         container.appendChild(row);
       });
+    });
+  }
+
+  // ── Shader guide ─────────────────────────────────────────────
+
+  function _renderShaderGuide(container) {
+    const sections = [
+      {
+        title: 'How shaders work in Vael',
+        color: '#00d4aa',
+        body: `Vael shaders are GLSL fragment shaders. The GPU runs your code once per pixel per frame, and you return a colour for that pixel via gl_FragColor. Vael automatically provides a set of uniforms (variables) you can read — audio signals, time, mouse position, parameters — so you never need to set up a WebGL context yourself.`,
+      },
+      {
+        title: 'Required output',
+        color: '#7c6af7',
+        body: `Every shader must write to gl_FragColor:\n\n  gl_FragColor = vec4(red, green, blue, alpha);\n\nAll four channels are floats in the 0.0–1.0 range. Alpha should normally be 1.0. Use clamp() to prevent values going outside this range — unclamped values can produce visual glitches.`,
+        code: `void main() {\n    vec2 uv = gl_FragCoord.xy / iResolution.xy;\n    gl_FragColor = vec4(uv.x, uv.y, 0.5, 1.0);\n}`,
+      },
+      {
+        title: 'Available uniforms',
+        color: '#ffd700',
+        items: [
+          ['iTime',        'float', 'Seconds since the shader started. Advances at a rate controlled by the Speed slider. Use this as your animation clock.'],
+          ['iResolution',  'vec2',  'Canvas size in pixels (width, height). Divide gl_FragCoord.xy by this to get normalised 0–1 UV coordinates.'],
+          ['iBass',        'float', 'Bass energy, 0–1. Pre-smoothed by the Audio Smoothing slider — no jitter.'],
+          ['iMid',         'float', 'Mid-range energy, 0–1.'],
+          ['iTreble',      'float', 'Treble energy, 0–1.'],
+          ['iVolume',      'float', 'Overall volume, 0–1.'],
+          ['iBeat',        'float', 'Beat pulse — spikes to 1.0 on each detected beat, decays to 0 quickly. Good for flashes.'],
+          ['iBpm',         'float', 'Current BPM as detected or tapped. 60–200 range typically.'],
+          ['iMouseX',      'float', 'Mouse X position, 0–1 (left to right).'],
+          ['iMouseY',      'float', 'Mouse Y position, 0–1 (top to bottom).'],
+          ['iParam1',      'float', 'Param 1 slider value, 0–1. Wire to anything you want to control.'],
+          ['iParam2',      'float', 'Param 2 slider value, 0–1.'],
+          ['iParam3',      'float', 'Param 3 slider value, 0–1.'],
+          ['iColorA',      'vec3',  'Color A picker value as RGB (0–1 each). Use as your primary colour.'],
+          ['iColorB',      'vec3',  'Color B picker value as RGB. Use as your secondary / accent colour.'],
+          ['iHueShift',    'float', 'Hue rotation in degrees (0–360). Apply with a hueRotate function to shift all colours.'],
+          ['iSpeed',       'float', 'Speed slider value (0–4). iTime already incorporates this — only read it if you need speed separately.'],
+          ['iIntensity',   'float', 'Intensity slider value (0–2). Multiply into brightness or glow calculations.'],
+          ['iScale',       'float', 'Scale slider value (0–4). Multiply into spatial coordinates to zoom in/out.'],
+        ],
+      },
+      {
+        title: 'Getting UV coordinates right',
+        color: '#ff9f43',
+        body: `Always normalise coordinates so your shader looks the same at any canvas size. The standard approach centres the coordinate system and corrects for aspect ratio:`,
+        code: `void main() {\n    // Centred, aspect-corrected UV: ranges from roughly -1 to +1\n    vec2 uv = (gl_FragCoord.xy - 0.5 * iResolution.xy) / iResolution.y;\n\n    // Simple 0-1 UV (top-left to bottom-right)\n    vec2 uv01 = gl_FragCoord.xy / iResolution.xy;\n}`,
+      },
+      {
+        title: 'Reacting to audio — the right way',
+        color: '#ff6b6b',
+        body: `The most common mistake is multiplying audio signals into iTime or animation speed. This causes jerkiness because the speed changes every frame as the audio value fluctuates.\n\nInstead: let iTime advance at a constant rate, and use audio signals to modulate visual properties — brightness, size, colour, connection distance — not speed.`,
+        code: `// WRONG — jerky when audio plays\nfloat time = iTime * (1.0 + iMid * 3.0);\n\n// RIGHT — smooth drift, audio affects appearance only\nfloat time  = iTime * iParam2;          // constant rate\nfloat glow  = 0.02 + iBass * 0.04;     // bass blooms the glow\nfloat size  = 0.1  + iBeat * 0.05;     // beat flashes size\nfloat bright = 1.0 + iMid * 0.8;       // mid lifts brightness`,
+      },
+      {
+        title: 'Making sliders actually do something',
+        color: '#54a0ff',
+        body: `Vael shows sliders for iParam1/2/3, iScale, iIntensity, and iSpeed in the PARAMS panel. But a slider only affects your shader if your GLSL code reads the corresponding uniform. If you don't use iScale in your code, moving the Scale slider does nothing.\n\nAlways map your uniforms explicitly:`,
+        code: `void main() {\n    vec2 uv = (gl_FragCoord.xy - 0.5 * iResolution.xy) / iResolution.y;\n\n    // iParam1 controls grid density\n    float scale = 4.0 + iParam1 * 12.0;\n\n    // iScale zooms the whole thing\n    uv *= iScale;\n\n    // iIntensity controls overall brightness\n    float bright = iIntensity;\n\n    // ... rest of shader ...\n    gl_FragColor = vec4(color * bright, 1.0);\n}`,
+      },
+      {
+        title: 'Using iColorA and iColorB',
+        color: '#a78bfa',
+        body: `Always drive your colours from iColorA and iColorB so users can change them from the colour pickers in PARAMS. Mix between them based on position, audio, or time:`,
+        code: `// Mix between colour A and B based on audio\nvec3 col = mix(iColorA, iColorB, iBass);\n\n// Mix based on position\nvec3 col = mix(iColorA, iColorB, uv.y + 0.5);\n\n// Add hue rotation on top\ncol = hueRotate(col, iHueShift * 3.14159 / 180.0);`,
+      },
+      {
+        title: 'Hue rotation helper',
+        color: '#2ed573',
+        body: `Copy this function into any shader to enable the Hue Shift slider:`,
+        code: `vec3 hueRotate(vec3 col, float angle) {\n    float c = cos(angle), s = sin(angle);\n    mat3 m = mat3(\n        0.299+0.701*c+0.168*s, 0.587-0.587*c+0.330*s, 0.114-0.114*c-0.497*s,\n        0.299-0.299*c-0.328*s, 0.587+0.413*c+0.035*s, 0.114-0.114*c+0.292*s,\n        0.299-0.300*c+1.250*s, 0.587-0.588*c-1.050*s, 0.114+0.886*c-0.203*s\n    );\n    return clamp(m * col, 0.0, 1.0);\n}\n\nvoid main() {\n    // ... compute color ...\n    color = hueRotate(color, iHueShift * 3.14159 / 180.0);\n    gl_FragColor = vec4(color, 1.0);\n}`,
+      },
+      {
+        title: 'Minimal working template',
+        color: '#00d4aa',
+        body: `Start from this template — it uses every uniform correctly and all sliders will do something:`,
+        code: `// Minimal Vael shader template\n// Copy this and replace the main() body with your effect.\n\nvec3 hueRotate(vec3 col, float angle) {\n    float c = cos(angle), s = sin(angle);\n    mat3 m = mat3(\n        0.299+0.701*c+0.168*s, 0.587-0.587*c+0.330*s, 0.114-0.114*c-0.497*s,\n        0.299-0.299*c-0.328*s, 0.587+0.413*c+0.035*s, 0.114-0.114*c+0.292*s,\n        0.299-0.300*c+1.250*s, 0.587-0.588*c-1.050*s, 0.114+0.886*c-0.203*s\n    );\n    return clamp(m * col, 0.0, 1.0);\n}\n\nvoid main() {\n    // Centred, aspect-corrected UV\n    vec2 uv = (gl_FragCoord.xy - 0.5 * iResolution.xy) / iResolution.y;\n\n    // Apply scale and speed (iTime already uses Speed slider)\n    uv *= iScale;\n    float t = iTime;\n\n    // iParam1/2/3 — wire to whatever you need\n    float density = 2.0 + iParam1 * 8.0;\n    float detail  = iParam2;\n    float threshold = iParam3;\n\n    // Audio — modulate appearance, never speed\n    float brightness = iIntensity * (1.0 + iBass * 0.8 + iBeat * 0.3);\n    float colorShift = iMid * 0.5;\n\n    // Your effect here — replace with your own\n    float pattern = sin(uv.x * density + t) * sin(uv.y * density + t);\n    vec3 color = mix(iColorA, iColorB, pattern * 0.5 + 0.5 + colorShift);\n    color *= brightness;\n\n    // Hue shift\n    color = hueRotate(color, iHueShift * 3.14159 / 180.0);\n\n    gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);\n}`,
+      },
+    ];
+
+    sections.forEach(sec => {
+      const block = document.createElement('details');
+      block.style.cssText = 'margin-bottom:8px;border:1px solid var(--border-dim);border-radius:6px;overflow:hidden';
+
+      const summary = document.createElement('summary');
+      summary.style.cssText = `font-family:var(--font-mono);font-size:9px;color:${sec.color};
+        text-transform:uppercase;letter-spacing:1px;padding:8px 12px;
+        cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;
+        background:var(--bg-card);user-select:none`;
+      summary.innerHTML = `<span style="font-size:8px;transition:transform 0.15s;display:inline-block">▶</span><span>${sec.title}</span>`;
+      block.appendChild(summary);
+
+      const body = document.createElement('div');
+      body.style.cssText = 'padding:12px 14px;background:var(--bg)';
+
+      if (sec.body) {
+        const p = document.createElement('p');
+        p.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);line-height:1.7;margin:0 0 10px;white-space:pre-line';
+        p.textContent = sec.body;
+        body.appendChild(p);
+      }
+
+      if (sec.items) {
+        const table = document.createElement('div');
+        table.style.cssText = 'display:grid;grid-template-columns:auto auto 1fr;gap:0';
+        sec.items.forEach(([name, type, desc]) => {
+          const n = document.createElement('div');
+          n.style.cssText = `font-family:var(--font-mono);font-size:9px;color:${sec.color};padding:4px 10px 4px 0;border-bottom:1px solid var(--border-dim);font-weight:500`;
+          n.textContent = name;
+          const t = document.createElement('div');
+          t.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:#7c6af7;padding:4px 12px 4px 0;border-bottom:1px solid var(--border-dim)';
+          t.textContent = type;
+          const d = document.createElement('div');
+          d.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);padding:4px 0;border-bottom:1px solid var(--border-dim);line-height:1.5';
+          d.textContent = desc;
+          table.appendChild(n); table.appendChild(t); table.appendChild(d);
+        });
+        body.appendChild(table);
+      }
+
+      if (sec.code) {
+        const pre = document.createElement('pre');
+        pre.style.cssText = `background:var(--bg-card);border:1px solid var(--border-dim);border-radius:4px;
+          padding:10px 12px;overflow-x:auto;font-family:var(--font-mono);font-size:8px;
+          color:var(--text-muted);line-height:1.6;margin:${sec.body || sec.items ? '8px' : '0'} 0 0`;
+        pre.textContent = sec.code;
+        body.appendChild(pre);
+      }
+
+      block.appendChild(body);
+      block.addEventListener('toggle', () => {
+        summary.querySelector('span').style.transform = block.open ? 'rotate(90deg)' : 'rotate(0deg)';
+      });
+      container.appendChild(block);
     });
   }
 

@@ -159,19 +159,25 @@ const TimelinePanel = (() => {
         });
         modeRow.appendChild(b);
       });
+      transport.appendChild(modeRow);
 
-      // Crossfade control
+      // Crossfade — own row so it doesn't overflow
+      const cfRow = document.createElement('div');
+      cfRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-top:4px';
       const cfLabel = document.createElement('span');
-      cfLabel.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-left:8px;flex-shrink:0;line-height:24px';
-      cfLabel.textContent = 'Xfade:';
+      cfLabel.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);flex-shrink:0';
+      cfLabel.textContent = 'Crossfade:';
       const cfIn = document.createElement('input');
       cfIn.type = 'number'; cfIn.value = (_tl.crossfade || 0).toFixed(2);
       cfIn.min = 0; cfIn.max = 4; cfIn.step = 0.1;
-      cfIn.style.cssText = 'width:46px;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:8px;padding:2px 4px';
+      cfIn.style.cssText = 'width:52px;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:8px;padding:2px 4px';
       cfIn.title = 'Crossfade duration at loop point (seconds)';
       cfIn.addEventListener('change', () => { _tl.crossfade = Math.max(0, parseFloat(cfIn.value) || 0); });
-      modeRow.append(cfLabel, cfIn);
-      transport.appendChild(modeRow);
+      const cfUnit = document.createElement('span');
+      cfUnit.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim)';
+      cfUnit.textContent = 's';
+      cfRow.append(cfLabel, cfIn, cfUnit);
+      transport.appendChild(cfRow);
     }
 
     // Clip selector (if multiple clips)

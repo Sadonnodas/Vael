@@ -45,11 +45,14 @@ class ModMatrix {
   addRoute(config) {
     const route = new ModRoute(config);
     this.routes.push(route);
+    // Clear cached base values so the new route reads fresh values next frame
+    this._baseVals.clear();
     return route;
   }
 
   removeRoute(id) {
     this.routes = this.routes.filter(r => r.id !== id);
+    this._baseVals.clear();
   }
 
   clear() {
@@ -128,8 +131,10 @@ class ModMatrix {
         const range = _transformRange(transformKey);
         const baseKey = `transform.${transformKey}`;
 
+        // Read from layer.transform — use range.base as fallback if undefined
+        const currentVal = layer.transform?.[transformKey];
         if (!this._baseVals.has(baseKey)) {
-          this._baseVals.set(baseKey, layer.transform?.[transformKey] ?? range.base);
+          this._baseVals.set(baseKey, currentVal !== undefined ? currentVal : range.base);
         }
         const base = this._baseVals.get(baseKey);
         const pMin = min ?? range.min;
@@ -138,7 +143,8 @@ class ModMatrix {
 
         const modValue = base + shaped * depth * r;
         const clamped  = Math.max(pMin, Math.min(pMax, modValue));
-        if (layer.transform) layer.transform[transformKey] = clamped;
+        if (!layer.transform) layer.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
+        layer.transform[transformKey] = clamped;
 
       } else if (target === 'opacity') {
         // Opacity lives directly on the layer object, not in params
@@ -150,6 +156,19 @@ class ModMatrix {
         const pMax     = max ?? 1;
         const modValue = base + shaped * depth * (pMax - pMin);
         layer.opacity  = Math.max(0, Math.min(1, modValue));
+
+      } else if (target === 'clipShape.w' || target === 'clipShape.h') {
+        // Clip shape size — only applies when a clip shape is active
+        if (!layer.clipShape) return;
+        const key = target.split('.')[1]; // 'w' or 'h'
+        if (!this._baseVals.has(target)) {
+          this._baseVals.set(target, layer.clipShape[key] ?? 0.5);
+        }
+        const base     = this._baseVals.get(target);
+        const pMin     = min ?? 0.05;
+        const pMax     = max ?? 1.5;
+        const modValue = base + shaped * depth * (pMax - pMin);
+        layer.clipShape[key] = Math.max(pMin, Math.min(pMax, modValue));
 
       } else {
         // Standard param target

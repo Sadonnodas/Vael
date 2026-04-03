@@ -285,6 +285,16 @@ class AutomationTimeline {
         const key = lane.paramId.split('.')[1];
         if (!layer.transform) layer.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
         layer.transform[key] = value;
+      } else if (lane.paramId.startsWith('clipShape.')) {
+        const key = lane.paramId.split('.')[1];
+        if (key === 'type') {
+          const CLIP_TYPES = ['none','rect-inside','rect-outside','ellipse-inside','ellipse-outside'];
+          const type = CLIP_TYPES[Math.round(Math.max(0, Math.min(4, value)))] || 'none';
+          if (type === 'none') { layer.clipShape = null; }
+          else { if (!layer.clipShape) layer.clipShape = { type, w:0.5, h:0.5, lineWidth:10 }; layer.clipShape.type = type; }
+        } else {
+          if (layer.clipShape) layer.clipShape[key] = value;
+        }
       } else if (layer.params) {
         layer.params[lane.paramId] = value;
       }
@@ -305,9 +315,26 @@ class AutomationTimeline {
 
       // Handle transform targets (recorded via canvas drag)
       if (lane.paramId.startsWith('transform.')) {
-        const key = lane.paramId.split('.')[1]; // 'x', 'y', 'scaleX', etc.
+        const key = lane.paramId.split('.')[1];
         if (!layer.transform) layer.transform = { x: 0, y: 0, scaleX: 1, scaleY: 1, rotation: 0 };
         layer.transform[key] = value;
+      // Handle clip shape targets
+      } else if (lane.paramId.startsWith('clipShape.')) {
+        const key = lane.paramId.split('.')[1]; // 'w', 'h', 'lineWidth', 'type'
+        if (key === 'type') {
+          // Snap to nearest type from numeric value
+          const CLIP_TYPES = ['none','rect-inside','rect-outside','ellipse-inside','ellipse-outside'];
+          const idx = Math.round(Math.max(0, Math.min(4, value)));
+          const type = CLIP_TYPES[idx] || 'none';
+          if (type === 'none') {
+            layer.clipShape = null;
+          } else {
+            if (!layer.clipShape) layer.clipShape = { type, w: 0.5, h: 0.5, lineWidth: 10 };
+            layer.clipShape.type = type;
+          }
+        } else {
+          if (layer.clipShape) layer.clipShape[key] = value;
+        }
       } else if (layer.params) {
         layer.params[lane.paramId] = value;
       }

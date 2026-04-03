@@ -32,7 +32,7 @@
       case 'MathVisualizer':   return new MathVisualizer(uid);
       case 'ParticleLayer':    return new ParticleLayer(uid);
       case 'NoiseFieldLayer':  return new NoiseFieldLayer(uid);
-      case 'VideoPlayerLayer': return new VideoPlayerLayer(uid, video.videoElement);
+      case 'VideoPlayerLayer': return new VideoPlayerLayer(uid);
       case 'ShaderLayer':      return new ShaderLayer(uid);
       case 'LyricsLayer':      return new LyricsLayer(uid);
       case 'WebcamLayer':      return new WebcamLayer(uid);
@@ -101,11 +101,112 @@
     if (!_selectedLayerId) return;
     const layer = _findLayerAnywhere(_selectedLayerId);
     if (!layer) return;
-    if (layer instanceof ImageLayer)  _renderImageLayerPanel(layer, paramsContent);
-    else if (layer instanceof ShaderLayer) ShaderPanel.render(layer, paramsContent);
-    else if (layer instanceof LyricsLayer) LyricsPanel.render(layer, paramsContent);
+    if (layer instanceof ImageLayer)       _renderImageLayerPanel(layer, paramsContent);
+    else if (layer instanceof ShaderLayer)      ShaderPanel.render(layer, paramsContent);
+    else if (layer instanceof LyricsLayer)      LyricsPanel.render(layer, paramsContent);
+    else if (layer instanceof VideoPlayerLayer) _renderVideoLayerPanel(layer, paramsContent);
     else ParamPanel.render(layer, paramsContent, audio);
   });
+
+  function _showVideoPickerForLayer(layer) {
+    _renderVideoLayerPanel(layer, paramsContent);
+    // Auto-open the picker if no video loaded yet
+    if (!layer._sourceUrl) _openVideoPicker(layer, paramsContent);
+  }
+
+  function _openVideoPicker(layer, container) {
+    const entries = videoLibrary.entries;
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:10000;display:flex;align-items:center;justify-content:center;font-family:var(--font-mono)';
+
+    const modal = document.createElement('div');
+    modal.style.cssText = 'background:var(--bg-mid);border:1px solid var(--border);border-radius:10px;width:480px;max-height:70vh;display:flex;flex-direction:column;overflow:hidden';
+
+    modal.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid var(--border-dim)">
+        <span style="font-size:10px;letter-spacing:2px;color:var(--accent)">SELECT VIDEO</span>
+        <button id="vp-close" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:16px">✕</button>
+      </div>
+      <div style="padding:12px 18px;border-bottom:1px solid var(--border-dim);display:flex;gap:8px">
+        <button id="vp-upload" class="btn accent" style="font-size:9px">⬆ Upload new video</button>
+        <span style="font-size:9px;color:var(--text-dim);line-height:32px">or pick from library below</span>
+      </div>
+      <div id="vp-list" style="overflow-y:auto;flex:1;padding:8px 18px"></div>
+    `;
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+
+    const list = modal.querySelector('#vp-list');
+    if (entries.length === 0) {
+      list.innerHTML = '<div style="padding:20px;text-align:center;font-size:9px;color:var(--text-dim)">No videos in library yet.<br>Use the Upload button above.</div>';
+    } else {
+      entries.forEach(entry => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px;border-radius:4px;cursor:pointer;margin-bottom:4px;border:1px solid var(--border-dim)';
+        row.innerHTML = `
+          <div style="width:64px;height:36px;background:#000;border-radius:3px;overflow:hidden;flex-shrink:0;display:flex;align-items:center;justify-content:center">
+            <span style="font-size:18px;opacity:0.4">▶</span>
+          </div>
+          <div style="flex:1;overflow:hidden">
+            <div style="font-size:9px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${entry.name}</div>
+            <div style="font-size:8px;color:var(--text-dim);margin-top:2px">${entry.duration ? entry.duration.toFixed(1) + 's' : ''}</div>
+          </div>
+          <button class="btn accent" style="font-size:8px;flex-shrink:0">Use</button>
+        `;
+        row.querySelector('button').addEventListener('click', () => {
+          layer.loadFromLibraryEntry(entry);
+          overlay.remove();
+          _renderVideoLayerPanel(layer, container);
+          Toast.success(`Video: ${entry.name}`);
+        });
+        row.addEventListener('mouseenter', () => row.style.borderColor = 'var(--accent)');
+        row.addEventListener('mouseleave', () => row.style.borderColor = 'var(--border-dim)');
+        list.appendChild(row);
+      });
+    }
+
+    // Upload handler — adds to library AND loads into layer
+    modal.querySelector('#vp-upload').addEventListener('click', () => {
+      const inp = document.createElement('input');
+      inp.type = 'file'; inp.accept = 'video/*';
+      inp.addEventListener('change', async e => {
+        const file = e.target.files[0];
+        if (!file) return;
+        await videoLibrary.add(file);
+        layer.loadFile(file);
+        overlay.remove();
+        _renderVideoLayerPanel(layer, container);
+        Toast.success(`Video loaded: ${file.name}`);
+      });
+      inp.click();
+    });
+
+    modal.querySelector('#vp-close').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+  }
+
+  function _renderVideoLayerPanel(layer, container) {
+    container.innerHTML = '';
+
+    // "Change video" button at top
+    const changeBtn = document.createElement('button');
+    changeBtn.className = 'btn accent';
+    changeBtn.style.cssText = 'width:100%;font-size:9px;margin-bottom:12px';
+    changeBtn.textContent = layer._sourceName ? `▶ ${layer._sourceName}  — Change video` : '⬆ Choose / upload video';
+    changeBtn.addEventListener('click', () => _openVideoPicker(layer, container));
+    container.appendChild(changeBtn);
+
+    // Show video metadata if loaded
+    if (layer._videoEl && layer._videoEl.readyState >= 1 && layer._videoEl.videoWidth) {
+      const meta = document.createElement('div');
+      meta.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:10px;line-height:1.8';
+      meta.textContent = `${layer._videoEl.videoWidth}×${layer._videoEl.videoHeight}  ·  ${layer._videoEl.duration ? layer._videoEl.duration.toFixed(1) + 's' : ''}`;
+      container.appendChild(meta);
+    }
+
+    // Regular params (playback speed, flip, fit, loop, muted)
+    ParamPanel.render(layer, container, audio);
+  }
 
   // Searches top-level layers AND group children
   function _findLayerAnywhere(id) {
@@ -379,7 +480,7 @@
     LibraryPanel.refresh();
     if (_selectedLayerId) {
       const layer = layers.layers.find(l => l.id === _selectedLayerId);
-      if (layer instanceof VideoPlayerLayer) ParamPanel.render(layer, paramsContent, audio);
+      if (layer instanceof VideoPlayerLayer) _renderVideoLayerPanel(layer, paramsContent);
     }
   };
 
@@ -439,7 +540,7 @@
         return s;
       }
     },
-    { id: 'video',            label: '🎬 Video file',             cls: () => new VideoPlayerLayer(`video-${Date.now()}`, video.videoElement) },
+    { id: 'video',            label: '🎬 Video file',             cls: () => new VideoPlayerLayer(`video-${Date.now()}`) },
     { id: 'webcam',           label: '📷 Webcam',                 cls: () => new WebcamLayer(`webcam-${Date.now()}`) },
 
     // ── Text ─────────────────────────────────────────────────
@@ -506,6 +607,9 @@
     _origLayersAdd(layer);
     if (layer instanceof ImageLayer) {
       setTimeout(() => LibraryPanel.showAddImagePrompt(layer), 100);
+    }
+    if (layer instanceof VideoPlayerLayer) {
+      setTimeout(() => _showVideoPickerForLayer(layer), 100);
     }
     // Log to history (skip default startup layers which fire before history is ready)
     if (window._vaelHistory) {

@@ -355,17 +355,17 @@ const ParamPanel = (() => {
         sizeRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
         sizeRow.appendChild(buildSlider(
           { id: '_clipW', label: 'Width',  type: 'float', min: 0.05, max: 1.5, step: 0.01 },
-          cs2.w ?? 0.5, layer, v => { if (layer.clipShape) layer.clipShape.w = v; }
+          cs2.w ?? 0.5, layer, v => { if (layer.clipShape) { layer.clipShape.w = v; if (window._vaelTimeline?.isRecording) window._vaelTimeline.recordPoint(layer.id, 'clipShape.w', v, { label:'Clip Width', min:0.05, max:1.5 }); } }
         ));
         sizeRow.appendChild(buildSlider(
           { id: '_clipH', label: 'Height', type: 'float', min: 0.05, max: 1.5, step: 0.01 },
-          cs2.h ?? 0.5, layer, v => { if (layer.clipShape) layer.clipShape.h = v; }
+          cs2.h ?? 0.5, layer, v => { if (layer.clipShape) { layer.clipShape.h = v; if (window._vaelTimeline?.isRecording) window._vaelTimeline.recordPoint(layer.id, 'clipShape.h', v, { label:'Clip Height', min:0.05, max:1.5 }); } }
         ));
         clipSizeContainer.appendChild(sizeRow);
         if (cs2.type.includes('outline')) {
           clipSizeContainer.appendChild(buildSlider(
             { id: '_clipLW', label: 'Line width', type: 'float', min: 1, max: 30, step: 0.5, default: 3 },
-            cs2.lineWidth ?? 3, layer, v => { if (layer.clipShape) layer.clipShape.lineWidth = v; }
+            cs2.lineWidth ?? 3, layer, v => { if (layer.clipShape) { layer.clipShape.lineWidth = v; if (window._vaelTimeline?.isRecording) window._vaelTimeline.recordPoint(layer.id, 'clipShape.lineWidth', v, { label:'Clip Line Width', min:1, max:30 }); } }
           ));
         }
       }
@@ -412,6 +412,12 @@ const ParamPanel = (() => {
         layer.clipShape = shape === 'none' ? null
           : { type: shape, w: layer.clipShape?.w ?? 0.5, h: layer.clipShape?.h ?? 0.5, lineWidth: layer.clipShape?.lineWidth ?? 10 };
         _refreshClip();
+        // Record clip type as a numeric step value for automation
+        if (window._vaelTimeline?.isRecording && layer.id) {
+          const CLIP_TYPE_MAP = { 'none':0,'rect-inside':1,'rect-outside':2,'ellipse-inside':3,'ellipse-outside':4 };
+          const typeVal = CLIP_TYPE_MAP[shape] ?? 0;
+          window._vaelTimeline.recordPoint(layer.id, 'clipShape.type', typeVal, { label:'Clip Type', min:0, max:4 });
+        }
       });
       clipTypeRow.appendChild(btn);
     });

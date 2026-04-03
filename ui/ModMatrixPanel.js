@@ -61,7 +61,9 @@ const ModMatrixPanel = (() => {
   ];
 
   const LAYER_TARGETS = [
-    { id: 'opacity', label: 'Opacity' },
+    { id: 'opacity',       label: 'Opacity'       },
+    { id: 'clipShape.w',   label: 'Clip width'    },
+    { id: 'clipShape.h',   label: 'Clip height'   },
   ];
 
   // Module-level clipboard — persists across layer selections within a session
