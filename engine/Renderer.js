@@ -43,6 +43,8 @@ class Renderer {
     this._fpsSmoothed = 60;
     this._cssW        = 0;
     this._cssH        = 0;
+    this._lockedRatio = null;
+    this._fpsLimit    = 0;  // 0 = unlimited
 
     // Temp canvas for baking opacity into textures
     this._opacityCanvas = document.createElement('canvas');
@@ -60,6 +62,34 @@ class Renderer {
   // ── Resize ───────────────────────────────────────────────────
 
   _resize() {
+    // If a fixed ratio is locked, constrain the canvas element before reading dimensions
+    if (this._lockedRatio) {
+      const area = this.canvas.parentElement;
+      if (area) {
+        const areaW = area.clientWidth;
+        const areaH = area.clientHeight;
+        const [rw, rh] = this._lockedRatio;
+        const targetAspect = rw / rh;
+        const areaAspect   = areaW / areaH;
+        let cw, ch;
+        if (areaAspect > targetAspect) {
+          // Area is wider than target — constrain by height
+          ch = areaH; cw = Math.round(ch * targetAspect);
+        } else {
+          // Area is taller than target — constrain by width
+          cw = areaW; ch = Math.round(cw / targetAspect);
+        }
+        this.canvas.style.width  = cw + 'px';
+        this.canvas.style.height = ch + 'px';
+        this.canvas.style.margin = 'auto';
+        this.canvas.style.display = 'block';
+      }
+    } else {
+      this.canvas.style.width  = '100%';
+      this.canvas.style.height = '100%';
+      this.canvas.style.margin = '';
+    }
+
     const w = this.canvas.clientWidth  || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
     if (w === this._cssW && h === this._cssH) return;
@@ -79,12 +109,25 @@ class Renderer {
     this._opacityCanvas.height = h;
   }
 
+  /** Lock canvas to a specific aspect ratio. Pass null to unlock. */
+  setRatio(w, h) {
+    this._lockedRatio = (w && h) ? [w, h] : null;
+    this._resize();
+  }
+
   // ── Render loop ──────────────────────────────────────────────
 
   start() {
     const loop = (timestamp) => {
-      // Always check if canvas dimensions have changed — catches the case where
-      // clientWidth/clientHeight were 0 when the constructor ran (layout not yet complete)
+      this._rafId = requestAnimationFrame(loop);
+
+      // Frame rate cap — skip frame if not enough time has passed
+      if (this._fpsLimit > 0) {
+        const minInterval = 1000 / this._fpsLimit;
+        if (timestamp - this._lastT < minInterval - 1) return;
+      }
+
+      // Always check if canvas dimensions have changed
       this._resize();
 
       const dt = Math.min((timestamp - this._lastT) / 1000, 0.1);
@@ -99,10 +142,13 @@ class Renderer {
       if (typeof this.onFrame === 'function') {
         this.onFrame(dt, Math.round(this._fpsSmoothed));
       }
-
-      this._rafId = requestAnimationFrame(loop);
     };
     this._rafId = requestAnimationFrame(loop);
+  }
+
+  /** Set max frame rate. 0 = unlimited. */
+  setFpsLimit(fps) {
+    this._fpsLimit = fps || 0;
   }
 
   stop() {
@@ -251,16 +297,17 @@ class Renderer {
       quad._needsCanvasBlend = _isCanvasOnlyBlend(blendMode);
 
       if (quad._needsCanvasBlend) {
-        // Bake opacity into pixels so the canvas compositor respects it
+        // Canvas-only blend modes: bake opacity into pixels
         if (opacity < 0.999) this._bakeOpacity(quad.offscreen, W, H, opacity);
-        // Use normal blending as a no-op placeholder; this quad will be
-        // re-drawn onto a canvas accumulator after the WebGL pass.
-        this._applyBlend(quad.mesh.material, 'normal', 0.0001); // near-invisible in GL
-      } else if (opacity < 0.999 && _blendIgnoresOpacity(blendMode)) {
-        this._bakeOpacity(quad.offscreen, W, H, opacity);
-        this._applyBlend(quad.mesh.material, blendMode, 1.0);
-      } else {
+        this._applyBlend(quad.mesh.material, 'normal', 0.0001);
+      } else if (blendMode === 'normal') {
+        // Normal blend: THREE.js respects material.opacity directly
         this._applyBlend(quad.mesh.material, blendMode, opacity);
+      } else {
+        // All other WebGL blend modes (add, multiply, screen, subtract etc.)
+        // ignore material.opacity in their blend equations — bake it instead
+        if (opacity < 0.999) this._bakeOpacity(quad.offscreen, W, H, opacity);
+        this._applyBlend(quad.mesh.material, blendMode, 1.0);
       }
 
       quad.texture.needsUpdate = true;

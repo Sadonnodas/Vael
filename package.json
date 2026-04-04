@@ -1,6 +1,61 @@
 {
+  "name": "vael",
+  "version": "1.0.0",
+  "description": "Vael — Light onto Sound. Audio-reactive visual performance tool.",
+  "main": "electron/main.js",
+  "author": "Toon",
+  "license": "MIT",
+  "scripts": {
+    "start":     "electron .",
+    "dev":       "VAEL_DEV=1 electron .",
+    "build":     "electron-builder",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win"
+  },
   "dependencies": {
     "osc": "^2.4.5",
-    "ws": "^8.20.0"
+    "ws":  "^8.20.0"
+  },
+  "devDependencies": {
+    "electron":         "^31.0.0",
+    "electron-builder": "^24.0.0"
+  },
+  "build": {
+    "appId":       "com.vael.app",
+    "productName": "Vael",
+    "copyright":   "Copyright © 2026",
+    "mac": {
+      "category":  "public.app-category.music",
+      "icon":      "Vael-icon.icns",
+      "target":    [
+        { "target": "dmg",  "arch": ["arm64", "x64"] },
+        { "target": "zip",  "arch": ["arm64", "x64"] }
+      ],
+      "hardenedRuntime":     true,
+      "gatekeeperAssess":    false,
+      "entitlements":        "electron/entitlements.mac.plist",
+      "entitlementsInherit": "electron/entitlements.mac.plist"
+    },
+    "win": {
+      "icon":   "Vael-icon.ico",
+      "target": [{ "target": "nsis", "arch": ["x64"] }]
+    },
+    "files": [
+      "index.html",
+      "output.html",
+      "Vael-icon.png",
+      "Vael-icon.icns",
+      "Vael-icon.ico",
+      "css/**/*",
+      "js/**/*",
+      "engine/**/*",
+      "layers/**/*",
+      "ui/**/*",
+      "electron/**/*",
+      "!electron/node_modules",
+      "!**/*.map",
+      "!**/.*"
+    ],
+    "asar": true
   }
 }

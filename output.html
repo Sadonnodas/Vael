@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Vael Output</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%; height: 100%;
+      background: #000;
+      overflow: hidden;
+      cursor: none;
+    }
+    #output-canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+    #waiting {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      color: rgba(255,255,255,0.15);
+      font-family: monospace;
+      font-size: 14px;
+      letter-spacing: 2px;
+    }
+    #waiting .logo {
+      font-size: 32px;
+      margin-bottom: 16px;
+      opacity: 0.3;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="output-canvas"></canvas>
+  <div id="waiting">
+    <div class="logo">✦ VAEL</div>
+    <div>Waiting for output…</div>
+  </div>
+
+  <script>
+    /**
+     * output.html — canvas-only projector output.
+     *
+     * The main Vael window renders to its own canvas. This window
+     * receives those frames via BroadcastChannel and redraws them
+     * here at full resolution.
+     *
+     * BroadcastChannel works between Electron windows sharing the
+     * same origin (file://) — no extra IPC needed.
+     */
+
+    const canvas  = document.getElementById('output-canvas');
+    const ctx     = canvas.getContext('2d');
+    const waiting = document.getElementById('waiting');
+    let   started = false;
+
+    function resize() {
+      canvas.width  = window.innerWidth;
+      canvas.height = window.innerHeight;
+    }
+    resize();
+    window.addEventListener('resize', resize);
+
+    // Receive frames from the main window via BroadcastChannel
+    const channel = new BroadcastChannel('vael-output');
+
+    channel.addEventListener('message', e => {
+      if (e.data.type === 'frame') {
+        if (!started) {
+          waiting.style.display = 'none';
+          started = true;
+        }
+        // Draw the ImageBitmap received from the main canvas
+        const bmp = e.data.bitmap;
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        // Fit the frame to fill the output canvas (cover)
+        const srcW = bmp.width, srcH = bmp.height;
+        const dstW = canvas.width, dstH = canvas.height;
+        const scale = Math.max(dstW / srcW, dstH / srcH);
+        const drawW = srcW * scale, drawH = srcH * scale;
+        const dx = (dstW - drawW) / 2, dy = (dstH - drawH) / 2;
+
+        ctx.drawImage(bmp, dx, dy, drawW, drawH);
+        bmp.close();
+      } else if (e.data.type === 'ping') {
+        // Acknowledge — main window checks if output is ready
+        channel.postMessage({ type: 'pong' });
+      }
+    });
+
+    // Keyboard: Escape closes this window
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape') window.close();
+    });
+  </script>
+</body>
+</html>

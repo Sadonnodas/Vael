@@ -44,7 +44,6 @@ class AudioEngine {
     // Config
     this.inputSpeed   = 0.05;     // lerp speed for smoothing
     this.bias         = { bass: 1, mid: 1, treble: 1 };
-    this.playbackRate = 1.0;      // 0.25–4.0, applied to AudioBufferSource
 
     // Callbacks
     this.onStateChange = null;    // called when play/pause/stop changes
@@ -85,6 +84,27 @@ class AudioEngine {
       this._buffer       = await ctx.decodeAudioData(arrayBuffer);
     } catch (e) {
       console.error('AudioEngine: could not decode file', e);
+      this.sourceType = 'none';
+      throw e;
+    }
+
+    this._notifyStateChange();
+  }
+
+  async loadUrl(url, name = '') {
+    this.stop();
+    this.fileName   = name || url.split('/').pop();
+    this.sourceType = 'file';
+
+    const ctx = this._getCtx();
+    if (ctx.state === 'suspended') await ctx.resume();
+
+    try {
+      const resp        = await fetch(url);
+      const arrayBuffer = await resp.arrayBuffer();
+      this._buffer      = await ctx.decodeAudioData(arrayBuffer);
+    } catch (e) {
+      console.error('AudioEngine: could not load URL', url, e);
       this.sourceType = 'none';
       throw e;
     }
@@ -188,8 +208,7 @@ class AudioEngine {
     const analyser = this._buildAnalyser(ctx);
     const src      = ctx.createBufferSource();
     src.buffer     = this._buffer;
-    src.loop       = this.loop;
-    src.playbackRate.value = this.playbackRate;
+    src.loop       = this.loop;   // ← honour loop flag
     src.connect(analyser);
     src.start(0, this._offset);
     src.onended = () => {
@@ -251,17 +270,6 @@ class AudioEngine {
       this._stopSource();
       this.isPlaying = false;
       this.play();
-    }
-  }
-
-  /**
-   * Set playback speed. 1.0 = normal, 0.5 = half speed, 2.0 = double.
-   * Range: 0.25–4.0. Applied immediately if currently playing.
-   */
-  setPlaybackRate(rate) {
-    this.playbackRate = VaelMath.clamp(rate, 0.1, 4.0);
-    if (this._source?.playbackRate) {
-      this._source.playbackRate.value = this.playbackRate;
     }
   }
 

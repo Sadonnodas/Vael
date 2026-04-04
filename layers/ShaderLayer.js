@@ -305,17 +305,25 @@ void main() {
 ShaderLayer.BUILTINS = {
 
   plasma: `
+vec3 hueRot(vec3 c,float a){
+  float ch=cos(a),sh=sin(a);
+  mat3 m=mat3(.299+.701*ch+.168*sh,.587-.587*ch+.330*sh,.114-.114*ch-.497*sh,
+              .299-.299*ch-.328*sh,.587+.413*ch+.035*sh,.114-.114*ch+.292*sh,
+              .299-.300*ch+1.25*sh,.587-.588*ch-1.05*sh,.114+.886*ch-.203*sh);
+  return clamp(m*c,0.,1.);
+}
 void main() {
   vec2 uv = vUv * iScale;
-  float t = iTime;
+  float t = iTime * iSpeed;
   float v = sin(uv.x*6.+t) + sin(uv.y*6.+t*.7)
           + sin((uv.x+uv.y)*4.+t*1.3)
           + sin(length(uv-.5)*8.+t+iBass*4.);
-  float h = v*.25+.5+iBass*.2;
-  float r = abs(sin(h*3.14159));
-  float g = abs(sin(h*3.14159+2.094));
-  float b = abs(sin(h*3.14159+4.189));
-  gl_FragColor = vec4(r,g,b,iIntensity);
+  float f = v*.25+.5+iBass*.2;
+  f = clamp(f, 0., 1.);
+  vec3 col = mix(iColorA, iColorB, f);
+  col = hueRot(col, iHueShift*3.14159/180.);
+  col *= iIntensity;
+  gl_FragColor = vec4(col, 1.0);
 }`,
 
   ripple: `
@@ -472,6 +480,185 @@ void main() {
   activator = smoothstep(.0, 1., activator + iBass * .2 + iBeat * .1);
   vec3 col = mix(iColorA, iColorB, activator) * iIntensity;
   gl_FragColor = vec4(col, 1.);
+}`,
+
+
+  fbm: `
+// Fractal Domain Noise — organic flowing colour fields
+vec3 _mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
+vec2 _mod289v(vec2 x){return x-floor(x*(1./289.))*289.;}
+vec3 _permute(vec3 x){return _mod289(((x*34.)+1.)*x);}
+float _snoise(vec2 v){
+  const vec4 C=vec4(.211324865405187,.366025403784439,-.577350269189626,.024390243902439);
+  vec2 i=floor(v+dot(v,C.yy));
+  vec2 x0=v-i+dot(i,C.xx);
+  vec2 i1=x0.x>x0.y?vec2(1,0):vec2(0,1);
+  vec4 x12=x0.xyxy+C.xxzz;
+  x12.xy-=i1;
+  i=_mod289v(i);
+  vec3 p=_permute(_permute(i.y+vec3(0,i1.y,1))+i.x+vec3(0,i1.x,1));
+  vec3 m=max(.5-vec3(dot(x0,x0),dot(x12.xy,x12.xy),dot(x12.zw,x12.zw)),0.);
+  m=m*m; m=m*m;
+  vec3 x=2.*fract(p*C.www)-1.;
+  vec3 h=abs(x)-.5;
+  vec3 ox=floor(x+.5);
+  vec3 a0=x-ox;
+  m*=1.79284291400159-.85373472095314*(a0*a0+h*h);
+  vec3 g;
+  g.x=a0.x*x0.x+h.x*x0.y;
+  g.yz=a0.yz*x12.xz+h.yz*x12.yw;
+  return 130.*dot(m,g);
+}
+float fbm(vec2 p,int oct){
+  float v=0.,a=.5;
+  for(int i=0;i<8;i++){
+    if(i>=oct)break;
+    v+=a*_snoise(p);p*=2.;a*=.5;
+  }
+  return v;
+}
+void main(){
+  vec2 uv=(gl_FragCoord.xy-.5*iResolution.xy)/iResolution.y*iScale;
+  float t=iTime*iSpeed*.15;
+  int oct=int(mix(2.,8.,iParam1));
+  vec2 q=vec2(fbm(uv+t,oct),fbm(uv+vec2(1.7,9.2)+t*.8,oct));
+  vec2 r=vec2(fbm(uv+2.*q+vec2(1.7,9.2)+t*.3,oct),fbm(uv+2.*q+vec2(8.3,2.8)+t*.4,oct));
+  float f=fbm(uv+3.*r,oct);
+  f=f*.5+.5;
+  f+=iBass*.15+iBeat*.1;
+  vec3 col=mix(iColorA,iColorB,clamp(f*2.,0.,1.))*iIntensity;
+  col=mix(col,iColorB*1.5,clamp(f*f*4.,0.,1.)*.5);
+  gl_FragColor=vec4(col,1.);
+}`,
+
+  rings: `
+// Concentric rings with audio pulse
+vec3 hueShiftR(vec3 c,float h){
+  float ch=cos(h),sh=sin(h);
+  mat3 m=mat3(
+    .299+.701*ch+.168*sh,.587-.587*ch+.330*sh,.114-.114*ch-.497*sh,
+    .299-.299*ch-.328*sh,.587+.413*ch+.035*sh,.114-.114*ch+.292*sh,
+    .299-.300*ch+1.25*sh,.587-.588*ch-1.05*sh,.114+.886*ch-.203*sh);
+  return clamp(m*c,0.,1.);
+}
+void main(){
+  vec2 uv=(gl_FragCoord.xy-.5*iResolution.xy)/iResolution.y;
+  uv*=iScale;
+  float t=iTime*iSpeed;
+  float d=length(uv);
+  // Number of rings controlled by iParam1
+  float freq=mix(4.,20.,iParam1);
+  float rings=sin(d*freq*3.14159-t*2.+iBass*6.);
+  // Twist controlled by iParam2
+  float angle=atan(uv.y,uv.x);
+  float twist=sin(angle*mix(0.,8.,iParam2)+t);
+  float v=rings*.5+twist*.3+.2;
+  v=clamp(v+iBeat*.3,0.,1.);
+  // Ring thickness by iParam3
+  float thick=mix(.3,1.,iParam3);
+  float mask=smoothstep(0.,thick,v)*smoothstep(1.,thick,v);
+  vec3 col=mix(iColorA,iColorB,v);
+  col=hueShiftR(col,iHueShift*3.14159/180.);
+  col*=iIntensity*(1.+iBass*.5);
+  gl_FragColor=vec4(col*mask,1.);
+}`,
+
+  julia: `
+// Julia set fractal with audio-reactive parameters
+vec2 cMul(vec2 a,vec2 b){return vec2(a.x*b.x-a.y*b.y,a.x*b.y+a.y*b.x);}
+void main(){
+  vec2 uv=(gl_FragCoord.xy-.5*iResolution.xy)/iResolution.y;
+  uv*=iScale*1.5;
+  float t=iTime*iSpeed*.1;
+  // C parameter orbits with audio influence
+  float cr=mix(-.8,.4,iParam1)+iBass*.1*sin(t*1.3);
+  float ci=mix(-.4,.4,iParam2)+iBass*.1*cos(t*.9);
+  vec2 c=vec2(cr,ci);
+  vec2 z=uv;
+  float iter=0.;
+  const int MAX=64;
+  for(int i=0;i<MAX;i++){
+    z=cMul(z,z)+c;
+    if(dot(z,z)>4.){iter=float(i)/float(MAX);break;}
+  }
+  // Smooth colouring
+  float smooth_i=iter+1.-log2(log2(dot(z,z)));
+  smooth_i=clamp(smooth_i,0.,1.);
+  smooth_i=pow(smooth_i,mix(.3,1.5,iParam3));
+  smooth_i+=iBass*.05;
+  vec3 col=mix(vec3(0.),mix(iColorA,iColorB,smooth_i),smooth_i);
+  col*=iIntensity;
+  col=clamp(col+iBeat*.1,0.,1.);
+  gl_FragColor=vec4(col,1.);
+}`,
+
+  aurora: `
+// Aurora borealis curtains
+float hash(float n){return fract(sin(n)*43758.5453);}
+float noise(vec2 p){
+  vec2 i=floor(p); vec2 f=fract(p);
+  f=f*f*(3.-2.*f);
+  float a=hash(i.x+i.y*57.);
+  float b=hash(i.x+1.+i.y*57.);
+  float c=hash(i.x+(i.y+1.)*57.);
+  float d=hash(i.x+1.+(i.y+1.)*57.);
+  return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+}
+void main(){
+  vec2 uv=gl_FragCoord.xy/iResolution.xy;
+  float t=iTime*iSpeed*.2;
+  float bass=iBass*(1.+iParam1*2.);
+  // Vertical bands of curtains
+  float x=uv.x*mix(2.,8.,iParam2);
+  float wave=noise(vec2(x+t*.3,t*.1))*2.-1.;
+  wave+=noise(vec2(x*2.+t*.5,t*.15))*.5;
+  // Curtain shape — brightest at a horizontal band
+  float band=mix(.3,.7,iParam3)+bass*.08;
+  float curtain=exp(-pow((uv.y-band-wave*.08)*mix(4.,12.,1.-iParam3),2.));
+  curtain*=1.+bass*.4+iBeat*.2;
+  // Colour: mix between two aurora hues based on position
+  float hpos=uv.x+noise(vec2(uv.y*3.,t*.2))*.3;
+  vec3 col=mix(iColorA,iColorB,hpos);
+  // Add white core to brightest parts
+  col=mix(col,vec3(1.),pow(curtain,4.)*.4);
+  col*=curtain*iIntensity;
+  // Subtle stars
+  float star=step(.998,noise(uv*iResolution.xy*.003+t*.01));
+  col+=star*.4;
+  gl_FragColor=vec4(clamp(col,0.,1.),1.);
+}`,
+
+  lissajous: `
+// Lissajous figures — audio-reactive parametric curves
+void main(){
+  vec2 uv=(gl_FragCoord.xy-.5*iResolution.xy)/iResolution.y;
+  uv*=iScale;
+  float t=iTime*iSpeed;
+  // Frequency ratios controlled by params
+  float fx=mix(1.,6.,iParam1);
+  float fy=mix(1.,6.,iParam2);
+  float phase=iParam3*3.14159*2.+t*.3;
+  float thick=mix(.003,.015,1.-iParam3)*(1.+iBass*.5);
+  // Trace the curve — find minimum distance to any point on it
+  float minD=1e9;
+  const int STEPS=256;
+  for(int i=0;i<STEPS;i++){
+    float s=float(i)/float(STEPS)*3.14159*2.;
+    vec2 p=vec2(
+      sin(fx*s+phase+iBass*.4),
+      sin(fy*s+iBeat*.3)
+    );
+    p*=.8+iMid*.1;
+    minD=min(minD,length(uv-p));
+  }
+  float glow=thick/max(minD,.0001);
+  glow=clamp(glow,0.,3.);
+  // Colour along the curve by angle
+  float angle=atan(uv.y,uv.x);
+  vec3 col=mix(iColorA,iColorB,(sin(angle+t)+1.)*.5);
+  col*=glow*iIntensity;
+  col=clamp(col+iBeat*.15,0.,1.);
+  gl_FragColor=vec4(col,1.);
 }`,
 
 };

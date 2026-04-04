@@ -97,6 +97,13 @@ class SetlistManager {
       }
     }
 
+    // Play per-scene audio if set
+    if (entry.audioUrl && this._audioEngine) {
+      this._audioEngine.loadUrl(entry.audioUrl, entry.audioName || 'scene audio')
+        .then(() => this._audioEngine.play())
+        .catch(() => {});
+    }
+
     if (typeof this.onSceneChange === 'function') {
       this.onSceneChange(index, entry);
     }
