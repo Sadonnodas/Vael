@@ -98,6 +98,15 @@ class Renderer {
     this._cssH = h;
     this._renderer.setSize(w, h, false);
 
+    // Keep overlay canvas exactly on top of the WebGL canvas.
+    // Match its CSS position to the canvas element so it never covers
+    // the status strip or anything outside the canvas bounds.
+    if (this._overlayCanvas) {
+      this._overlayCanvas.style.width  = this.canvas.style.width  || '100%';
+      this._overlayCanvas.style.height = this.canvas.style.height || '100%';
+      this._overlayCanvas.style.margin = this.canvas.style.margin || '';
+    }
+
     this._quads.forEach(quad => {
       quad.offscreen.width  = w;
       quad.offscreen.height = h;
@@ -595,8 +604,18 @@ class Renderer {
     if (!this._overlayCanvas) {
       this._overlayCanvas = document.createElement('canvas');
       this._overlayCanvas.style.cssText =
-        'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:1';
-      this.canvas.parentElement?.appendChild(this._overlayCanvas);
+        'position:absolute;top:0;left:0;pointer-events:none;z-index:0';
+      this._overlayCanvas.style.width  = this.canvas.style.width  || '100%';
+      this._overlayCanvas.style.height = this.canvas.style.height || '100%';
+      this._overlayCanvas.style.margin = this.canvas.style.margin || '';
+      this._overlayCanvas.style.display = 'block';
+      // Insert before the status strip so it doesn't cover it
+      const statusStrip = document.getElementById('status-strip');
+      if (statusStrip) {
+        this.canvas.parentElement?.insertBefore(this._overlayCanvas, statusStrip);
+      } else {
+        this.canvas.parentElement?.appendChild(this._overlayCanvas);
+      }
       this._overlayCtx = this._overlayCanvas.getContext('2d');
     }
     if (this._overlayCanvas.width !== W || this._overlayCanvas.height !== H) {
