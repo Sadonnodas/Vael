@@ -54,7 +54,22 @@
     if (typeof ParamPanel !== 'undefined' && ParamPanel._buildNameHeader) {
       container.appendChild(ParamPanel._buildNameHeader(layer, 'Image'));
     }
-    LibraryPanel.promptImageForLayer(layer, container);
+
+    // If image already loaded, show Change button instead of full picker
+    if (layer._sourceName || layer._imageUrl) {
+      const changeBtn = document.createElement('button');
+      changeBtn.className = 'btn accent';
+      changeBtn.style.cssText = 'width:100%;font-size:9px;margin-bottom:10px';
+      changeBtn.textContent = '🖼 ' + (layer._sourceName || 'Image') + ' — Change image';
+      changeBtn.addEventListener('click', () => {
+        LibraryPanel.promptImageForLayer(layer, container);
+        setTimeout(() => _renderImageLayerPanel(layer, container), 50);
+      });
+      container.appendChild(changeBtn);
+    } else {
+      LibraryPanel.promptImageForLayer(layer, container);
+    }
+
     const tip = document.createElement('p');
     tip.style.cssText = 'font-size:9px;color:var(--text-dim);line-height:1.6;margin-bottom:14px;margin-top:4px';
     tip.innerHTML = 'Use a PNG with transparency as a <strong style="color:var(--accent2)">mask</strong> on another layer, or any image as a visual with blend modes.';
@@ -384,8 +399,20 @@
   _renderInlinePresetGrid();
 
   // ── Setlist + performance mode ───────────────────────────────
-  const setlist  = new SetlistManager(layers, layerFactory);
+  const setlist  = new SetlistManager(layers, layerFactory, audio);
+  window._vaelSetlist = setlist;
   const perfMode = new PerformanceMode({ setlist, audio, beatDetector: beat, layerStack: layers });
+
+  // Concert setlist panel in SCENES tab
+  if (typeof PlaylistPanel !== 'undefined') {
+    PlaylistPanel.init({
+      setlist,
+      audio,
+      layerStack:   layers,
+      layerFactory: layerFactory,
+      container:    document.getElementById('tab-scenes'),
+    });
+  }
 
   document.addEventListener('vael:fade-duration',   e => { setlist.fadeDuration   = e.detail; });
   document.addEventListener('vael:transition-type', e => { setlist.transitionType = e.detail; });
@@ -410,6 +437,23 @@
   midi.onClockStart = () => Toast.info('MIDI clock: started');
   midi.onClockStop  = () => Toast.info('MIDI clock: stopped');
 
+  // Global MIDI actions → setlist navigation
+  midi.onGlobalAction = (action) => {
+    if (action === 'scene:next') {
+      setlist.next();
+      Toast.info(`Scene → ${setlist.currentIndex + 1} / ${setlist.entries.length}`);
+    } else if (action === 'scene:prev') {
+      setlist.prev();
+      Toast.info(`Scene → ${setlist.currentIndex + 1} / ${setlist.entries.length}`);
+    } else if (action.startsWith('scene:')) {
+      const idx = parseInt(action.split(':')[1]) - 1;
+      if (!isNaN(idx)) {
+        setlist.goto(idx);
+        Toast.info(`Scene → ${idx + 1} / ${setlist.entries.length}`);
+      }
+    }
+  };
+
   // ── OSC ──────────────────────────────────────────────────────
   const osc = new OscBridge({ layerStack: layers, setlist, recorder });
   // OscBridge does NOT auto-connect — it only connects when the user
@@ -420,8 +464,8 @@
   // ── LFO ──────────────────────────────────────────────────────
   const lfoManager = new LFOManager();
   window._vaelLFOManager = lfoManager;
-  LFOPanel.init(lfoManager, layers, document.getElementById('lfo-panel-content'));
-  layers.onChanged = () => { renderLayerList(); LFOPanel.refresh(); };
+  // LFOPanel is now per-layer in ParamPanel — no global init needed
+  layers.onChanged = () => { renderLayerList(); }; // LFOPanel.refresh() now handled per-layer in ParamPanel
 
   // ── Post FX ──────────────────────────────────────────────────
   PostFXPanel.init(renderer, document.getElementById('fx-panel-content'));
@@ -495,7 +539,10 @@
   };
 
   document.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+    const _tag = e.target.tagName;
+    if (_tag === 'INPUT' || _tag === 'SELECT' || _tag === 'TEXTAREA') return;
+    if (e.target.isContentEditable) return;
+    if (e.target.closest?.('#vael-assistant-panel, [data-no-shortcuts]')) return;
     if (e.key === 't' || e.key === 'T') { e.preventDefault(); seq.tapTempo(); }
   });
 
@@ -547,6 +594,7 @@
     { id: 'lyrics',           label: '💬 Lyrics / Text',          cls: () => new LyricsLayer(`lyrics-${Date.now()}`) },
 
     // ── Utilities ────────────────────────────────────────────
+    { id: 'feedback',         label: '⟳ Feedback Trail',         cls: () => new FeedbackLayer(`feedback-${Date.now()}`) },
     { id: 'canvas-paint',     label: '✏ Canvas Paint',           cls: () => new CanvasPaintLayer(`canvas-paint-${Date.now()}`) },
     { id: 'group',            label: '▤ Group (empty)',           cls: () => { const g = new GroupLayer(`group-${Date.now()}`); g.name = 'Group'; return g; } },
 
@@ -633,7 +681,7 @@
   // If an autosave exists, show the resume dialog first.
   // Default layers are only added if starting fresh.
   renderer.start();
-  LFOPanel.refresh();
+  // LFOPanel.refresh() — handled per-layer in ParamPanel
 
   // Wait for the renderer to complete its first frame (which calls _resize() and
   // sets _cssW/_cssH to the real canvas dimensions) before adding any layers.
@@ -671,7 +719,7 @@
 
     _origLayersAdd(noiseLayer);
     _origLayersAdd(particleLayer);
-    LFOPanel.refresh();
+    // LFOPanel.refresh() — handled per-layer in ParamPanel
   }
 
   if (_hasSave) {
@@ -687,16 +735,29 @@
     const name = document.getElementById('preset-name').value.trim() || 'scene';
     let thumb = null;
     try {
-      const t = document.createElement('canvas');
-      t.width = 120; t.height = 68;
-      t.getContext('2d').drawImage(canvas, 0, 0, 120, 68);
-      thumb = t.toDataURL('image/jpeg', 0.6);
+      // canvas is WebGL — toDataURL works with preserveDrawingBuffer:true
+      thumb = canvas.toDataURL('image/jpeg', 0.6);
     } catch {}
     PresetBrowser.save(layers, name, thumb);
     setTimeout(_renderInlinePresetGrid, 100);
     const preset = PresetManager.save(layers, name);
     PresetManager.storeRecent(preset);
     Toast.success(`Scene "${name}" saved`);
+  });
+
+  // Save scene with a specific name — used by PlaylistPanel "save as scene" button
+  window.addEventListener('vael:save-scene-named', e => {
+    const name = e.detail?.name;
+    if (!name) return;
+    let thumb = null;
+    try {
+      // canvas is WebGL — toDataURL works with preserveDrawingBuffer:true
+      thumb = canvas.toDataURL('image/jpeg', 0.6);
+    } catch {}
+    PresetBrowser.save(layers, name, thumb);
+    setTimeout(_renderInlinePresetGrid, 100);
+    const preset = PresetManager.save(layers, name);
+    PresetManager.storeRecent(preset);
   });
 
 
@@ -721,7 +782,8 @@
     try {
       const preset = await PresetManager.load(file, layers, layerFactory);
       if (preset.name) document.getElementById('preset-name').value = preset.name;
-      if (preset.lfos?.length) { lfoManager.clear(); lfoManager.fromJSON(preset.lfos, layers); LFOPanel.refresh(); }
+      // LFO state per-layer — lfoManager kept for compatibility
+      if (preset.lfos?.length) { lfoManager.clear(); lfoManager.fromJSON(preset.lfos, layers); }
       _selectedLayerId = null; LayerPanel.setSelectedId(null);
       paramsContent.innerHTML   = '';
       paramsEmpty.style.display = 'block';
@@ -740,6 +802,127 @@
   const labelFps    = document.getElementById('label-fps');
   const labelLayers = document.getElementById('label-layers');
 
+  // Make canvas-area a flex container so ratio-locked canvas centers properly
+  const canvasArea = canvas.parentElement;
+  if (canvasArea) {
+    canvasArea.style.display         = 'flex';
+    canvasArea.style.alignItems      = 'center';
+    canvasArea.style.justifyContent  = 'center';
+    canvasArea.style.background      = '#000';
+  }
+
+  // Add extra resolution options to REC panel dropdown (portrait, square, social)
+  const resSelect = document.getElementById('sl-res');
+  if (resSelect) {
+    const extraOptions = [
+      { value: '2560x1440', label: '2560 × 1440 (1440p)' },
+      { value: '3840x2160', label: '3840 × 2160 (4K)' },
+      { value: '1080x1920', label: '1080 × 1920 (9:16 portrait / Instagram Story)' },
+      { value: '1080x1080', label: '1080 × 1080 (1:1 square / Instagram post)' },
+      { value: '1080x1350', label: '1080 × 1350 (4:5 Instagram portrait)' },
+      { value: '1920x1080', label: '— already listed —', skip: true },
+    ].filter(o => !o.skip);
+    extraOptions.forEach(o => {
+      // Only add if not already present
+      if (!resSelect.querySelector(`option[value="${o.value}"]`)) {
+        const opt = document.createElement('option');
+        opt.value = o.value; opt.textContent = o.label;
+        resSelect.appendChild(opt);
+      }
+    });
+  }
+
+  // ── Canvas ratio selector ─────────────────────────────────────
+  const RATIOS = [
+    { label: 'Free',    w: null, h: null },
+    { label: '16:9',    w: 16,   h: 9    },
+    { label: '9:16',    w: 9,    h: 16   },
+    { label: '1:1',     w: 1,    h: 1    },
+    { label: '4:3',     w: 4,    h: 3    },
+    { label: '21:9',    w: 21,   h: 9    },
+    { label: 'Custom',  w: null, h: null, custom: true },
+  ];
+
+  // ── Canvas ratio toolbar (injected above canvas) ───────────────
+  const ratioToolbar = document.createElement('div');
+  ratioToolbar.style.cssText = `
+    position:absolute;top:8px;left:50%;transform:translateX(-50%);
+    display:flex;align-items:center;gap:6px;z-index:50;
+    background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.08);
+    border-radius:20px;padding:4px 10px;backdrop-filter:blur(4px);
+  `;
+
+  const ratioLabel = document.createElement('span');
+  ratioLabel.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:rgba(255,255,255,0.4);letter-spacing:0.5px';
+  ratioLabel.textContent = 'RATIO';
+
+  const ratioSel = document.createElement('select');
+  ratioSel.style.cssText = 'background:transparent;border:none;color:rgba(255,255,255,0.7);font-family:var(--font-mono);font-size:9px;cursor:pointer;outline:none';
+
+  RATIOS.forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r.label;
+    opt.textContent = r.label;
+    ratioSel.appendChild(opt);
+  });
+
+  const _applyRatio = (chosen) => {
+    if (!chosen) return;
+    if (chosen.custom) {
+      const input = prompt('Enter ratio or resolution (e.g. 9x16, 1080x1920, 1x1):');
+      if (!input) { ratioSel.value = 'Free'; return; }
+      const match = input.match(/(\d+)\s*[x:×]\s*(\d+)/i);
+      if (!match) { Toast.warn('Invalid format — use e.g. 9x16 or 1080x1920'); ratioSel.value = 'Free'; return; }
+      const [, rw, rh] = match;
+      renderer.setRatio(parseInt(rw), parseInt(rh));
+      Toast.info(`Canvas ratio locked: ${rw}:${rh}`);
+    } else if (chosen.w) {
+      renderer.setRatio(chosen.w, chosen.h);
+      Toast.info(`Canvas ratio: ${chosen.label}`);
+    } else {
+      renderer.setRatio(null, null);
+      Toast.info('Canvas ratio: free');
+    }
+  };
+
+  ratioSel.addEventListener('change', () => {
+    _applyRatio(RATIOS.find(r => r.label === ratioSel.value));
+  });
+
+  ratioToolbar.append(ratioLabel, ratioSel);
+
+  // FPS cap selector — sits right next to the ratio toolbar
+  const fpsPill = document.createElement('div');
+  fpsPill.style.cssText = `
+    position:absolute;top:8px;right:12px;
+    display:flex;align-items:center;gap:6px;z-index:50;
+    background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.08);
+    border-radius:20px;padding:4px 10px;backdrop-filter:blur(4px);
+  `;
+  const fpsLabel = document.createElement('span');
+  fpsLabel.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:rgba(255,255,255,0.4);letter-spacing:0.5px';
+  fpsLabel.textContent = 'FPS';
+  const fpsSel = document.createElement('select');
+  fpsSel.style.cssText = 'background:transparent;border:none;color:rgba(255,255,255,0.7);font-family:var(--font-mono);font-size:9px;cursor:pointer;outline:none';
+  [['Unlimited', 0], ['120', 120], ['60', 60], ['30', 30]].forEach(([label, val]) => {
+    const opt = document.createElement('option');
+    opt.value = val; opt.textContent = label;
+    fpsSel.appendChild(opt);
+  });
+  fpsSel.addEventListener('change', () => {
+    const v = parseInt(fpsSel.value);
+    renderer.setFpsLimit(v);
+    Toast.info(v ? `FPS capped at ${v}` : 'FPS unlimited');
+  });
+  fpsPill.append(fpsLabel, fpsSel);
+  if (canvasArea) canvasArea.appendChild(fpsPill);
+
+  // Inject into canvas-area (above canvas, centered)
+  if (canvasArea) {
+    canvasArea.style.position = 'relative';
+    canvasArea.appendChild(ratioToolbar);
+  }
+
   renderer.onFrame = (dt, fps) => {
     labelFps.textContent    = `${fps} fps`;
     labelLayers.textContent = `${layers.count} layer${layers.count !== 1 ? 's' : ''}`;
@@ -747,6 +930,11 @@
     renderer.audioData = audio.smoothed;
     renderer.videoData = video.smoothed;
     audio.smoothed._dt = dt;  // pass dt for inline LFO evaluation in ModMatrix
+
+    // Tick per-layer LFOs
+    if (typeof LFOPanel !== 'undefined') {
+      LFOPanel.tickAll(layers.layers, dt, beat.bpm || 120);
+    }
 
     beat.update(audio.smoothed, audio._dataArray);
     // MIDI clock overrides beat detector BPM when active
@@ -922,7 +1110,7 @@
       overlay.querySelector('#sd-resume').addEventListener('click', () => {
         overlay.remove();
         PresetManager._applyRaw(preset, layers, layerFactory);
-        if (preset.lfos?.length) { lfoManager.fromJSON(preset.lfos, layers); LFOPanel.refresh(); }
+        if (preset.lfos?.length) { lfoManager.fromJSON(preset.lfos, layers); }
         Toast.success(`Resumed: "${preset.name}"`);
       });
 
@@ -973,7 +1161,10 @@
   shortcutOverlay?.addEventListener('click', e => { if (e.target === shortcutOverlay) toggleShortcuts(); });
 
   document.addEventListener('keydown', e => {
-    if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+    const _etag = e.target.tagName;
+    if (_etag === 'INPUT' || _etag === 'SELECT' || _etag === 'TEXTAREA') return;
+    if (e.target.isContentEditable) return;
+    if (e.target.closest?.('#vael-assistant-panel, [data-no-shortcuts]')) return;
     if (e.key === ' ') {
       e.preventDefault();
       const btnPlay = document.getElementById('btn-audio-play');

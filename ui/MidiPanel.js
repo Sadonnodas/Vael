@@ -70,38 +70,6 @@ const MidiPanel = (() => {
     `;
     _container.appendChild(devSection);
 
-    // Clock sync section
-    const clockSection = document.createElement('div');
-    clockSection.style.marginBottom = '14px';
-    const clockActive = _midi.clockSync && _midi.clockBpm > 0;
-    clockSection.innerHTML = `
-      <div class="section-label">MIDI Clock Sync</div>
-      <p style="font-size:10px;color:var(--text-muted);line-height:1.6;margin-bottom:10px">
-        Receive MIDI clock from a DAW or drum machine. Overrides the beat detector BPM when active.
-      </p>
-      <div style="display:flex;align-items:center;gap:10px;padding:8px 10px;
-                  background:var(--bg-card);border:1px solid var(--border-dim);
-                  border-radius:5px;margin-bottom:8px">
-        <div class="status-dot ${clockActive ? '' : 'inactive'}"></div>
-        <span style="font-family:var(--font-mono);font-size:10px;color:var(--text);flex:1">
-          ${clockActive ? `Synced — ${_midi.clockBpm} BPM` : 'Waiting for clock signal…'}
-        </span>
-        ${clockActive ? `<span style="font-family:var(--font-mono);font-size:9px;color:var(--accent)">${_midi.clockBpm} BPM</span>` : ''}
-      </div>
-      <button id="btn-clock-reset" class="btn" style="width:100%;font-size:9px;color:var(--text-dim)">
-        Reset clock sync
-      </button>
-    `;
-    _container.appendChild(clockSection);
-
-    clockSection.querySelector('#btn-clock-reset')?.addEventListener('click', () => {
-      _midi.clockSync    = false;
-      _midi.clockBpm     = 0;
-      _midi._clockPulses = [];
-      refresh();
-      Toast.info('MIDI clock sync reset');
-    });
-
     // Learn mode section
     const learnSection = document.createElement('div');
     learnSection.style.marginBottom = '14px';
@@ -196,6 +164,73 @@ const MidiPanel = (() => {
     linksSection.querySelector('#btn-midi-clear')?.addEventListener('click', () => {
       if (confirm('Clear all MIDI links?')) { _midi.clearLinks(); refresh(); }
     });
+
+    // ── Global actions (scene navigation) ──────────────────────
+    const globalSection = document.createElement('div');
+    globalSection.style.cssText = 'margin-top:16px;border-top:1px solid var(--border-dim);padding-top:12px';
+
+    const globalTitle = document.createElement('div');
+    globalTitle.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--accent);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px';
+    globalTitle.textContent = 'Scene navigation';
+    globalSection.appendChild(globalTitle);
+
+    const globalDesc = document.createElement('p');
+    globalDesc.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);line-height:1.6;margin-bottom:10px';
+    globalDesc.textContent = 'Map a MIDI note or CC to advance the scene, go back, or jump to a specific scene. Press Learn, then press the button on your controller.';
+    globalSection.appendChild(globalDesc);
+
+    const GLOBAL_ACTIONS = [
+      { action: 'scene:next', label: '→ Next scene' },
+      { action: 'scene:prev', label: '← Prev scene' },
+    ];
+
+    GLOBAL_ACTIONS.forEach(({ action, label }) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
+
+      const existing = _midi.getGlobalLinks().find(l => l.action === action);
+      const keyLabel = existing ? _formatGlobalKey(existing.key) : '—';
+
+      row.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:9px;color:var(--text);flex:1">${label}</span>
+        <span class="gl-key" style="font-family:var(--font-mono);font-size:8px;color:var(--accent2);min-width:60px;text-align:right">${keyLabel}</span>
+        <button class="gl-learn btn" style="font-size:8px;padding:3px 8px">Learn</button>
+        ${existing ? `<button class="gl-del btn" style="font-size:8px;padding:3px 6px;color:#ff4444">✕</button>` : ''}
+      `;
+
+      row.querySelector('.gl-learn').addEventListener('click', (e) => {
+        e.target.textContent = 'Press key…';
+        e.target.style.background = 'var(--accent)';
+        e.target.style.color = 'var(--bg)';
+        _midi.startLearnGlobal(action);
+        // Listen for when learning completes
+        const origOnLink = _midi.onLink;
+        _midi.onLink = (link) => {
+          if (origOnLink) origOnLink(link);
+          _midi.onLink = origOnLink;
+          refresh();
+        };
+      });
+
+      const delBtn = row.querySelector('.gl-del');
+      if (delBtn && existing) {
+        delBtn.addEventListener('click', () => {
+          _midi.removeGlobalLink(existing.key);
+          refresh();
+        });
+      }
+
+      globalSection.appendChild(row);
+    });
+
+    _container.appendChild(globalSection);
+  }
+
+  function _formatGlobalKey(key) {
+    const parts = key.split('-');
+    if (parts[0] === 'note') return `Note ${parts[2]} ch${parseInt(parts[1]) + 1}`;
+    if (parts[0] === 'cc')   return `CC${parts[2]} ch${parseInt(parts[1]) + 1}`;
+    return key;
   }
 
   function refresh() {

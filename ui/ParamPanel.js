@@ -162,6 +162,20 @@ const ParamPanel = (() => {
       container.appendChild(mSec.el);
     }
 
+    // LFO panel — between modulation and FX
+    if (typeof LFOPanel !== 'undefined' && layer.modMatrix) {
+      if (!layer._lfos) layer._lfos = [];
+      const lSec = _buildCollapsible(`LFOs (${layer._lfos.length})`, sec.lfo ?? false, o => { sec.lfo = o; });
+      LFOPanel.render(layer, lSec.body, () => {
+        const titleNode = lSec.el.querySelector('summary');
+        if (titleNode) {
+          const textNodes = [...titleNode.childNodes].filter(n => n.nodeType === 3);
+          if (textNodes.length) textNodes[textNodes.length-1].textContent = ` LFOs (${layer._lfos.length})`;
+        }
+      });
+      container.appendChild(lSec.el);
+    }
+
     // FX chain
     if (typeof LayerFXPanel !== 'undefined') {
       const fxLabel = `Layer FX (${(layer.fx || []).length})`;
@@ -498,29 +512,7 @@ const ParamPanel = (() => {
     }
 
     // ∿ LFO quick-add button (float/int params only, no custom setters)
-    if (!customSetter && layer && (param.type === 'float' || param.type === 'int')) {
-      const lfoBtn = document.createElement('button');
-      lfoBtn.style.cssText = `
-        background:none;border:none;cursor:pointer;padding:0 2px;
-        font-size:11px;color:var(--text-dim);line-height:1;
-        transition:color 0.1s;flex-shrink:0;
-      `;
-      lfoBtn.textContent = '∿';
-      lfoBtn.title       = `Add LFO to "${param.label}"`;
-      lfoBtn.addEventListener('mouseenter', () => lfoBtn.style.color = 'var(--accent2)');
-      lfoBtn.addEventListener('mouseleave', () => lfoBtn.style.color = 'var(--text-dim)');
-      lfoBtn.addEventListener('click', e => {
-        e.stopPropagation();
-        if (typeof LFOPanel !== 'undefined' && LFOPanel.openQuickAdd) {
-          LFOPanel.openQuickAdd(layer, param.id, param.label);
-        } else {
-          // Fallback: switch to LFO tab
-          document.querySelector('[data-tab="lfo"]')?.click();
-          Toast.info(`LFO tab — add a route for "${param.label}"`);
-        }
-      });
-      labelLeft.appendChild(lfoBtn);
-    }
+    // LFO button removed — use the LFO panel (between Modulation and FX sections)
 
     labelRow.appendChild(labelLeft);
 

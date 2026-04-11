@@ -111,8 +111,11 @@ class ParticleLayer extends BaseLayer {
       // Per-particle noise offset — THIS is the fix for drift clumping.
       // Each particle samples a different region of the noise field even when
       // two particles are at the same spatial position.
-      noiseOx:   rng(0, 500),
-      noiseOy:   rng(500, 1000),
+      // Small offsets (0-4) so each particle samples a slightly different
+      // region of the noise field. Large values (0-500) caused top-left drift
+      // by pushing particles into extreme noise coordinates with directional bias.
+      noiseOx:   rng(0, 4),
+      noiseOy:   rng(0, 4),
       hue:       (i / total) * 360 + rng(-15, 15),
       angle:     rng(0, Math.PI * 2),
     };
@@ -197,13 +200,14 @@ class ParticleLayer extends BaseLayer {
     const targetAudio = Math.sqrt(Math.max(0, rawAudio)) * react;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, targetAudio, 0.08);
 
-    if (audioData?.isBeat) {
-      this._beatPulse = (this.params.audioReact ?? 0) > 0 ? 1.0 : 0;
-    } else if (!audioData?.isActive) {
-      // Synthetic beat at ~120 BPM so pulse/scatter animate without audio
-      const phase = (this._time * 2.0) % 1;  // 2Hz = 120 BPM
+    const mode = this.params.mode;
+    if (audioData?.isBeat && react > 0) {
+      this._beatPulse = 1.0;
+    } else if (!audioData?.isActive && react > 0 && (mode === 'pulse' || mode === 'scatter')) {
+      // Synthetic beat only for modes that need it, and only when audioReact > 0
+      const phase = (this._time * 2.0) % 1;
       if (phase < 0.05 && (this._lastSynthPhase ?? 1) >= 0.05) {
-        this._beatPulse = 0.6;  // weaker than real beat
+        this._beatPulse = 0.3;
       }
       this._lastSynthPhase = phase;
     }
@@ -238,11 +242,11 @@ class ParticleLayer extends BaseLayer {
       switch (mode) {
 
         case 'drift': {
-          // Per-particle offsets prevent clumping — each particle samples
-          // a different region of the noise field
-          const nx  = VaelMath.noise2D((p.x + p.noiseOx) * 0.004, this._time * 0.25) - 0.5;
-          const ny  = VaelMath.noise2D((p.y + p.noiseOy) * 0.004, this._time * 0.25) - 0.5;
-          // Audio adds energy to the field without multiplying speed chaotically
+          // Normalise p.x/p.y to 0-1 range, add small per-particle offset.
+          // This keeps all particles in the same well-behaved region of the
+          // noise field regardless of position, eliminating directional bias.
+          const nx  = VaelMath.noise2D(p.x / width  + p.noiseOx, this._time * 0.25);
+          const ny  = VaelMath.noise2D(p.y / height + p.noiseOy, this._time * 0.25);
           const audioForce = 0.12 + audio * 0.25;
           p.vx += nx * audioForce * speed;
           p.vy += ny * audioForce * speed;
@@ -303,8 +307,8 @@ class ParticleLayer extends BaseLayer {
 
         case 'fireflies': {
           p.phase += dt * p.blinkSpeed * (1 + audio * 0.3);
-          const nx = VaelMath.noise2D((p.x + p.noiseOx) * 0.003, this._time * 0.08) - 0.5;
-          const ny = VaelMath.noise2D((p.y + p.noiseOy) * 0.003, this._time * 0.08) - 0.5;
+          const nx = VaelMath.noise2D(p.x / width  + p.noiseOx, this._time * 0.08);
+          const ny = VaelMath.noise2D(p.y / height + p.noiseOy, this._time * 0.08);
           p.vx += nx * 0.05;
           p.vy += ny * 0.05;
           p.vx *= 0.98; p.vy *= 0.98;
@@ -373,8 +377,8 @@ class ParticleLayer extends BaseLayer {
 
         case 'trails': {
           // Smooth noise-driven motion, renders to a persistent trail canvas
-          const nx = VaelMath.noise2D((p.x + p.noiseOx) * 0.004, this._time * 0.2) - 0.5;
-          const ny = VaelMath.noise2D((p.y + p.noiseOy) * 0.004, this._time * 0.2) - 0.5;
+          const nx = VaelMath.noise2D(p.x / width  + p.noiseOx, this._time * 0.2);
+          const ny = VaelMath.noise2D(p.y / height + p.noiseOy, this._time * 0.2);
           p.vx += nx * (0.15 + audio * 0.3) * speed;
           p.vy += ny * (0.15 + audio * 0.3) * speed;
           p.vx  *= 0.95; p.vy *= 0.95;

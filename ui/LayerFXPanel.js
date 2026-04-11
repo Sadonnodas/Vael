@@ -102,7 +102,7 @@ const LayerFXPanel = (() => {
         if (!layer.fx) layer.fx = [];
         layer.fx.push({ type, enabled: true, params: { ...def.params } });
         form.style.display = 'none';
-        _renderChain(layer, fxList, header);
+        _renderChain(layer, fxList, fxCountSpan);
         Toast.success(`FX added: ${def.label}`);
       });
     });
@@ -207,10 +207,10 @@ const LayerFXPanel = (() => {
 
       // Reorder
       card.querySelector('.lfx-up').addEventListener('click', () => {
-        if (idx > 0) { [layer.fx[idx-1], layer.fx[idx]] = [layer.fx[idx], layer.fx[idx-1]]; _renderChain(layer, container, header); }
+        if (idx > 0) { [layer.fx[idx-1], layer.fx[idx]] = [layer.fx[idx], layer.fx[idx-1]]; _renderChain(layer, container, countSpan); }
       });
       card.querySelector('.lfx-down').addEventListener('click', () => {
-        if (idx < fx.length-1) { [layer.fx[idx+1], layer.fx[idx]] = [layer.fx[idx], layer.fx[idx+1]]; _renderChain(layer, container, header); }
+        if (idx < fx.length-1) { [layer.fx[idx+1], layer.fx[idx]] = [layer.fx[idx], layer.fx[idx+1]]; _renderChain(layer, container, countSpan); }
       });
 
       // Delete

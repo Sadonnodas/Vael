@@ -886,8 +886,12 @@ class PerformanceMode {
     document.addEventListener('mousemove', () => this._onMouseMove());
 
     document.addEventListener('keydown', e => {
-      if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') return;
+      // Don't fire shortcuts while user is typing anywhere
+      const tag = e.target.tagName;
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
       if (e.target.isContentEditable) return;
+      // Also block if focus is inside the Vael assistant panel or any modal/overlay
+      if (e.target.closest?.('#vael-assistant-panel, .vael-modal, .pl-editor-overlay, [data-no-shortcuts]')) return;
 
       switch (e.key) {
         case 'f':

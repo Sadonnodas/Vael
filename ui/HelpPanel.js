@@ -734,12 +734,27 @@ const HelpPanel = (() => {
       }
 
       if (sec.code) {
+        const codeWrap = document.createElement('div');
+        codeWrap.style.cssText = 'position:relative;margin:' + (sec.body || sec.items ? '8px' : '0') + ' 0 0';
+
+        const copyBtn = document.createElement('button');
+        copyBtn.textContent = 'Copy';
+        copyBtn.style.cssText = 'position:absolute;top:6px;right:6px;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:7px;padding:2px 7px;cursor:pointer;z-index:1';
+        copyBtn.addEventListener('click', () => {
+          navigator.clipboard.writeText(sec.code).then(() => {
+            copyBtn.textContent = 'Copied!';
+            copyBtn.style.color = 'var(--accent)';
+            setTimeout(() => { copyBtn.textContent = 'Copy'; copyBtn.style.color = 'var(--text-dim)'; }, 1500);
+          });
+        });
+
         const pre = document.createElement('pre');
-        pre.style.cssText = `background:var(--bg-card);border:1px solid var(--border-dim);border-radius:4px;
-          padding:10px 12px;overflow-x:auto;font-family:var(--font-mono);font-size:8px;
-          color:var(--text-muted);line-height:1.6;margin:${sec.body || sec.items ? '8px' : '0'} 0 0`;
+        pre.style.cssText = 'background:var(--bg-card);border:1px solid var(--border-dim);border-radius:4px;padding:10px 12px;overflow-x:auto;font-family:var(--font-mono);font-size:8px;color:var(--text-muted);line-height:1.6;margin:0;user-select:text;cursor:text';
         pre.textContent = sec.code;
-        body.appendChild(pre);
+
+        codeWrap.appendChild(copyBtn);
+        codeWrap.appendChild(pre);
+        body.appendChild(codeWrap);
       }
 
       block.appendChild(body);

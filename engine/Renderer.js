@@ -25,9 +25,10 @@ class Renderer {
 
     this._renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias:   false,
-      alpha:       false,
-      premultipliedAlpha: false,
+      antialias:            false,
+      alpha:                false,
+      premultipliedAlpha:   false,
+      preserveDrawingBuffer: true,  // needed for canvas.toDataURL() thumbnail capture
     });
     this._renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this._renderer.setClearColor(0x000000, 1);
@@ -160,6 +161,7 @@ class Renderer {
   _compositeFrame() {
     const W = this._cssW;
     const H = this._cssH;
+    if (W <= 0 || H <= 0) return;  // not ready yet — prevents particle init at 0×0
     const layers = this.layerStack.layers;
 
     this._syncQuads(layers, W, H);
@@ -297,15 +299,17 @@ class Renderer {
       quad._needsCanvasBlend = _isCanvasOnlyBlend(blendMode);
 
       if (quad._needsCanvasBlend) {
-        // Canvas-only blend modes: bake opacity into pixels
-        if (opacity < 0.999) this._bakeOpacity(quad.offscreen, W, H, opacity);
+        // Canvas-only blend modes: store opacity on quad for use in overlay pass
+        // Do NOT bakeOpacity here — globalAlpha on the overlay canvas is correct
+        quad._overlayOpacity = opacity;
         this._applyBlend(quad.mesh.material, 'normal', 0.0001);
       } else if (blendMode === 'normal') {
-        // Normal blend: THREE.js respects material.opacity directly
+        quad._overlayOpacity = 1;
         this._applyBlend(quad.mesh.material, blendMode, opacity);
       } else {
-        // All other WebGL blend modes (add, multiply, screen, subtract etc.)
-        // ignore material.opacity in their blend equations — bake it instead
+        // WebGL blend modes: bakeOpacity works correctly for add/screen/subtract
+        // For multiply, premultiply alpha into pixels so WebGL blend equation works
+        quad._overlayOpacity = 1;
         if (opacity < 0.999) this._bakeOpacity(quad.offscreen, W, H, opacity);
         this._applyBlend(quad.mesh.material, blendMode, 1.0);
       }
@@ -336,6 +340,9 @@ class Renderer {
     );
     if (canvasLayers.length > 0) {
       this._applyCanvasBlendLayers(canvasLayers, W, H);
+    } else if (this._overlayCanvas) {
+      // No canvas-blend layers active — clear the overlay so no ghost frames persist
+      this._overlayCtx.clearRect(0, 0, this._overlayCanvas.width, this._overlayCanvas.height);
     }
   }  // end _compositeFrame()
 
@@ -585,38 +592,40 @@ class Renderer {
    * each layer's offscreen canvas onto it with the correct 2D composite op.
    */
   _applyCanvasBlendLayers(layers, W, H) {
-    if (!this._canvas2d) {
-      this._canvas2d    = document.createElement('canvas');
-      this._canvas2dCtx = this._canvas2d.getContext('2d');
+    if (!this._overlayCanvas) {
+      this._overlayCanvas = document.createElement('canvas');
+      this._overlayCanvas.style.cssText =
+        'position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:1';
+      this.canvas.parentElement?.appendChild(this._overlayCanvas);
+      this._overlayCtx = this._overlayCanvas.getContext('2d');
     }
-    if (this._canvas2d.width !== W || this._canvas2d.height !== H) {
-      this._canvas2d.width  = W;
-      this._canvas2d.height = H;
+    if (this._overlayCanvas.width !== W || this._overlayCanvas.height !== H) {
+      this._overlayCanvas.width  = W;
+      this._overlayCanvas.height = H;
     }
-
-    const ctx = this._canvas2dCtx;
+    const ctx = this._overlayCtx;
     ctx.clearRect(0, 0, W, H);
 
-    // Draw current WebGL output as the base
-    ctx.drawImage(this.canvas, 0, 0);
+    // Step 1: Copy the WebGL scene as a base so blend modes have pixels to blend against.
+    // Without this base, blend modes like multiply/overlay composite against transparency
+    // which is effectively invisible — they all look identical.
+    // preserveDrawingBuffer:true on the WebGLRenderer makes this readback work.
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.globalAlpha = 1;
+    ctx.drawImage(this.canvas, 0, 0, W, H);
 
-    // Composite each canvas-blend layer on top
+    // Step 2: Draw each blend-mode layer on top using the correct Canvas 2D op.
     layers.forEach(layer => {
       const quad = this._quads.get(layer.id);
       if (!quad) return;
       const op = _canvas2dBlendOp(layer.blendMode);
       ctx.save();
       ctx.globalCompositeOperation = op;
-      ctx.drawImage(quad.offscreen, 0, 0);
+      ctx.globalAlpha = quad._overlayOpacity ?? 1;
+      ctx.drawImage(quad.offscreen, 0, 0, W, H,
+                    0, 0, this._overlayCanvas.width, this._overlayCanvas.height);
       ctx.restore();
     });
-
-    // Write the composited result back onto the GL canvas
-    const glCtx = this.canvas.getContext('2d');
-    if (glCtx) {
-      glCtx.clearRect(0, 0, W, H);
-      glCtx.drawImage(this._canvas2d, 0, 0);
-    }
   }
 
   dispose() {
@@ -637,13 +646,18 @@ function _blendIgnoresOpacity(mode) {
 }
 
 // Blend modes that WebGL can't do natively — handled via Canvas 2D after the GL pass.
+// Also includes multiply since WebGL multiply ignores material.opacity.
 function _isCanvasOnlyBlend(mode) {
-  return ['overlay', 'softlight', 'hardlight', 'luminosity', 'color', 'hue', 'saturation'].includes(mode);
+  return ['overlay', 'softlight', 'hardlight', 'luminosity', 'color',
+          'hue', 'saturation', 'multiply', 'difference', 'exclusion'].includes(mode);
 }
 
 // Map Vael blend mode names to Canvas 2D globalCompositeOperation values.
 function _canvas2dBlendOp(mode) {
   const map = {
+    multiply:   'multiply',
+    difference: 'difference',
+    exclusion:  'exclusion',
     overlay:    'overlay',
     softlight:  'soft-light',
     hardlight:  'hard-light',
