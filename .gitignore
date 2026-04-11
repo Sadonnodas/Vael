@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Electron build output
+dist/
+out/
+release/
+*.dmg
+*.exe
+*.AppImage
+*.deb
+*.rpm
+
+# macOS
+.DS_Store
+*.plist.bak
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor
+.vscode/settings.json
+.idea/
+
+# Vael local data (IndexedDB exports, auto-saves)
+*.vael.bak
+autosave/
