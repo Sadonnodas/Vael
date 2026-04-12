@@ -29,7 +29,7 @@ class ParticleLayer extends BaseLayer {
     version: '2.0',
     params: [
       { id: 'mode',      label: 'Mode',       type: 'enum',  default: 'drift',  triggersRefresh: true,
-        options: ['drift','fountain','orbit','pulse','fireflies','scatter','rain','vortex','trails','magnet'] },
+        options: ['drift','fountain','orbit','pulse','fireflies','scatter','rain','vortex','trails','magnet','curl','boids','ribbon','galaxy','dna'] },
       { id: 'count',     label: 'Count',      type: 'int',   default: 600,  min: 50,   max: 3000 },
       { id: 'size',      label: 'Size',       type: 'float', default: 2.0,  min: 0.5,  max: 10   },
       { id: 'speed',     label: 'Speed',      type: 'float', default: 0.4,  min: 0.05, max: 3    },
@@ -186,6 +186,39 @@ class ParticleLayer extends BaseLayer {
         p.charge  = rnd() < 0.5 ? 1 : -1;  // attract or repel
         p.mass    = rng(0.4, 1.4);
         break;
+
+      case 'curl':
+        p.vx = rng(-0.5, 0.5);
+        p.vy = rng(-0.5, 0.5);
+        break;
+
+      case 'boids':
+        p.vx         = rng(-1.5, 1.5);
+        p.vy         = rng(-1.5, 1.5);
+        p.perception = rng(40, 90);
+        break;
+
+      case 'ribbon': {
+        const ribbonCount = 6;
+        p.ribbonIdx = i % ribbonCount;
+        p.ribbonPos = i / total;
+        p.vx = rng(-0.3, 0.3);
+        p.vy = rng(-0.3, 0.3);
+        break;
+      }
+
+      case 'galaxy':
+        p.armIdx    = i % 3;
+        p.armOffset = (p.armIdx / 3) * Math.PI * 2;
+        p.radius    = rng(20, Math.min(w, h) * 0.40);
+        p.armAngle  = Math.log(Math.max(1, p.radius) / 10) * 0.5 + p.armOffset + rng(-0.3, 0.3);
+        p.speed     = rng(0.15, 0.5) * (rnd() < 0.5 ? 1 : -1);
+        break;
+
+      case 'dna':
+        p.strand = i % 2;
+        p.t      = (i / total) * Math.PI * 4;
+        break;
     }
 
     return p;
@@ -236,6 +269,14 @@ class ParticleLayer extends BaseLayer {
       tc.fillRect(0, 0, width, height);  // trail canvas: (0,0) is top-left
       tc.globalAlpha            = 1;
       tc.globalCompositeOperation = 'source-over';
+    }
+
+    // Pre-compute flock averages for boids cohesion/alignment
+    let _flockCx = 0, _flockCy = 0, _flockVx = 0, _flockVy = 0;
+    if (mode === 'boids') {
+      for (const q of this._particles) { _flockCx += q.x; _flockCy += q.y; _flockVx += q.vx; _flockVy += q.vy; }
+      const _fn = this._particles.length || 1;
+      _flockCx /= _fn; _flockCy /= _fn; _flockVx /= _fn; _flockVy /= _fn;
     }
 
     this._particles.forEach(p => {
@@ -421,6 +462,82 @@ class ParticleLayer extends BaseLayer {
           if (p.x < -hw2) { p.x =  hw2; p.vx = 0; }
           if (p.y >  hh2) { p.y = -hh2; p.vy = 0; }
           if (p.y < -hh2) { p.y =  hh2; p.vy = 0; }
+          break;
+        }
+
+        case 'curl': {
+          // Curl noise: divergence-free rotational flow
+          const eps = 0.015;
+          const st  = this._time * 0.15;
+          const n00 = VaelMath.noise2D(p.x / width + p.noiseOx,       p.y / height + p.noiseOy + st);
+          const ndx = VaelMath.noise2D(p.x / width + p.noiseOx + eps, p.y / height + p.noiseOy + st);
+          const ndy = VaelMath.noise2D(p.x / width + p.noiseOx,       p.y / height + p.noiseOy + eps + st);
+          const cx  = (ndy - n00) / eps * 0.3;
+          const cy  = -(ndx - n00) / eps * 0.3;
+          const f   = (0.12 + audio * 0.3) * speed;
+          p.vx += cx * f; p.vy += cy * f;
+          p.vx *= 0.97;   p.vy *= 0.97;
+          p.x  += p.vx;   p.y  += p.vy;
+          const chw = width/2, chh = height/2;
+          if (p.x >  chw) p.x = -chw; if (p.x < -chw) p.x =  chw;
+          if (p.y >  chh) p.y = -chh; if (p.y < -chh) p.y =  chh;
+          break;
+        }
+
+        case 'boids': {
+          // Reynolds flocking: separation + alignment + cohesion (global-average version)
+          const toC     = { x: _flockCx - p.x, y: _flockCy - p.y };
+          const cDist   = Math.sqrt(toC.x * toC.x + toC.y * toC.y) + 1;
+          const cohesion   = 0.0004 * speed;
+          const alignment  = 0.03   * speed;
+          const separation = 0.002  * speed;
+          const repel = cDist < p.perception ? separation / cDist : 0;
+          p.vx += toC.x * cohesion + (_flockVx - p.vx) * alignment - toC.x * repel;
+          p.vy += toC.y * cohesion + (_flockVy - p.vy) * alignment - toC.y * repel;
+          const maxV = 2.5 + audio * 3;
+          const pv   = Math.sqrt(p.vx * p.vx + p.vy * p.vy) || 1;
+          if (pv > maxV) { p.vx = p.vx / pv * maxV; p.vy = p.vy / pv * maxV; }
+          p.x += p.vx; p.y += p.vy;
+          const bhw = width/2, bhh = height/2;
+          if (p.x >  bhw) { p.x =  bhw; p.vx *= -1; }
+          if (p.x < -bhw) { p.x = -bhw; p.vx *= -1; }
+          if (p.y >  bhh) { p.y =  bhh; p.vy *= -1; }
+          if (p.y < -bhh) { p.y = -bhh; p.vy *= -1; }
+          break;
+        }
+
+        case 'ribbon': {
+          // Particles locked to undulating ribbon bands
+          const ribbonCount = 6;
+          const baseY = (p.ribbonIdx / ribbonCount - 0.5) * height * 0.8;
+          const wave  = Math.sin(p.ribbonPos * Math.PI * 6 + this._time + p.ribbonIdx * 1.2) * height * 0.06;
+          const audioWave = audio * height * 0.08 * Math.sin(p.ribbonPos * 5 + this._time);
+          const tx    = (p.ribbonPos - 0.5) * width;
+          const ty    = baseY + wave + audioWave;
+          p.x = VaelMath.lerp(p.x, tx, 0.04 * speed);
+          p.y = VaelMath.lerp(p.y, ty, 0.04 * speed);
+          break;
+        }
+
+        case 'galaxy': {
+          // Logarithmic spiral arms with differential rotation
+          const angSpeed = Math.abs(p.speed) * speed * dt * (0.6 + audio * 0.8) * Math.sign(p.speed);
+          p.armAngle += angSpeed;
+          const galR = p.radius * (1 + audio * 0.12 + beat * 0.08);
+          p.x = Math.cos(p.armAngle) * galR;
+          p.y = Math.sin(p.armAngle) * galR * 0.5; // flatten into disk
+          break;
+        }
+
+        case 'dna': {
+          // Double helix: two strands winding along Y axis
+          p.t += dt * speed * (0.5 + audio * 0.6);
+          const phase  = p.strand === 0 ? 0 : Math.PI;
+          const yFrac  = (p.t / (Math.PI * 4)) % 1;
+          p.y = (yFrac - 0.5) * height;
+          const helixR = Math.min(width, height) * 0.22 * (1 + beat * 0.1);
+          p.x = Math.cos(p.t * 1.5 + this._time * 0.4 + phase) * helixR;
+          if (p.t > Math.PI * 4) p.t -= Math.PI * 4;
           break;
         }
       }

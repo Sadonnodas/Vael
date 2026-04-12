@@ -651,7 +651,7 @@
                     line-height:1.7;margin-bottom:10px">
             Save your scenes here and load them instantly. Thumbnails are captured from the canvas.
           </p>
-          <div style="display:flex;gap:6px;margin-bottom:8px">
+          <div style="display:flex;gap:6px;margin-bottom:6px;align-items:center">
             <input type="text" id="pb-inline-search" placeholder="Search presets…"
               style="flex:1;background:var(--bg);border:1px solid var(--border-dim);border-radius:4px;
                      color:var(--text);font-family:var(--font-mono);font-size:9px;padding:5px 8px;outline:none" />
@@ -662,12 +662,25 @@
               <option value="name">A–Z</option>
               <option value="layers">Layers</option>
             </select>
+            <button id="pb-inline-view" title="Toggle list / grid"
+              style="background:none;border:1px solid var(--border-dim);border-radius:3px;
+                     color:var(--text-dim);font-size:11px;padding:3px 7px;cursor:pointer;flex-shrink:0">⊞</button>
           </div>
-          <div id="pb-inline-grid" style="
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-          "></div>
+          <div style="display:flex;gap:5px;margin-bottom:8px;align-items:center">
+            <button id="pb-inline-select-all"
+              style="background:none;border:1px solid var(--border-dim);border-radius:3px;
+                     color:var(--text-dim);font-family:var(--font-mono);font-size:8px;
+                     padding:3px 7px;cursor:pointer">Select all</button>
+            <button id="pb-inline-export" style="display:none;background:none;
+                     border:1px solid var(--border-dim);border-radius:3px;color:#00d4aa;
+                     font-family:var(--font-mono);font-size:8px;padding:3px 7px;cursor:pointer">↓ Export</button>
+            <button id="pb-inline-del-sel" style="display:none;background:none;
+                     border:1px solid var(--border-dim);border-radius:3px;color:#ff4444;
+                     font-family:var(--font-mono);font-size:8px;padding:3px 7px;cursor:pointer">✕ Delete</button>
+            <span id="pb-inline-sel-count" style="font-family:var(--font-mono);font-size:8px;
+                  color:var(--text-dim);margin-left:auto;display:none"></span>
+          </div>
+          <div id="pb-inline-grid" style="display:grid;grid-template-columns:1fr 1fr;gap:8px"></div>
           <div id="pb-inline-count" style="font-family:var(--font-mono);font-size:8px;
                color:var(--text-dim);margin-top:8px;text-align:center"></div>
         </div>

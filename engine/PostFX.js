@@ -260,6 +260,26 @@ const PostFX = (() => {
   function has(name)  { return _active.has(name); }
   function list()     { return Array.from(_active.keys()); }
 
-  return { add, remove, update, has, list, SHADERS };
+  /**
+   * Reorder active passes to match the given names array.
+   * Names not currently active are ignored.
+   */
+  function reorder(renderer, names) {
+    const current = Array.from(_active.entries());
+    const newOrder = names
+      .map(n => current.find(([k]) => k === n))
+      .filter(Boolean);
+    // Add any active passes not mentioned (safety)
+    current.forEach(entry => { if (!newOrder.find(([k]) => k === entry[0])) newOrder.push(entry); });
+
+    _active.clear();
+    newOrder.forEach(([k, v]) => _active.set(k, v));
+
+    // Rebuild renderer pass list in new order
+    renderer._postPasses = newOrder.map(([, v]) => v);
+    renderer._buildPostMeshes?.();
+  }
+
+  return { add, remove, update, has, list, reorder, SHADERS };
 
 })();

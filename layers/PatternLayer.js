@@ -13,7 +13,7 @@ class PatternLayer extends BaseLayer {
     version: '1.0',
     params: [
       { id: 'pattern',     label: 'Pattern',      type: 'enum',  default: 'star', triggersRefresh: true,
-        options: ['star','mandala','hexgrid','circles','lissajous','spirograph','flower','grid'] },
+        options: ['star','mandala','hexgrid','circles','lissajous','spirograph','flower','grid','triangle','rings','weave','rays','rose','maze','dots'] },
       { id: 'color',       label: 'Color',         type: 'color', default: '#ffffff' },
       { id: 'color2',      label: 'Color 2',       type: 'color', default: '#00d4aa' },
       { id: 'size',        label: 'Size',          type: 'float', default: 1.0, min: 0.1, max: 4   },
@@ -83,6 +83,13 @@ class PatternLayer extends BaseLayer {
       case 'spirograph':  this._drawSpirograph(ctx, baseSize, n, t, c1, c2, lw); break;
       case 'flower':      this._drawFlower(ctx, baseSize, n, t, c1, c2, filled); break;
       case 'grid':        this._drawGrid(ctx, width, height, baseSize, t, c1, lw); break;
+      case 'triangle':    this._drawTriangle(ctx, baseSize, n, t, c1, c2, lw, filled); break;
+      case 'rings':       this._drawRings(ctx, baseSize, n, t, c1, c2, lw); break;
+      case 'weave':       this._drawWeave(ctx, width, height, baseSize, t, c1, c2, lw); break;
+      case 'rays':        this._drawRays(ctx, baseSize, n, t, c1, c2, lw); break;
+      case 'rose':        this._drawRose(ctx, baseSize, n, t, c1, lw); break;
+      case 'maze':        this._drawMaze(ctx, width, height, baseSize, t, c1, lw); break;
+      case 'dots':        this._drawDots(ctx, width, height, baseSize, n, t, c1, c2); break;
     }
 
     ctx.restore();
@@ -318,6 +325,160 @@ class PatternLayer extends BaseLayer {
     for (let i = 0; i <= rows; i++) {
       const y = oy + i * cell + (Math.cos(t * 0.3 + i * 0.2) * cell * 0.1);
       ctx.beginPath(); ctx.moveTo(ox, y); ctx.lineTo(-ox, y); ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Sierpinski triangle (recursive subdivisions) ─────────────
+  _drawTriangle(ctx, r, n, t, c1, c2, lw, filled) {
+    const depth = Math.max(1, Math.min(n - 1, 5));
+    const rot   = t * 0.2;
+    ctx.save();
+    ctx.rotate(rot);
+    this._sierpinski(ctx, 0, -r * 0.7, r * 0.9, 0, depth, c1, c2, lw, filled);
+    ctx.restore();
+  }
+
+  _sierpinski(ctx, x1, y1, size, depth, maxDepth, c1, c2, lw, filled) {
+    const h  = size * Math.sqrt(3) / 2;
+    const ax = x1,         ay = y1;
+    const bx = x1 - size/2, by = y1 + h;
+    const cx2 = x1 + size/2, cy2 = y1 + h;
+    if (depth === 0) {
+      ctx.beginPath();
+      ctx.moveTo(ax, ay); ctx.lineTo(bx, by); ctx.lineTo(cx2, cy2);
+      ctx.closePath();
+      const col = depth % 2 === 0 ? c1 : c2;
+      ctx.strokeStyle = col; ctx.lineWidth = lw * 0.5;
+      if (filled) { ctx.fillStyle = col; ctx.globalAlpha = 0.5; ctx.fill(); ctx.globalAlpha = 1; }
+      ctx.stroke();
+      return;
+    }
+    const half = size / 2;
+    this._sierpinski(ctx, x1,         y1,     half, depth - 1, maxDepth, c1, c2, lw, filled);
+    this._sierpinski(ctx, x1 - half/2, y1 + h/2, half, depth - 1, maxDepth, c2, c1, lw, filled);
+    this._sierpinski(ctx, x1 + half/2, y1 + h/2, half, depth - 1, maxDepth, c1, c2, lw, filled);
+  }
+
+  // ── Concentric animated rings ────────────────────────────────
+  _drawRings(ctx, r, n, t, c1, c2, lw) {
+    for (let i = 1; i <= n; i++) {
+      const rr    = r * (i / n);
+      const phase = t + i * 0.4;
+      const pulse = Math.sin(phase) * 0.07 + 1;
+      ctx.beginPath();
+      ctx.arc(0, 0, rr * pulse, 0, Math.PI * 2);
+      ctx.strokeStyle = i % 2 === 0 ? c1 : c2;
+      ctx.lineWidth   = lw * (1.5 - i / n);
+      ctx.globalAlpha = 0.5 + 0.5 * (i / n);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Interlocking diagonal weave ──────────────────────────────
+  _drawWeave(ctx, W, H, cellSize, t, c1, c2, lw) {
+    const cell = cellSize * 0.2;
+    ctx.lineWidth   = lw * 0.6;
+    ctx.globalAlpha = 0.7;
+    for (let i = -Math.ceil(W / cell); i < Math.ceil(W / cell); i++) {
+      const x = i * cell + Math.sin(t * 0.4 + i * 0.3) * cell * 0.12;
+      ctx.beginPath();
+      ctx.moveTo(x, -H / 2); ctx.lineTo(x + H, H / 2);
+      ctx.strokeStyle = i % 2 === 0 ? c1 : c2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(x, -H / 2); ctx.lineTo(x - H, H / 2);
+      ctx.strokeStyle = i % 2 === 0 ? c2 : c1;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Rotating rays from centre ────────────────────────────────
+  _drawRays(ctx, r, n, t, c1, c2, lw) {
+    for (let i = 0; i < n; i++) {
+      const angle = (i / n) * Math.PI * 2 + t * 0.3;
+      const len   = r * (0.5 + 0.5 * Math.abs(Math.sin(t + i)));
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(Math.cos(angle) * len, Math.sin(angle) * len);
+      ctx.strokeStyle = i % 2 === 0 ? c1 : c2;
+      ctx.lineWidth   = lw * (1 + Math.sin(t * 0.8 + i) * 0.5);
+      ctx.globalAlpha = 0.4 + 0.6 * (i / n);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Rose curve (r = cos(k*θ)) ────────────────────────────────
+  _drawRose(ctx, r, n, t, c1, lw) {
+    const k = n % 2 === 0 ? n : n;  // odd k → n petals, even k → 2n petals
+    ctx.strokeStyle = c1;
+    ctx.lineWidth   = lw;
+    ctx.beginPath();
+    const steps = 800;
+    for (let i = 0; i <= steps; i++) {
+      const theta = (i / steps) * Math.PI * 2 * (k % 2 === 0 ? 2 : 1);
+      const rr    = r * Math.cos(k * theta + t * 0.15);
+      const x     = rr * Math.cos(theta);
+      const y     = rr * Math.sin(theta);
+      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  }
+
+  // ── Recursive maze-like grid ─────────────────────────────────
+  _drawMaze(ctx, W, H, cellSize, t, c1, lw) {
+    const cell = cellSize * 0.22;
+    const cols = Math.ceil(W / cell / 2);
+    const rows = Math.ceil(H / cell / 2);
+    ctx.strokeStyle = c1;
+    ctx.lineWidth   = lw * 0.5;
+    ctx.globalAlpha = 0.6;
+    for (let col = -cols; col <= cols; col++) {
+      for (let row = -rows; row <= rows; row++) {
+        const x = col * cell;
+        const y = row * cell;
+        // Deterministic "random" wall choice based on grid position + slow time
+        const seed = Math.abs(Math.sin(col * 7.3 + row * 13.7 + Math.floor(t * 0.2) * 99));
+        if (seed < 0.5) {
+          // Horizontal wall segment
+          ctx.beginPath();
+          ctx.moveTo(x, y); ctx.lineTo(x + cell, y);
+          ctx.stroke();
+        } else {
+          // Vertical wall segment
+          ctx.beginPath();
+          ctx.moveTo(x, y); ctx.lineTo(x, y + cell);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Dot matrix with breathing animation ──────────────────────
+  _drawDots(ctx, W, H, cellSize, n, t, c1, c2) {
+    const spacing = cellSize * (0.18 + (20 - n) * 0.008); // more complexity = tighter grid
+    const cols    = Math.ceil(W / spacing / 2) + 1;
+    const rows    = Math.ceil(H / spacing / 2) + 1;
+    for (let col = -cols; col <= cols; col++) {
+      for (let row = -rows; row <= rows; row++) {
+        const x    = col * spacing;
+        const y    = row * spacing;
+        const dist = Math.sqrt(x * x + y * y);
+        const wave = Math.sin(dist * 0.04 - t * 2 + (col + row) * 0.15);
+        const r    = Math.max(0.5, (cellSize * 0.05) * (0.5 + wave * 0.5));
+        const mix  = (wave + 1) / 2;
+        // Interpolate between c1 and c2 per dot
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, Math.PI * 2);
+        ctx.fillStyle   = mix > 0.5 ? c1 : c2;
+        ctx.globalAlpha = 0.4 + mix * 0.6;
+        ctx.fill();
+      }
     }
     ctx.globalAlpha = 1;
   }

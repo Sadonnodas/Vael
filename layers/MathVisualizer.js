@@ -31,7 +31,7 @@ class MathVisualizer extends BaseLayer {
         options: ['pi','e','phi','sqrt2','ln2','apery','euler-mascheroni','catalan'],
         showWhen: { constant: ['combo'] } },
       { id: 'mode',        label: 'Mode',           type: 'enum',  default: 'path',
-        options: ['path','tree','circle','chaos','spiral','walk','polar','lsystem','wave','constellation'] },
+        options: ['path','tree','circle','chaos','spiral','walk','polar','lsystem','wave','constellation','web','sanddune','orbit','mandelbrot','helix'] },
       { id: 'colorMode',   label: 'Color mode',     type: 'enum',  default: 'rainbow',
         options: ['rainbow','hue-range','digit','mono','warm','cool','fire','ice','gold'] },
       { id: 'colorA',      label: 'Color A',        type: 'color', default: '#00d4aa' },
@@ -176,6 +176,11 @@ class MathVisualizer extends BaseLayer {
       case 'lsystem':       this._drawLSystem(ctx, digits, width, height);       break;
       case 'wave':          this._drawWave(ctx, digits, width, height);          break;
       case 'constellation': this._drawConstellation(ctx, digits, width, height); break;
+      case 'web':          this._drawWeb(ctx, digits, width, height);          break;
+      case 'sanddune':     this._drawSandDune(ctx, digits, width, height);     break;
+      case 'orbit':        this._drawOrbit(ctx, digits, width, height);        break;
+      case 'mandelbrot':   this._drawMandelbrot(ctx, digits, width, height);   break;
+      case 'helix':        this._drawHelix(ctx, digits, width, height);        break;
     }
     ctx.restore();
   }
@@ -260,7 +265,7 @@ class MathVisualizer extends BaseLayer {
     const mode = this.params.mode;
 
     // These modes are already centred around origin — skip
-    if (['circle','chaos','spiral','polar','wave','constellation'].includes(mode)) {
+    if (['circle','chaos','spiral','polar','wave','constellation','web','sanddune','orbit','mandelbrot','helix'].includes(mode)) {
       return [0, 0];
     }
 
@@ -664,6 +669,225 @@ class MathVisualizer extends BaseLayer {
       ctx.fill();
     });
 
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Mode: Spider web — digits control radial/ring intersections ──
+
+  _drawWeb(ctx, digits, width, height) {
+    const spokes = 12;
+    const rings  = Math.min(digits.length, 10);
+    const maxR   = Math.min(width, height) * 0.42;
+    const audio  = this._audioSmooth;
+    const t      = this._time;
+
+    // Draw spokes
+    for (let s = 0; s < spokes; s++) {
+      const angle = (s / spokes) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(0, 0);
+      ctx.lineTo(Math.cos(angle) * maxR, Math.sin(angle) * maxR);
+      ctx.strokeStyle = this._getColor(s % 10, s, spokes);
+      ctx.lineWidth   = this.params.lineWidth * 0.5;
+      ctx.globalAlpha = 0.35;
+      ctx.stroke();
+    }
+
+    // Draw rings — radius modulated by digit value
+    for (let r = 1; r <= rings; r++) {
+      const d     = parseInt(digits[r - 1]);
+      const rr    = maxR * (r / rings) * (0.7 + (d / 9) * 0.3) * (1 + audio * 0.1);
+      const sway  = Math.sin(t * 0.5 + r * 0.8) * rr * 0.04;
+      ctx.beginPath();
+      for (let s = 0; s <= spokes; s++) {
+        const angle = (s / spokes) * Math.PI * 2;
+        const x = Math.cos(angle) * (rr + sway);
+        const y = Math.sin(angle) * (rr + sway);
+        if (s === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.closePath();
+      ctx.strokeStyle = this._getColor(d, r - 1, rings);
+      ctx.lineWidth   = this.params.lineWidth;
+      ctx.globalAlpha = 0.6 + audio * 0.3;
+      ctx.stroke();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Mode: Sand dune — digits as sine superposition ────────────
+
+  _drawSandDune(ctx, digits, width, height) {
+    const count  = Math.min(digits.length, 200);
+    const audio  = this._audioSmooth;
+    const t      = this._time;
+    const layers = Math.min(count, 12);
+
+    for (let l = 0; l < layers; l++) {
+      const d     = parseInt(digits[l]) || 1;
+      const yBase = (l / layers - 0.5) * height * 0.85;
+      const amp   = height * 0.04 * (1 + (d / 9) * 0.8) * (1 + audio * 1.5);
+      const freq  = 0.004 + d * 0.0006;
+      const phase = t * (0.15 + l * 0.03);
+
+      ctx.beginPath();
+      for (let px = -width / 2; px <= width / 2; px += 2) {
+        const y = yBase + Math.sin(px * freq + phase) * amp
+                        + Math.sin(px * freq * 2.3 + phase * 0.7) * amp * 0.4;
+        if (px === -width / 2) ctx.moveTo(px, y);
+        else                   ctx.lineTo(px, y);
+      }
+      ctx.lineTo(width / 2, height / 2);
+      ctx.lineTo(-width / 2, height / 2);
+      ctx.closePath();
+      ctx.fillStyle   = this._getColor(d, l, layers);
+      ctx.globalAlpha = 0.18 + (l / layers) * 0.25;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Mode: Orbit — digits as orbital radii / speeds ───────────
+
+  _drawOrbit(ctx, digits, width, height) {
+    const count  = Math.min(digits.length, 60);
+    const maxR   = Math.min(width, height) * 0.42;
+    const audio  = this._audioSmooth;
+    const t      = this._time;
+    const lw     = this.params.lineWidth;
+
+    // Draw orbital paths
+    for (let i = 0; i < count; i += 3) {
+      const d  = parseInt(digits[i]) || 1;
+      const r  = maxR * (0.1 + (i / count) * 0.9) * (1 + audio * 0.08);
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.strokeStyle = this._getColor(d, i, count);
+      ctx.lineWidth   = lw * 0.3;
+      ctx.globalAlpha = 0.2;
+      ctx.stroke();
+    }
+
+    // Draw bodies on orbits
+    for (let i = 0; i < count; i++) {
+      const d      = parseInt(digits[i]) || 1;
+      const r      = maxR * (0.1 + (i / count) * 0.9) * (1 + audio * 0.08);
+      const speed  = (1 + d * 0.3) * (i % 2 === 0 ? 1 : -1);
+      const angle  = t * speed * 0.15 + (i / count) * Math.PI * 6;
+      const x      = Math.cos(angle) * r;
+      const y      = Math.sin(angle) * r;
+      const sz     = this.params.dotSize * (0.4 + (d / 9) * 0.8) * (1 + audio * 0.4 + this._beatPulse * 0.5);
+      ctx.beginPath();
+      ctx.arc(x, y, Math.max(0.5, sz), 0, Math.PI * 2);
+      ctx.fillStyle   = this._getColor(d, i, count);
+      ctx.globalAlpha = 0.8;
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Mode: Mandelbrot slice — digits control viewport ──────────
+
+  _drawMandelbrot(ctx, digits, width, height) {
+    const count  = Math.min(digits.length, this.params.digitCount);
+    const audio  = this._audioSmooth;
+    const t      = this._time;
+    const ds     = this.params.dotSize;
+
+    // Viewport centre drifts slowly, digits steer it
+    const cx  = -0.5 + (parseInt(digits[0] || 0) / 9 - 0.5) * 0.6 + Math.sin(t * 0.05) * 0.05;
+    const cy  = (parseInt(digits[1] || 0) / 9 - 0.5) * 0.6 + Math.cos(t * 0.04) * 0.04;
+    const zoom = 1.8 - audio * 0.4;
+
+    // Sample points along digit sequence as scatter in Mandelbrot space
+    for (let i = 0; i < count; i++) {
+      const d  = parseInt(digits[i]);
+      const t2 = i / count;
+      // Map digit pairs to (re, im) with offset
+      const re = cx + (Math.cos(t2 * Math.PI * 4 + d) * 0.5) * zoom;
+      const im = cy + (Math.sin(t2 * Math.PI * 4 + d) * 0.5) * zoom;
+
+      // Quick iteration count
+      let zr = 0, zi = 0, iter = 0;
+      const MAX = 24;
+      while (zr * zr + zi * zi < 4 && iter < MAX) {
+        const tmp = zr * zr - zi * zi + re;
+        zi = 2 * zr * zi + im;
+        zr = tmp;
+        iter++;
+      }
+
+      if (iter < MAX) {
+        const escaped = iter / MAX;
+        const x = (re - cx) / zoom * Math.min(width, height) * 0.48;
+        const y = (im - cy) / zoom * Math.min(width, height) * 0.48;
+        ctx.beginPath();
+        ctx.arc(x, y, Math.max(0.5, ds * (0.3 + escaped * 0.7)), 0, Math.PI * 2);
+        ctx.fillStyle   = this._getColor(d, i, count);
+        ctx.globalAlpha = 0.5 + escaped * 0.5;
+        ctx.fill();
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Mode: Helix — digits modulate a 3D projected double helix ─
+
+  _drawHelix(ctx, digits, width, height) {
+    const count  = Math.min(digits.length, this.params.digitCount);
+    const audio  = this._audioSmooth;
+    const t      = this._time;
+    const lw     = this.params.lineWidth;
+    const maxR   = Math.min(width, height) * 0.36;
+
+    for (let strand = 0; strand < 2; strand++) {
+      const phaseOff = strand * Math.PI;
+      ctx.beginPath();
+      for (let i = 0; i < count; i++) {
+        const d     = parseInt(digits[i]);
+        const frac  = i / count;
+        const angle = frac * Math.PI * 6 + t * 0.3 + phaseOff;
+        const y     = (frac - 0.5) * height * 0.85;
+        const r     = maxR * (0.3 + (d / 9) * 0.7) * (1 + audio * 0.15);
+        const x     = Math.cos(angle) * r;
+        const depth = Math.sin(angle); // -1 = back, +1 = front
+        const alpha = (depth + 1) / 2 * 0.7 + 0.15;
+
+        if (i === 0) {
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(x, y);
+        } else {
+          ctx.lineTo(x, y);
+        }
+
+        // Draw a dot at each base pair point
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, y, Math.max(0.5, this.params.dotSize * (0.5 + depth * 0.5)), 0, Math.PI * 2);
+        ctx.fillStyle   = this._getColor(d, i, count);
+        ctx.globalAlpha = alpha * (1 + audio * 0.3);
+        ctx.fill();
+
+        // Cross-strand connector every few digits
+        if (i % 6 === 0 && strand === 0) {
+          const angle2 = angle + Math.PI;
+          const x2     = Math.cos(angle2) * r;
+          ctx.beginPath();
+          ctx.moveTo(x, y); ctx.lineTo(x2, y);
+          ctx.strokeStyle = this._getColor(d, i, count);
+          ctx.lineWidth   = lw * 0.4;
+          ctx.globalAlpha = 0.25;
+          ctx.stroke();
+        }
+
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.strokeStyle = this._getColor(d, i, count);
+        ctx.lineWidth   = lw;
+        ctx.globalAlpha = alpha;
+      }
+      ctx.stroke();
+    }
     ctx.globalAlpha = 1;
   }
 

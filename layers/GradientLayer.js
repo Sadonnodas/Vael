@@ -15,7 +15,7 @@ class GradientLayer extends BaseLayer {
     version: '3.0',
     params: [
       { id: 'mode',       label: 'Mode',          type: 'enum',  default: 'linear',
-        options: ['linear','radial','conic','diagonal-flow','aurora'] },
+        options: ['linear','radial','conic','diagonal-flow','aurora','burst','sweep','spiral','diamond','mesh','sunburst','curtain','spotlight','dusk','prism'] },
       { id: 'colorA',     label: 'Color A',       type: 'color', default: '#1a3a6b' },
       { id: 'colorB',     label: 'Color B',       type: 'color', default: '#4b0082' },
       { id: 'colorC',     label: 'Color C (mid)', type: 'color', default: '#0d2240' },
@@ -144,6 +144,189 @@ class GradientLayer extends BaseLayer {
           ctx.fillRect(-W/2, y - bh, W, bh * 2);
         }
         return;
+      }
+      case 'burst': {
+        // Radial burst: multiple rings emanating from centre
+        const t2 = this._time;
+        for (let ring = 0; ring < 4; ring++) {
+          const phase = (t2 * 0.3 + ring * 0.25) % 1;
+          const r1    = Math.max(W, H) * phase * 0.9;
+          const r2    = Math.max(W, H) * (phase + 0.12);
+          const g     = ctx.createRadialGradient(0, 0, r1, 0, 0, r2);
+          const c     = ring % 2 === 0 ? cA : cB;
+          g.addColorStop(0,   'transparent');
+          g.addColorStop(0.4, c);
+          g.addColorStop(1,   'transparent');
+          ctx.fillStyle   = g;
+          ctx.globalAlpha = 0.5 * (1 - phase);
+          ctx.fillRect(-W/2, -H/2, W, H);
+        }
+        ctx.globalAlpha = 1;
+        return;
+      }
+      case 'sweep': {
+        // Single rotating beam of colour
+        const sweepAngle = this._angleSmooth * Math.PI / 180 + this._time * 0.4;
+        const d = Math.max(W, H);
+        const g = ctx.createLinearGradient(
+          Math.cos(sweepAngle) * d * -0.5, Math.sin(sweepAngle) * d * -0.5,
+          Math.cos(sweepAngle) * d * 0.5,  Math.sin(sweepAngle) * d * 0.5
+        );
+        g.addColorStop(0,    cB);
+        g.addColorStop(0.45, 'transparent');
+        g.addColorStop(0.5,  cA);
+        g.addColorStop(0.55, 'transparent');
+        g.addColorStop(1,    cC);
+        grad = g;
+        break;
+      }
+      case 'spiral': {
+        // Approximated spiral: stacked offset radial gradients
+        const spiralT = this._time * 0.25;
+        for (let i = 0; i < 6; i++) {
+          const ang   = spiralT + (i / 6) * Math.PI * 2;
+          const ox    = Math.cos(ang) * Math.min(W, H) * 0.15;
+          const oy    = Math.sin(ang) * Math.min(W, H) * 0.15;
+          const r3    = Math.max(W, H) * 0.6;
+          const g     = ctx.createRadialGradient(ox, oy, 0, ox, oy, r3);
+          const c     = i % 2 === 0 ? cA : cB;
+          g.addColorStop(0,   c);
+          g.addColorStop(0.5, cC);
+          g.addColorStop(1,   'transparent');
+          ctx.fillStyle   = g;
+          ctx.globalAlpha = 0.25;
+          ctx.fillRect(-W/2, -H/2, W, H);
+        }
+        ctx.globalAlpha = 1;
+        return;
+      }
+      case 'diamond': {
+        // Diamond / rhombus gradient using rotated linear
+        const rad45 = (this._angleSmooth + 45) * Math.PI / 180;
+        const d4    = Math.max(W, H);
+        const g1    = ctx.createLinearGradient(
+          -Math.cos(rad45)*d4, -Math.sin(rad45)*d4,
+           Math.cos(rad45)*d4,  Math.sin(rad45)*d4
+        );
+        g1.addColorStop(0, cA); g1.addColorStop(0.5, cC); g1.addColorStop(1, cB);
+        ctx.fillStyle = g1;
+        ctx.fillRect(-W/2, -H/2, W, H);
+        const rad135 = (this._angleSmooth + 135) * Math.PI / 180;
+        const g2 = ctx.createLinearGradient(
+          -Math.cos(rad135)*d4, -Math.sin(rad135)*d4,
+           Math.cos(rad135)*d4,  Math.sin(rad135)*d4
+        );
+        g2.addColorStop(0, 'transparent'); g2.addColorStop(0.5, cA); g2.addColorStop(1, 'transparent');
+        ctx.globalAlpha = 0.55;
+        ctx.fillStyle = g2;
+        ctx.fillRect(-W/2, -H/2, W, H);
+        ctx.globalAlpha = 1;
+        return;
+      }
+      case 'mesh': {
+        // 3×3 grid of overlapping radial gradients — soft colour mesh
+        const meshR = Math.max(W, H) * 0.6;
+        const pts   = [
+          [-W*0.35, -H*0.35, cA], [0, -H*0.35, cC], [W*0.35, -H*0.35, cB],
+          [-W*0.35,  0,      cC], [0,  0,       cA], [W*0.35,  0,      cC],
+          [-W*0.35,  H*0.35, cB], [0,  H*0.35,  cC], [W*0.35,  H*0.35, cA],
+        ];
+        pts.forEach(([mx, my, mc], idx) => {
+          const drift = this._time * 0.08 + idx;
+          const ox = mx + Math.sin(drift) * W * 0.06;
+          const oy = my + Math.cos(drift * 0.7) * H * 0.06;
+          const g  = ctx.createRadialGradient(ox, oy, 0, ox, oy, meshR);
+          g.addColorStop(0, mc); g.addColorStop(1, 'transparent');
+          ctx.fillStyle = g; ctx.globalAlpha = 0.45;
+          ctx.fillRect(-W/2, -H/2, W, H);
+        });
+        ctx.globalAlpha = 1;
+        return;
+      }
+      case 'sunburst': {
+        // Alternating coloured wedges emanating from centre
+        const segments = 12;
+        const sunT     = this._time * 0.15;
+        for (let i = 0; i < segments; i++) {
+          const a0 = (i / segments) * Math.PI * 2 + sunT;
+          const a1 = ((i + 1) / segments) * Math.PI * 2 + sunT;
+          ctx.beginPath();
+          ctx.moveTo(0, 0);
+          ctx.arc(0, 0, Math.max(W, H), a0, a1);
+          ctx.fillStyle   = i % 2 === 0 ? cA : cB;
+          ctx.globalAlpha = i % 2 === 0 ? 0.7 : 0.4;
+          ctx.fill();
+        }
+        // Soft centre fade
+        const sg = ctx.createRadialGradient(0, 0, 0, 0, 0, Math.min(W, H) * 0.5);
+        sg.addColorStop(0, cC); sg.addColorStop(1, 'transparent');
+        ctx.fillStyle = sg; ctx.globalAlpha = 0.6;
+        ctx.fillRect(-W/2, -H/2, W, H);
+        ctx.globalAlpha = 1;
+        return;
+      }
+      case 'curtain': {
+        // Vertical bands like a stage curtain
+        const bands = 6;
+        const cT    = this._time * 0.12;
+        for (let i = 0; i < bands; i++) {
+          const x0    = -W/2 + (i / bands) * W;
+          const x1    = x0 + W / bands;
+          const sway  = Math.sin(cT + i * 1.1) * W * 0.04;
+          const g     = ctx.createLinearGradient(x0 + sway, 0, x1 + sway, 0);
+          const c     = i % 2 === 0 ? cA : cB;
+          g.addColorStop(0,   'transparent');
+          g.addColorStop(0.3, c);
+          g.addColorStop(0.7, c);
+          g.addColorStop(1,   'transparent');
+          ctx.fillStyle = g;
+          ctx.fillRect(x0 + sway - 20, -H/2, W / bands + 40, H);
+        }
+        return;
+      }
+      case 'spotlight': {
+        // Moving spotlight on a dark background
+        const spT = this._time * 0.3;
+        const sx  = Math.sin(spT)       * W * 0.3;
+        const sy  = Math.cos(spT * 0.7) * H * 0.25;
+        ctx.fillStyle = cC; ctx.fillRect(-W/2, -H/2, W, H);
+        const sg2 = ctx.createRadialGradient(sx, sy, 0, sx, sy, Math.min(W, H) * 0.55);
+        sg2.addColorStop(0, cA); sg2.addColorStop(0.6, cB); sg2.addColorStop(1, 'transparent');
+        ctx.fillStyle = sg2; ctx.fillRect(-W/2, -H/2, W, H);
+        return;
+      }
+      case 'dusk': {
+        // Horizon gradient: dark sky → warm horizon → dark ground
+        const duskAng = VaelMath.degToRad(this._angleSmooth);
+        const d5      = Math.max(W, H);
+        grad = ctx.createLinearGradient(
+          -Math.cos(duskAng) * d5, -Math.sin(duskAng) * d5,
+           Math.cos(duskAng) * d5,  Math.sin(duskAng) * d5
+        );
+        grad.addColorStop(0,    cB);
+        grad.addColorStop(0.35, cA);
+        grad.addColorStop(0.5,  cC);
+        grad.addColorStop(0.65, cA);
+        grad.addColorStop(1,    cB);
+        break;
+      }
+      case 'prism': {
+        // Full-spectrum prism: rainbow band across the canvas
+        const prismAng = VaelMath.degToRad(this._angleSmooth);
+        const d6       = Math.max(W, H);
+        const pg = ctx.createLinearGradient(
+          -Math.cos(prismAng) * d6, -Math.sin(prismAng) * d6,
+           Math.cos(prismAng) * d6,  Math.sin(prismAng) * d6
+        );
+        pg.addColorStop(0,    '#ff0000');
+        pg.addColorStop(0.17, '#ff9900');
+        pg.addColorStop(0.33, '#ffff00');
+        pg.addColorStop(0.5,  '#00cc00');
+        pg.addColorStop(0.67, '#0066ff');
+        pg.addColorStop(0.83, '#6600cc');
+        pg.addColorStop(1,    '#cc00cc');
+        grad = pg;
+        break;
       }
       default: { // linear
         const rad = VaelMath.degToRad(this._angleSmooth);

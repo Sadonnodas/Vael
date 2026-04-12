@@ -115,143 +115,181 @@ const PostFXPanel = (() => {
     if (!_container) return;
     _container.innerHTML = '';
 
-    const intro = document.createElement('p');
-    intro.style.cssText = 'font-size:10px;color:var(--text-muted);line-height:1.6;margin-bottom:14px';
-    intro.textContent   = 'Post-processing runs after all layers composite. Effects stack in order.';
-    _container.appendChild(intro);
+    // ── Active chain (in rendering order) ────────────────────────
+    const activeNames = PostFX.list();
 
-    EFFECTS.forEach(effect => {
-      const isActive = PostFX.has(effect.id);
-      const card     = document.createElement('div');
-      card.style.cssText = `
-        background: var(--bg-card);
-        border: 1px solid ${isActive ? 'var(--accent)' : 'var(--border-dim)'};
-        border-radius: 6px;
-        padding: 10px 12px;
-        margin-bottom: 8px;
-        transition: border-color 0.15s;
-      `;
+    if (activeNames.length > 0) {
+      const chainLabel = document.createElement('div');
+      chainLabel.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px';
+      chainLabel.textContent = 'Active chain';
+      _container.appendChild(chainLabel);
 
-      card.innerHTML = `
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:${isActive ? '10px' : '0'}">
-          <span style="flex:1;font-family:var(--font-mono);font-size:10px;
-                       color:${isActive ? 'var(--text)' : 'var(--text-muted)'}">
-            ${effect.label}
-          </span>
-          <span style="font-size:9px;color:var(--text-dim);flex:1">${effect.desc}</span>
-          <button class="fx-toggle btn ${isActive ? 'danger' : 'accent'}"
-            data-id="${effect.id}"
-            style="font-size:9px;padding:4px 10px;flex-shrink:0">
-            ${isActive ? 'Remove' : 'Add'}
-          </button>
-        </div>
-        ${isActive ? _buildParams(effect) : ''}
-      `;
-
-      // Toggle button
-      card.querySelector('.fx-toggle').addEventListener('click', () => {
-        if (PostFX.has(effect.id)) {
-          PostFX.remove(_renderer, effect.id);
-        } else {
-          PostFX.add(_renderer, effect.id, effect.defaults);
-        }
-        _render();
+      activeNames.forEach((name, idx) => {
+        const effect = EFFECTS.find(e => e.id === name);
+        if (!effect) return;
+        _container.appendChild(_buildActiveCard(effect, idx, activeNames));
       });
 
-      // Parameter sliders (only when active)
-      if (isActive) {
-        effect.params.forEach(param => {
-          const slider = card.querySelector(`[data-param="${param.id}"]`);
-          const valEl  = card.querySelector(`[data-val="${param.id}"]`);
-          if (!slider) return;
-          slider.addEventListener('input', () => {
-            const v = parseFloat(slider.value);
-            if (valEl) valEl.textContent = v.toFixed(3);
-            PostFX.update(effect.id, { [param.id]: v });
-            // Update base value for any active mod routes on this param
-            _fxMods.filter(m => m.effectId === effect.id && m.paramId === param.id)
-              .forEach(m => { m._base = v; });
-          });
-        });
+      const div = document.createElement('div');
+      div.style.cssText = 'height:1px;background:var(--border-dim);margin:14px 0';
+      _container.appendChild(div);
+    }
 
-        // ── Mod routes for this effect ──────────────────────
-        const existingMods = _fxMods.filter(m => m.effectId === effect.id);
-        if (existingMods.length > 0) {
-          const modList = document.createElement('div');
-          modList.style.cssText = 'margin-top:6px;padding-top:6px;border-top:1px solid var(--border-dim)';
-          existingMods.forEach((mod, mi) => {
-            const mRow = document.createElement('div');
-            mRow.style.cssText = 'display:flex;align-items:center;gap:5px;margin-bottom:4px;font-family:var(--font-mono);font-size:8px';
-            mRow.innerHTML = `
-              <span style="color:var(--accent2);min-width:52px">${mod.source}</span>
-              <span style="color:var(--text-dim)">→ ${mod.paramId}</span>
-              <input type="range" min="-2" max="2" step="0.05" value="${mod.depth}"
-                style="flex:1;accent-color:var(--accent2)" />
-              <span class="mod-depth-val" style="color:var(--accent2);min-width:28px">${mod.depth.toFixed(2)}</span>
-              <button class="mod-del-btn" style="background:none;border:none;cursor:pointer;color:#ff4444;font-size:10px">✕</button>
-            `;
-            mRow.querySelector('input').addEventListener('input', e => {
-              mod.depth = parseFloat(e.target.value);
-              mRow.querySelector('.mod-depth-val').textContent = mod.depth.toFixed(2);
-            });
-            mRow.querySelector('.mod-del-btn').addEventListener('click', () => {
-              const idx = _fxMods.indexOf(mod);
-              if (idx >= 0) _fxMods.splice(idx, 1);
-              _render();
-            });
-            modList.appendChild(mRow);
-          });
-          card.appendChild(modList);
-        }
+    // ── Available effects catalogue ───────────────────────────────
+    const catLabel = document.createElement('div');
+    catLabel.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px';
+    catLabel.textContent = activeNames.length > 0 ? 'Add more' : 'Effects';
+    _container.appendChild(catLabel);
 
-        // + Add mod button
-        const addModBtn = document.createElement('button');
-        addModBtn.style.cssText = 'background:none;border:1px dashed var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:8px;padding:3px 8px;cursor:pointer;width:100%;margin-top:6px';
-        addModBtn.textContent = '∿ Add modulation';
-        addModBtn.addEventListener('click', () => {
-          // Inline mini-form
-          addModBtn.style.display = 'none';
-          const form = document.createElement('div');
-          form.style.cssText = 'margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border-dim);border-radius:4px';
-          const srcOpts  = FX_MOD_SOURCES.map(s => `<option value="${s.id}">${s.label}</option>`).join('');
-          const paramOpts = effect.params.map(p => `<option value="${p.id}">${p.label}</option>`).join('');
-          form.innerHTML = `
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
-              <select class="mod-src" style="background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:8px;padding:3px">${srcOpts}</select>
-              <select class="mod-tgt" style="background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:8px;padding:3px">${paramOpts}</select>
-            </div>
-            <div style="display:flex;gap:6px">
-              <button class="mod-add-ok" style="flex:1;background:var(--accent2);border:none;border-radius:3px;color:var(--bg);font-family:var(--font-mono);font-size:8px;padding:4px;cursor:pointer">Add</button>
-              <button class="mod-add-cancel" style="background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:8px;padding:4px 8px;cursor:pointer">Cancel</button>
-            </div>
-          `;
-          form.querySelector('.mod-add-ok').addEventListener('click', () => {
-            const src = form.querySelector('.mod-src').value;
-            const tgt = form.querySelector('.mod-tgt').value;
-            const pDef = effect.params.find(p => p.id === tgt);
-            _fxMods.push({
-              id: `fxmod-${Date.now()}`,
-              effectId: effect.id,
-              paramId:  tgt,
-              source:   src,
-              depth:    0.5,
-              _smoothed: 0,
-              _base:    pDef?.default ?? 0,
-              _enabled: true,
-            });
-            _render();
-          });
-          form.querySelector('.mod-add-cancel').addEventListener('click', () => {
-            form.remove();
-            addModBtn.style.display = '';
-          });
-          card.appendChild(form);
-        });
-        card.appendChild(addModBtn);
-      }
-
-      _container.appendChild(card);
+    EFFECTS.filter(e => !PostFX.has(e.id)).forEach(effect => {
+      const row = document.createElement('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-card);border:1px solid var(--border-dim);border-radius:5px;margin-bottom:6px';
+      row.innerHTML = `
+        <div style="flex:1;min-width:0">
+          <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);margin-bottom:1px">${effect.label}</div>
+          <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">${effect.desc}</div>
+        </div>
+        <button class="btn accent" style="font-size:9px;padding:3px 10px;flex-shrink:0">Add</button>
+      `;
+      row.querySelector('button').addEventListener('click', () => {
+        PostFX.add(_renderer, effect.id, effect.defaults);
+        _render();
+      });
+      _container.appendChild(row);
     });
+  }
+
+  function _buildActiveCard(effect, idx, activeNames) {
+    const card = document.createElement('div');
+    card.style.cssText = 'background:var(--bg-card);border:1px solid var(--accent);border-radius:6px;padding:10px 12px;margin-bottom:8px';
+
+    // ── Header row ────────────────────────────────────────────
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:10px';
+
+    // Up/down reorder buttons
+    const upBtn = document.createElement('button');
+    upBtn.textContent = '↑';
+    upBtn.title = 'Move up in chain';
+    upBtn.disabled = idx === 0;
+    upBtn.style.cssText = `background:none;border:1px solid var(--border-dim);border-radius:3px;color:${idx===0?'var(--border)':'var(--text-dim)'};font-size:10px;padding:1px 5px;cursor:${idx===0?'default':'pointer'};flex-shrink:0`;
+    upBtn.addEventListener('click', () => {
+      const names = [...activeNames];
+      [names[idx-1], names[idx]] = [names[idx], names[idx-1]];
+      PostFX.reorder(_renderer, names);
+      _render();
+    });
+
+    const downBtn = document.createElement('button');
+    downBtn.textContent = '↓';
+    downBtn.title = 'Move down in chain';
+    downBtn.disabled = idx === activeNames.length - 1;
+    downBtn.style.cssText = `background:none;border:1px solid var(--border-dim);border-radius:3px;color:${idx===activeNames.length-1?'var(--border)':'var(--text-dim)'};font-size:10px;padding:1px 5px;cursor:${idx===activeNames.length-1?'default':'pointer'};flex-shrink:0`;
+    downBtn.addEventListener('click', () => {
+      const names = [...activeNames];
+      [names[idx], names[idx+1]] = [names[idx+1], names[idx]];
+      PostFX.reorder(_renderer, names);
+      _render();
+    });
+
+    const label = document.createElement('span');
+    label.style.cssText = 'flex:1;font-family:var(--font-mono);font-size:10px;color:var(--text)';
+    label.textContent = effect.label;
+
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'btn danger';
+    removeBtn.style.cssText = 'font-size:9px;padding:3px 10px;flex-shrink:0';
+    removeBtn.textContent = 'Remove';
+    removeBtn.addEventListener('click', () => {
+      PostFX.remove(_renderer, effect.id);
+      _fxMods.splice(0, _fxMods.length, ..._fxMods.filter(m => m.effectId !== effect.id));
+      _render();
+    });
+
+    header.append(upBtn, downBtn, label, removeBtn);
+    card.appendChild(header);
+
+    // ── Param sliders ─────────────────────────────────────────
+    card.insertAdjacentHTML('beforeend', _buildParams(effect));
+    effect.params.forEach(param => {
+      const slider = card.querySelector(`[data-param="${param.id}"]`);
+      const valEl  = card.querySelector(`[data-val="${param.id}"]`);
+      if (!slider) return;
+      slider.addEventListener('input', () => {
+        const v = parseFloat(slider.value);
+        if (valEl) valEl.textContent = v.toFixed(3);
+        PostFX.update(effect.id, { [param.id]: v });
+        _fxMods.filter(m => m.effectId === effect.id && m.paramId === param.id)
+          .forEach(m => { m._base = v; });
+      });
+    });
+
+    // ── Mod routes ────────────────────────────────────────────
+    const existingMods = _fxMods.filter(m => m.effectId === effect.id);
+    if (existingMods.length > 0) {
+      const modList = document.createElement('div');
+      modList.style.cssText = 'margin-top:6px;padding-top:6px;border-top:1px solid var(--border-dim)';
+      existingMods.forEach(mod => {
+        const mRow = document.createElement('div');
+        mRow.style.cssText = 'display:flex;align-items:center;gap:5px;margin-bottom:4px;font-family:var(--font-mono);font-size:8px';
+        mRow.innerHTML = `
+          <span style="color:var(--accent2);min-width:52px">${mod.source}</span>
+          <span style="color:var(--text-dim)">→ ${mod.paramId}</span>
+          <input type="range" min="-2" max="2" step="0.05" value="${mod.depth}"
+            style="flex:1;accent-color:var(--accent2)" />
+          <span class="mod-depth-val" style="color:var(--accent2);min-width:28px">${mod.depth.toFixed(2)}</span>
+          <button class="mod-del-btn" style="background:none;border:none;cursor:pointer;color:#ff4444;font-size:10px">✕</button>
+        `;
+        mRow.querySelector('input').addEventListener('input', e => {
+          mod.depth = parseFloat(e.target.value);
+          mRow.querySelector('.mod-depth-val').textContent = mod.depth.toFixed(2);
+        });
+        mRow.querySelector('.mod-del-btn').addEventListener('click', () => {
+          const i = _fxMods.indexOf(mod);
+          if (i >= 0) _fxMods.splice(i, 1);
+          _render();
+        });
+        modList.appendChild(mRow);
+      });
+      card.appendChild(modList);
+    }
+
+    // ── Add mod button ────────────────────────────────────────
+    const addModBtn = document.createElement('button');
+    addModBtn.style.cssText = 'background:none;border:1px dashed var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:8px;padding:3px 8px;cursor:pointer;width:100%;margin-top:6px';
+    addModBtn.textContent = '∿ Add modulation';
+    addModBtn.addEventListener('click', () => {
+      addModBtn.style.display = 'none';
+      const form = document.createElement('div');
+      form.style.cssText = 'margin-top:6px;padding:8px;background:var(--bg);border:1px solid var(--border-dim);border-radius:4px';
+      const srcOpts   = FX_MOD_SOURCES.map(s => `<option value="${s.id}">${s.label}</option>`).join('');
+      const paramOpts = effect.params.map(p => `<option value="${p.id}">${p.label}</option>`).join('');
+      form.innerHTML = `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:6px">
+          <select class="mod-src" style="background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:8px;padding:3px">${srcOpts}</select>
+          <select class="mod-tgt" style="background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:8px;padding:3px">${paramOpts}</select>
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="mod-add-ok" style="flex:1;background:var(--accent2);border:none;border-radius:3px;color:var(--bg);font-family:var(--font-mono);font-size:8px;padding:4px;cursor:pointer">Add</button>
+          <button class="mod-add-cancel" style="background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:8px;padding:4px 8px;cursor:pointer">Cancel</button>
+        </div>
+      `;
+      form.querySelector('.mod-add-ok').addEventListener('click', () => {
+        const src  = form.querySelector('.mod-src').value;
+        const tgt  = form.querySelector('.mod-tgt').value;
+        const pDef = effect.params.find(p => p.id === tgt);
+        _fxMods.push({ id:`fxmod-${Date.now()}`, effectId:effect.id, paramId:tgt,
+                       source:src, depth:0.5, _smoothed:0, _base:pDef?.default??0, _enabled:true });
+        _render();
+      });
+      form.querySelector('.mod-add-cancel').addEventListener('click', () => {
+        form.remove(); addModBtn.style.display = '';
+      });
+      card.appendChild(form);
+    });
+    card.appendChild(addModBtn);
+
+    return card;
   }
 
   function _buildParams(effect) {

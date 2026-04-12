@@ -93,6 +93,23 @@ class LayerStack {
           iMouseX: this._mouseX,
           iMouseY: this._mouseY,
         });
+
+        // Gate audio signals to 0 when no audio is active.
+        // Without this, the audio analyser noise floor produces small non-zero
+        // values that drive modulation even when nothing is playing.
+        // LFO, iTime, mouse, and video signals are unaffected.
+        if (!audioData?.isActive) {
+          ['bass','mid','treble','volume','rms',
+           'spectralCentroid','spectralSpread','spectralFlux',
+           'kickEnergy','snareEnergy','hihatEnergy',
+           'songPosition','songTime','iBeat'].forEach(k => { signals[k] = 0; });
+        }
+
+        // Gate video signals to 0 when no video is active.
+        if (!videoData?.isActive) {
+          ['brightness','motion','edgeDensity'].forEach(k => { signals[k] = 0; });
+        }
+
         layer.modMatrix.apply(layer, signals);
       }
 

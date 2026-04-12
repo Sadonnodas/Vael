@@ -260,6 +260,23 @@ const ModMatrixPanel = (() => {
       `;
       body.appendChild(depthRow);
 
+      // Link X+Y — only shown for scale targets
+      const isScaleTarget = route.target === 'transform.scaleX' || route.target === 'transform.scaleY';
+      if (isScaleTarget) {
+        const linkRow = document.createElement('div');
+        linkRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+        const linkLabel = document.createElement('label');
+        linkLabel.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-mono);font-size:8px;color:var(--text-muted)';
+        const linkChk = document.createElement('input');
+        linkChk.type    = 'checkbox';
+        linkChk.checked = !!route.linked;
+        linkChk.style.cssText = 'accent-color:var(--accent)';
+        linkChk.addEventListener('change', () => { route.linked = linkChk.checked; });
+        linkLabel.append(linkChk, 'Link X + Y (uniform scale)');
+        linkRow.appendChild(linkLabel);
+        body.appendChild(linkRow);
+      }
+
       // Curve + lag row
       const curveRow = document.createElement('div');
       curveRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
@@ -505,6 +522,13 @@ const ModMatrixPanel = (() => {
         </div>
       </div>
 
+      <div id="mod-link-row" style="display:none;margin-bottom:10px">
+        <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-mono);font-size:8px;color:var(--text-muted)">
+          <input type="checkbox" id="mod-link" style="accent-color:var(--accent)" />
+          Link X + Y (uniform scale)
+        </label>
+      </div>
+
       <button id="mod-confirm" class="btn accent" style="width:100%;font-size:9px">Add route</button>
     `;
   }
@@ -518,15 +542,27 @@ const ModMatrixPanel = (() => {
     form.querySelector('#mod-smooth-sl')?.addEventListener('input', e => {
       form.querySelector('#mod-smooth-val').textContent = parseFloat(e.target.value).toFixed(2);
     });
+
+    // Show/hide link checkbox based on target selection
+    const targetSel = form.querySelector('#mod-target');
+    const linkRow   = form.querySelector('#mod-link-row');
+    const _updateLinkRow = () => {
+      const t = targetSel?.value;
+      linkRow.style.display = (t === 'transform.scaleX' || t === 'transform.scaleY') ? 'block' : 'none';
+    };
+    targetSel?.addEventListener('change', _updateLinkRow);
+    _updateLinkRow();
+
     form.querySelector('#mod-confirm')?.addEventListener('click', () => {
       const source = form.querySelector('#mod-source')?.value;
       const target = form.querySelector('#mod-target')?.value;
       const depth  = parseFloat(form.querySelector('#mod-depth-sl')?.value) || 0.5;
       const smooth = parseFloat(form.querySelector('#mod-smooth-sl')?.value) || 0.1;
       const curve  = form.querySelector('input[name="mod-curve"]:checked')?.value || 'linear';
+      const linked = !!(form.querySelector('#mod-link')?.checked);
       if (!source || !target) return;
 
-      layer.modMatrix.addRoute({ source, target, depth, smooth, curve });
+      layer.modMatrix.addRoute({ source, target, depth, smooth, curve, linked });
       form.style.display = 'none';
       _renderRoutes(layer, routeList);
 

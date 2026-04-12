@@ -200,7 +200,8 @@ const PresetBrowser = (() => {
         if (def.transform) Object.assign(layer.transform, def.transform);
         if (def.modMatrix) layer.modMatrix?.fromJSON(def.modMatrix);
         if (def.params && layer.params) Object.assign(layer.params, def.params);
-        if (typeof layer.init === 'function') layer.init(layer.params || {});
+        // Pass shaderName + glsl so custom ShaderLayers restore correctly
+        if (typeof layer.init === 'function') layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
         _layerStack.add(layer);
       } catch (e) { console.warn('PresetBrowser: could not load layer', e); }
     });
@@ -208,10 +209,13 @@ const PresetBrowser = (() => {
     Toast.success(`Loaded: ${preset.name}`);
   }
 
-  // ── UI ───────────────────────────────────────────────────────
+  // ── UI state ─────────────────────────────────────────────────
 
-  let _panel     = null;
-  let _isOpen    = false;
+  let _panel      = null;
+  let _isOpen     = false;
+  let _viewMode   = 'grid';    // 'grid' | 'list'
+  let _searchText = '';
+  let _selected   = new Set(); // selected preset names
 
   function init(layerStack, layerFactory, onLoad) {
     _layerStack   = layerStack;
@@ -224,74 +228,103 @@ const PresetBrowser = (() => {
     _panel = document.createElement('div');
     _panel.id = 'preset-browser-panel';
     _panel.style.cssText = `
-      display: none;
-      position: absolute;
-      inset: 0;
-      background: var(--bg-mid);
-      z-index: 100;
-      display: none;
-      flex-direction: column;
-      overflow: hidden;
+      display:none;position:absolute;inset:0;background:var(--bg-mid);
+      z-index:100;flex-direction:column;overflow:hidden;
     `;
 
     _panel.innerHTML = `
-      <div style="
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        padding: 12px 16px;
-        border-bottom: 1px solid var(--border);
-        flex-shrink: 0;
-      ">
+      <div style="display:flex;align-items:center;gap:8px;padding:10px 12px;
+                  border-bottom:1px solid var(--border);flex-shrink:0">
         <span style="font-family:var(--font-mono);font-size:11px;letter-spacing:2px;
-                     color:var(--accent);flex:1">SCENE LIBRARY</span>
-        <span id="pb-count" style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim)"></span>
+                     color:var(--accent)">SCENE LIBRARY</span>
+        <span id="pb-count" style="font-family:var(--font-mono);font-size:9px;
+                                   color:var(--text-dim);margin-right:auto"></span>
+        <button id="pb-view-toggle" title="Toggle list / grid view"
+          style="background:none;border:1px solid var(--border-dim);border-radius:3px;
+                 color:var(--text-dim);font-size:11px;padding:2px 6px;cursor:pointer">⊞</button>
         <button id="pb-close" style="background:none;border:none;color:var(--text-dim);
-                cursor:pointer;font-size:16px;line-height:1;padding:0">✕</button>
+                cursor:pointer;font-size:16px;line-height:1;padding:0 2px">✕</button>
       </div>
-      <div id="pb-grid" style="
-        flex: 1;
-        overflow-y: auto;
-        padding: 12px;
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 8px;
-        align-content: start;
-        scrollbar-width: thin;
-        scrollbar-color: var(--border) var(--bg-mid);
-      "></div>
-      <div style="
-        padding: 10px 16px;
-        border-top: 1px solid var(--border);
-        flex-shrink: 0;
-        display: flex;
-        gap: 6px;
-      ">
+
+      <div style="padding:8px 12px;border-bottom:1px solid var(--border-dim);
+                  flex-shrink:0;display:flex;gap:6px;align-items:center">
+        <input id="pb-search" type="search" placeholder="Search scenes…"
+          style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:4px;
+                 color:var(--text);font-family:var(--font-mono);font-size:9px;padding:5px 8px"/>
+        <button id="pb-select-all" title="Select all visible"
+          style="background:none;border:1px solid var(--border-dim);border-radius:3px;
+                 color:var(--text-dim);font-family:var(--font-mono);font-size:8px;
+                 padding:3px 7px;cursor:pointer;flex-shrink:0">All</button>
+        <button id="pb-dl-selected" title="Download selected as .vaelscene files"
+          style="background:none;border:1px solid var(--border-dim);border-radius:3px;
+                 color:var(--text-dim);font-family:var(--font-mono);font-size:8px;
+                 padding:3px 7px;cursor:pointer;flex-shrink:0;display:none">↓ Export</button>
+        <button id="pb-del-selected" title="Delete selected"
+          style="background:none;border:1px solid var(--border-dim);border-radius:3px;
+                 color:#ff4444;font-family:var(--font-mono);font-size:8px;
+                 padding:3px 7px;cursor:pointer;flex-shrink:0;display:none">✕ Delete</button>
+      </div>
+
+      <div id="pb-grid" style="flex:1;overflow-y:auto;padding:10px 12px;
+                                align-content:start;scrollbar-width:thin;
+                                scrollbar-color:var(--border) var(--bg-mid)"></div>
+
+      <div style="padding:8px 12px;border-top:1px solid var(--border);
+                  flex-shrink:0;display:flex;gap:6px">
         <input type="text" id="pb-save-name" placeholder="Scene name…"
           style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:4px;
-                 color:var(--text);font-family:var(--font-mono);font-size:10px;padding:7px 10px" />
+                 color:var(--text);font-family:var(--font-mono);font-size:10px;padding:6px 10px"/>
         <button id="pb-save-btn" class="btn accent" style="flex-shrink:0;font-size:9px">
           ⊕ Save current
         </button>
       </div>
     `;
 
-    // Insert into sidebar
     const sidebar = document.getElementById('sidebar-content');
-    if (sidebar) {
-      sidebar.style.position = 'relative';
-      sidebar.appendChild(_panel);
-    }
+    if (sidebar) { sidebar.style.position = 'relative'; sidebar.appendChild(_panel); }
 
-    // Wire close
     _panel.querySelector('#pb-close').addEventListener('click', close);
 
-    // Wire save
+    _panel.querySelector('#pb-view-toggle').addEventListener('click', () => {
+      _viewMode = _viewMode === 'grid' ? 'list' : 'grid';
+      _panel.querySelector('#pb-view-toggle').textContent = _viewMode === 'grid' ? '⊞' : '☰';
+      _renderGrid();
+    });
+
+    _panel.querySelector('#pb-search').addEventListener('input', e => {
+      _searchText = e.target.value.trim().toLowerCase();
+      _selected.clear();
+      _updateBulkButtons();
+      _renderGrid();
+    });
+
+    _panel.querySelector('#pb-select-all').addEventListener('click', () => {
+      const visible = _visiblePresets();
+      const allSel  = visible.every(p => _selected.has(p.name));
+      if (allSel) { visible.forEach(p => _selected.delete(p.name)); }
+      else        { visible.forEach(p => _selected.add(p.name));    }
+      _updateBulkButtons();
+      _renderGrid();
+    });
+
+    _panel.querySelector('#pb-dl-selected').addEventListener('click', () => {
+      const presets = _getAll().filter(p => _selected.has(p.name));
+      presets.forEach(p => _downloadPreset(p));
+      Toast.success(`Downloading ${presets.length} scene${presets.length !== 1 ? 's' : ''}`);
+    });
+
+    _panel.querySelector('#pb-del-selected').addEventListener('click', () => {
+      const names = [..._selected];
+      names.forEach(n => remove(n));
+      _selected.clear();
+      _updateBulkButtons();
+      _renderGrid();
+      Toast.info(`Deleted ${names.length} scene${names.length !== 1 ? 's' : ''}`);
+    });
+
     _panel.querySelector('#pb-save-btn').addEventListener('click', () => {
       const nameEl = _panel.querySelector('#pb-save-name');
       const name   = nameEl.value.trim() || `Scene ${new Date().toLocaleTimeString()}`;
-
-      // Capture thumbnail from canvas
       let thumb = null;
       try {
         const canvas = document.getElementById('main-canvas');
@@ -300,7 +333,6 @@ const PresetBrowser = (() => {
         t.getContext('2d').drawImage(canvas, 0, 0, 120, 68);
         thumb = t.toDataURL('image/jpeg', 0.6);
       } catch {}
-
       save(_layerStack, name, thumb);
       nameEl.value = '';
       _renderGrid();
@@ -308,18 +340,46 @@ const PresetBrowser = (() => {
     });
   }
 
+  function _visiblePresets() {
+    const all = _getAll();
+    if (!_searchText) return all;
+    return all.filter(p => p.name.toLowerCase().includes(_searchText));
+  }
+
+  function _updateBulkButtons() {
+    if (!_panel) return;
+    const hasSel = _selected.size > 0;
+    _panel.querySelector('#pb-dl-selected').style.display  = hasSel ? 'block' : 'none';
+    _panel.querySelector('#pb-del-selected').style.display = hasSel ? 'block' : 'none';
+  }
+
+  function _downloadPreset(preset) {
+    const json = JSON.stringify(preset, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `${preset.name.replace(/[^a-z0-9_\-]/gi, '_')}.vaelscene`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
   function _renderGrid() {
     const grid    = _panel.querySelector('#pb-grid');
     const countEl = _panel.querySelector('#pb-count');
-    const presets = _getAll();
+    const all     = _getAll();
+    const presets = _visiblePresets();
 
-    countEl.textContent = `${presets.length} / ${MAX_CAP}`;
+    countEl.textContent = _searchText
+      ? `${presets.length} of ${all.length}`
+      : `${all.length} / ${MAX_CAP}`;
+
     grid.innerHTML = '';
 
-    // Starter templates (always shown at top if library is empty)
-    if (presets.length === 0) {
+    // Starter templates — only when library is empty and no search active
+    if (all.length === 0 && !_searchText) {
       const startersEl = document.createElement('div');
-      startersEl.style.cssText = 'grid-column:1/-1;margin-bottom:12px';
+      startersEl.style.cssText = 'margin-bottom:12px';
       startersEl.innerHTML = `
         <div style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted);
                     text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">
@@ -336,96 +396,201 @@ const PresetBrowser = (() => {
             </button>`).join('')}
         </div>
       `;
-
       startersEl.querySelectorAll('.starter-btn').forEach(btn => {
         btn.addEventListener('mouseenter', () => btn.style.borderColor = 'var(--accent)');
         btn.addEventListener('mouseleave', () => btn.style.borderColor = 'var(--border-dim)');
         btn.addEventListener('click', () => {
           const starter = STARTER_SCENES.find(s => s.id === btn.dataset.id);
-          if (starter) {
-            _applyPreset(starter.preset);
-            close();
-          }
+          if (starter) { _applyPreset(starter.preset); close(); }
         });
       });
-
       grid.appendChild(startersEl);
       return;
     }
 
-    presets.forEach(preset => {
-      const card = document.createElement('div');
-      card.style.cssText = `
-        background: var(--bg-card);
-        border: 1px solid var(--border-dim);
-        border-radius: 6px;
-        overflow: hidden;
-        cursor: pointer;
-        transition: border-color 0.15s, transform 0.1s;
-        position: relative;
-      `;
+    if (presets.length === 0) {
+      const empty = document.createElement('div');
+      empty.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-dim);padding:20px;text-align:center';
+      empty.textContent = 'No scenes match your search';
+      grid.appendChild(empty);
+      return;
+    }
 
-      card.innerHTML = `
-        ${preset.thumbnail
-          ? `<img src="${preset.thumbnail}" style="width:100%;aspect-ratio:16/9;
-               object-fit:cover;display:block;border-bottom:1px solid var(--border-dim)">`
-          : `<div style="width:100%;aspect-ratio:16/9;background:var(--bg);
-               display:flex;align-items:center;justify-content:center;
-               font-size:20px;border-bottom:1px solid var(--border-dim)">◈</div>`
-        }
-        <div style="padding:6px 8px">
-          <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);
-                      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-                      margin-bottom:2px">${preset.name}</div>
-          <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
-            ${preset.layers?.length ?? 0} layers
-          </div>
+    if (_viewMode === 'grid') {
+      grid.style.display = 'grid';
+      grid.style.gridTemplateColumns = '1fr 1fr';
+      grid.style.gap = '8px';
+      presets.forEach(preset => grid.appendChild(_buildGridCard(preset)));
+    } else {
+      grid.style.display = 'flex';
+      grid.style.flexDirection = 'column';
+      grid.style.gap = '4px';
+      presets.forEach(preset => grid.appendChild(_buildListRow(preset)));
+    }
+  }
+
+  function _buildGridCard(preset) {
+    const isSel = _selected.has(preset.name);
+    const card  = document.createElement('div');
+    card.style.cssText = `
+      background:var(--bg-card);border:1px solid ${isSel ? 'var(--accent)' : 'var(--border-dim)'};
+      border-radius:6px;overflow:hidden;cursor:pointer;
+      transition:border-color 0.15s,transform 0.1s;position:relative;
+    `;
+
+    card.innerHTML = `
+      <div class="pb-sel-chk" style="position:absolute;top:5px;left:5px;z-index:1;
+        width:16px;height:16px;border-radius:3px;
+        background:${isSel ? 'var(--accent)' : 'rgba(0,0,0,0.55)'};
+        border:1px solid ${isSel ? 'var(--accent)' : 'rgba(255,255,255,0.25)'};
+        display:flex;align-items:center;justify-content:center;
+        font-size:10px;color:var(--bg)">${isSel ? '✓' : ''}</div>
+      ${preset.thumbnail
+        ? `<img src="${preset.thumbnail}" style="width:100%;aspect-ratio:16/9;
+             object-fit:cover;display:block;border-bottom:1px solid var(--border-dim)">`
+        : `<div style="width:100%;aspect-ratio:16/9;background:var(--bg);
+             display:flex;align-items:center;justify-content:center;
+             font-size:20px;border-bottom:1px solid var(--border-dim)">◈</div>`
+      }
+      <div style="padding:5px 8px">
+        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);
+                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                    margin-bottom:1px">${preset.name}</div>
+        <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
+          ${preset.layers?.length ?? 0} layers
         </div>
-        <div class="pb-card-actions" style="
-          position:absolute;top:4px;right:4px;
-          display:flex;gap:3px;opacity:0;transition:opacity 0.15s
-        ">
-          <button class="pb-del" title="Delete"
-            style="background:rgba(0,0,0,0.7);border:none;border-radius:3px;
-                   color:#ff4444;cursor:pointer;font-size:10px;padding:2px 5px">✕</button>
-        </div>
-      `;
+      </div>
+      <div class="pb-card-actions" style="position:absolute;top:4px;right:4px;
+        display:flex;gap:3px;opacity:0;transition:opacity 0.15s">
+        <button class="pb-dl" title="Download"
+          style="background:rgba(0,0,0,0.7);border:none;border-radius:3px;
+                 color:#00d4aa;cursor:pointer;font-size:10px;padding:2px 5px">↓</button>
+        <button class="pb-del" title="Delete"
+          style="background:rgba(0,0,0,0.7);border:none;border-radius:3px;
+                 color:#ff4444;cursor:pointer;font-size:10px;padding:2px 5px">✕</button>
+      </div>
+    `;
 
-      card.addEventListener('mouseenter', () => {
-        card.style.borderColor = 'var(--accent)';
-        card.style.transform   = 'scale(1.02)';
-        card.querySelector('.pb-card-actions').style.opacity = '1';
-      });
-      card.addEventListener('mouseleave', () => {
-        card.style.borderColor = 'var(--border-dim)';
-        card.style.transform   = 'scale(1)';
-        card.querySelector('.pb-card-actions').style.opacity = '0';
-      });
-
-      card.addEventListener('click', e => {
-        if (e.target.closest('.pb-card-actions')) return;
-        _applyPreset(preset);
-        close();
-      });
-
-      card.querySelector('.pb-del').addEventListener('click', e => {
-        e.stopPropagation();
-        remove(preset.name);
-        _renderGrid();
-        Toast.info(`Deleted "${preset.name}"`);
-      });
-
-      grid.appendChild(card);
+    card.addEventListener('mouseenter', () => {
+      if (!_selected.has(preset.name)) card.style.borderColor = 'var(--accent2)';
+      card.style.transform = 'scale(1.02)';
+      card.querySelector('.pb-card-actions').style.opacity = '1';
     });
+    card.addEventListener('mouseleave', () => {
+      card.style.borderColor = _selected.has(preset.name) ? 'var(--accent)' : 'var(--border-dim)';
+      card.style.transform = 'scale(1)';
+      card.querySelector('.pb-card-actions').style.opacity = '0';
+    });
+
+    // Click body = load; click checkbox = select toggle
+    card.addEventListener('click', e => {
+      if (e.target.closest('.pb-card-actions') || e.target.closest('.pb-sel-chk')) return;
+      _applyPreset(preset);
+      close();
+    });
+    card.querySelector('.pb-sel-chk').addEventListener('click', e => {
+      e.stopPropagation();
+      _toggleSelect(preset.name);
+      _renderGrid();
+    });
+    card.querySelector('.pb-dl').addEventListener('click', e => {
+      e.stopPropagation();
+      _downloadPreset(preset);
+    });
+    card.querySelector('.pb-del').addEventListener('click', e => {
+      e.stopPropagation();
+      _selected.delete(preset.name);
+      remove(preset.name);
+      _updateBulkButtons();
+      _renderGrid();
+      Toast.info(`Deleted "${preset.name}"`);
+    });
+
+    return card;
+  }
+
+  function _buildListRow(preset) {
+    const isSel = _selected.has(preset.name);
+    const row   = document.createElement('div');
+    row.style.cssText = `
+      display:flex;align-items:center;gap:8px;padding:6px 8px;
+      background:var(--bg-card);border:1px solid ${isSel ? 'var(--accent)' : 'var(--border-dim)'};
+      border-radius:5px;cursor:pointer;transition:border-color 0.15s;
+    `;
+
+    // Checkbox
+    const chk = document.createElement('div');
+    chk.style.cssText = `flex-shrink:0;width:14px;height:14px;border-radius:3px;
+      background:${isSel ? 'var(--accent)' : 'transparent'};
+      border:1px solid ${isSel ? 'var(--accent)' : 'var(--border)'};
+      display:flex;align-items:center;justify-content:center;
+      font-size:9px;color:var(--bg);cursor:pointer`;
+    chk.textContent = isSel ? '✓' : '';
+    chk.addEventListener('click', e => { e.stopPropagation(); _toggleSelect(preset.name); _renderGrid(); });
+
+    // Thumbnail
+    const thumb = document.createElement('div');
+    thumb.style.cssText = 'flex-shrink:0;width:48px;height:27px;border-radius:3px;overflow:hidden;background:var(--bg)';
+    if (preset.thumbnail) {
+      const img = document.createElement('img');
+      img.src = preset.thumbnail;
+      img.style.cssText = 'width:100%;height:100%;object-fit:cover';
+      thumb.appendChild(img);
+    } else {
+      thumb.style.cssText += ';display:flex;align-items:center;justify-content:center;font-size:14px';
+      thumb.textContent = '◈';
+    }
+
+    // Name + meta
+    const info = document.createElement('div');
+    info.style.cssText = 'flex:1;min-width:0';
+    info.innerHTML = `
+      <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${preset.name}</div>
+      <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
+        ${preset.layers?.length ?? 0} layers
+      </div>
+    `;
+
+    // Actions
+    const dlBtn = document.createElement('button');
+    dlBtn.title = 'Download';
+    dlBtn.style.cssText = 'background:none;border:none;color:#00d4aa;cursor:pointer;font-size:12px;padding:2px 4px;flex-shrink:0';
+    dlBtn.textContent = '↓';
+    dlBtn.addEventListener('click', e => { e.stopPropagation(); _downloadPreset(preset); });
+
+    const delBtn = document.createElement('button');
+    delBtn.title = 'Delete';
+    delBtn.style.cssText = 'background:none;border:none;color:#ff4444;cursor:pointer;font-size:12px;padding:2px 4px;flex-shrink:0';
+    delBtn.textContent = '✕';
+    delBtn.addEventListener('click', e => { e.stopPropagation(); _selected.delete(preset.name); remove(preset.name); _updateBulkButtons(); _renderGrid(); Toast.info(`Deleted "${preset.name}"`); });
+
+    row.append(chk, thumb, info, dlBtn, delBtn);
+
+    row.addEventListener('mouseenter', () => { if (!isSel) row.style.borderColor = 'var(--accent2)'; });
+    row.addEventListener('mouseleave', () => { row.style.borderColor = _selected.has(preset.name) ? 'var(--accent)' : 'var(--border-dim)'; });
+    row.addEventListener('click', () => { _applyPreset(preset); close(); });
+
+    return row;
+  }
+
+  function _toggleSelect(name) {
+    if (_selected.has(name)) _selected.delete(name);
+    else _selected.add(name);
+    _updateBulkButtons();
   }
 
   function open() {
     if (!_panel) return;
+    _searchText = '';
+    _selected.clear();
+    const searchEl = _panel.querySelector('#pb-search');
+    if (searchEl) searchEl.value = '';
+    _updateBulkButtons();
     _renderGrid();
     _panel.style.display = 'flex';
     _isOpen = true;
 
-    // Pre-fill name input from current scene name input
     const sceneNameEl = document.getElementById('preset-name');
     const pbNameEl    = _panel.querySelector('#pb-save-name');
     if (sceneNameEl && pbNameEl && !pbNameEl.value) {

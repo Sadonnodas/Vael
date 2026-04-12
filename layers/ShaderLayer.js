@@ -640,6 +640,55 @@ void main(){
   gl_FragColor=vec4(clamp(col,0.,1.),1.);
 }`,
 
+  newton: `
+// iParam1 — polynomial root count (3–6)
+// iParam2 — zoom / iteration depth
+// iParam3 — colour blend sharpness
+// Newton fractal: z → z - f(z)/f'(z) for z^n - 1 = 0
+vec2 cDiv(vec2 a, vec2 b){ float d=dot(b,b); return vec2(dot(a,b),a.y*b.x-a.x*b.y)/d; }
+vec2 cMul2(vec2 a, vec2 b){ return vec2(a.x*b.x-a.y*b.y, a.x*b.y+a.y*b.x); }
+vec2 cPow(vec2 z, int n){
+  vec2 r=vec2(1.,0.);
+  for(int i=0;i<6;i++){ if(i>=n)break; r=cMul2(r,z); }
+  return r;
+}
+void main(){
+  vec2 uv=(gl_FragCoord.xy-.5*iResolution.xy)/iResolution.y;
+  uv*=iScale*mix(.8,2.,1.-iParam2);
+  float t=iTime*iSpeed*.05;
+  // Slowly rotate viewport
+  float cs=cos(t*.3),sn=sin(t*.3);
+  uv=vec2(cs*uv.x-sn*uv.y, sn*uv.x+cs*uv.y);
+
+  int n=3+int(iParam1*3.); // 3–6 roots
+  vec2 z=uv;
+  int root=-1;
+  float conv=0.;
+  const int ITER=40;
+  for(int i=0;i<ITER;i++){
+    // f(z)=z^n - 1,  f'(z)=n*z^(n-1)
+    vec2 zn   = cPow(z,n);
+    vec2 znm1 = cPow(z,n-1);
+    vec2 denom = vec2(float(n),0.)*znm1;
+    z = z - cDiv(zn-vec2(1.,0.), denom);
+    // Check which root we converged to
+    for(int r=0;r<6;r++){
+      if(r>=n) break;
+      float ang=float(r)/float(n)*6.28318+t*.1;
+      vec2 rootPt=vec2(cos(ang),sin(ang));
+      if(length(z-rootPt)<.002){ root=r; conv=1.-float(i)/float(ITER); break; }
+    }
+    if(root>=0) break;
+  }
+  if(root<0){ gl_FragColor=vec4(0.,0.,0.,1.); return; }
+  float frac=float(root)/max(float(n)-1.,1.);
+  vec3 col=mix(iColorA,iColorB,frac);
+  float sharp=mix(.2,2.,iParam3);
+  col*=pow(conv,sharp)*iIntensity*(1.+iBass*.4);
+  col+=iBeat*.1;
+  gl_FragColor=vec4(clamp(col,0.,1.),1.);
+}`,
+
   lissajous: `
 // iParam1 — X frequency (1–6)
 // iParam2 — Y frequency (1–6)

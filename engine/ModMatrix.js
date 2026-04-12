@@ -15,7 +15,8 @@
 
 class ModRoute {
   constructor({ source, target, depth = 0.5, smooth = 0.1,
-                min = null, max = null, invert = false, curve = 'linear' }) {
+                min = null, max = null, invert = false, curve = 'linear',
+                linked = false }) {
     this.id      = `mod-${Date.now()}-${Math.random().toString(36).slice(2,5)}`;
     this.source  = source;
     this.target  = target;
@@ -25,6 +26,7 @@ class ModRoute {
     this.max     = max;
     this.invert  = invert;  // legacy — use negative depth instead
     this.curve   = curve;   // 'linear' | 'exp' | 'log' | 'scurve' | 'step' | 'invert'
+    this.linked  = linked;  // when true on scaleX or scaleY route, drives both axes
 
     this._smoothed = 0;
   }
@@ -32,7 +34,7 @@ class ModRoute {
   toJSON() {
     return { source: this.source, target: this.target, depth: this.depth,
              smooth: this.smooth, min: this.min, max: this.max,
-             invert: this.invert, curve: this.curve };
+             invert: this.invert, curve: this.curve, linked: this.linked };
   }
 }
 
@@ -95,6 +97,14 @@ class ModMatrix {
         const modValue = base + route._smoothed * depth * r;
         const clamped  = Math.max(pMin, Math.min(pMax, modValue));
         if (layer.transform) layer.transform[transformKey] = clamped;
+
+        // Linked uniform scale: if targeting scaleX or scaleY with linked=true,
+        // apply the same computed value to both axes.
+        if (route.linked && layer.transform &&
+            (transformKey === 'scaleX' || transformKey === 'scaleY')) {
+          layer.transform.scaleX = clamped;
+          layer.transform.scaleY = clamped;
+        }
 
       } else if (target === 'opacity') {
         // Opacity: base is current layer.opacity.

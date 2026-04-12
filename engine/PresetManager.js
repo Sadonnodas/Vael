@@ -117,7 +117,7 @@ const PresetManager = (() => {
               if (childDef.transform) Object.assign(child.transform, childDef.transform);
               if (childDef.modMatrix) child.modMatrix?.fromJSON(childDef.modMatrix, child);
               if (childDef.params && child.params) Object.assign(child.params, childDef.params);
-              if (typeof child.init === 'function') child.init(child.params || {});
+              if (typeof child.init === 'function') child.init({ shaderName: childDef.shaderName, glsl: childDef.glsl, ...child.params });
               layer.addChild(child);
             } catch (e) { errors.push(`Error loading group child: ${e.message}`); }
           });
@@ -231,12 +231,12 @@ const PresetManager = (() => {
             if (cd.transform) Object.assign(child.transform, cd.transform);
             if (cd.modMatrix) child.modMatrix?.fromJSON(cd.modMatrix, child);
             if (cd.params && child.params) Object.assign(child.params, cd.params);
-            if (typeof child.init === 'function') child.init(child.params || {});
+            if (typeof child.init === 'function') child.init({ shaderName: cd.shaderName, glsl: cd.glsl, ...child.params });
             layer.addChild(child);
           });
           layer.collapsed = def.collapsed ?? false;
         }
-        if (typeof layer.init === 'function') layer.init(layer.params || {});
+        if (typeof layer.init === 'function') layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
         layerStack.add(layer);
       } catch {}
     });

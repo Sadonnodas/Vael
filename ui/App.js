@@ -264,6 +264,28 @@
     _renderInlinePresetGrid();
   });
 
+  // Inline preset grid state
+  let _pbViewMode  = 'grid';  // 'grid' | 'list'
+  let _pbSelected  = new Set();
+
+  function _pbUpdateBulkBtns() {
+    const hasSel   = _pbSelected.size > 0;
+    const expBtn   = document.getElementById('pb-inline-export');
+    const delBtn   = document.getElementById('pb-inline-del-sel');
+    const cntEl    = document.getElementById('pb-inline-sel-count');
+    if (expBtn) expBtn.style.display = hasSel ? 'block' : 'none';
+    if (delBtn) delBtn.style.display = hasSel ? 'block' : 'none';
+    if (cntEl)  { cntEl.style.display = hasSel ? 'inline' : 'none'; cntEl.textContent = `${_pbSelected.size} selected`; }
+  }
+
+  function _pbDownload(preset) {
+    const blob = new Blob([JSON.stringify(preset, null, 2)], { type: 'application/json' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href = url; a.download = `${preset.name.replace(/[^a-z0-9_\-]/gi,'_')}.vaelscene`; a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  }
+
   // Render inline preset grid in the SCENES tab
   function _renderInlinePresetGrid() {
     const grid    = document.getElementById('pb-inline-grid');
@@ -292,6 +314,17 @@
       ? `${presets.length} result${presets.length !== 1 ? 's' : ''}`
       : `${presets.length} preset${presets.length !== 1 ? 's' : ''} saved`;
 
+    // Apply view mode to grid container
+    if (_pbViewMode === 'grid') {
+      grid.style.display = 'grid';
+      grid.style.gridTemplateColumns = '1fr 1fr';
+      grid.style.gap = '8px';
+    } else {
+      grid.style.display = 'flex';
+      grid.style.flexDirection = 'column';
+      grid.style.gap = '4px';
+    }
+
     grid.innerHTML = '';
 
     if (presets.length === 0 && query) {
@@ -310,92 +343,145 @@
     }
 
     presets.forEach(preset => {
-      const card = document.createElement('div');
-      card.style.cssText = `
-        background: var(--bg-card);
-        border: 1px solid var(--border-dim);
-        border-radius: 6px;
-        overflow: hidden;
-        cursor: pointer;
-        transition: border-color 0.15s, transform 0.1s;
-        position: relative;
-      `;
+      const isSel = _pbSelected.has(preset.name);
 
-      const layerTypes = [...new Set((preset.layers || []).map(l =>
-        (l.type || '').replace('Layer','').replace('Visualizer','Math') || '?'
-      ))].slice(0, 3);
+      if (_pbViewMode === 'list') {
+        // ── List row ───────────────────────────────────────────
+        const row = document.createElement('div');
+        row.style.cssText = `display:flex;align-items:center;gap:7px;padding:5px 7px;
+          background:var(--bg-card);border:1px solid ${isSel?'var(--accent)':'var(--border-dim)'};
+          border-radius:4px;cursor:pointer;transition:border-color 0.15s`;
 
-      const savedDate = preset.saved
-        ? new Date(preset.saved).toLocaleDateString(undefined, { month:'short', day:'numeric' })
-        : '';
+        const chk = document.createElement('div');
+        chk.style.cssText = `flex-shrink:0;width:13px;height:13px;border-radius:2px;
+          background:${isSel?'var(--accent)':'transparent'};
+          border:1px solid ${isSel?'var(--accent)':'var(--border)'};
+          display:flex;align-items:center;justify-content:center;font-size:8px;color:var(--bg)`;
+        chk.textContent = isSel ? '✓' : '';
+        chk.addEventListener('click', e => {
+          e.stopPropagation();
+          isSel ? _pbSelected.delete(preset.name) : _pbSelected.add(preset.name);
+          _pbUpdateBulkBtns(); _renderInlinePresetGrid();
+        });
 
-      card.innerHTML = `
-        ${preset.thumbnail
-          ? `<img src="${preset.thumbnail}" style="width:100%;aspect-ratio:16/9;
-               object-fit:cover;display:block;border-bottom:1px solid var(--border-dim)">`
-          : `<div style="width:100%;aspect-ratio:16/9;background:var(--bg);
-               display:flex;align-items:center;justify-content:center;
-               font-size:18px;border-bottom:1px solid var(--border-dim);color:var(--text-dim)">◈</div>`
-        }
-        <div style="padding:5px 7px">
-          <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);
-                      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px">
-            ${preset.name}
+        const thumb = document.createElement('div');
+        thumb.style.cssText = 'flex-shrink:0;width:42px;height:24px;border-radius:2px;overflow:hidden;background:var(--bg)';
+        if (preset.thumbnail) {
+          const img = document.createElement('img');
+          img.src = preset.thumbnail; img.style.cssText = 'width:100%;height:100%;object-fit:cover';
+          thumb.appendChild(img);
+        } else { thumb.style.cssText += ';display:flex;align-items:center;justify-content:center;font-size:12px'; thumb.textContent='◈'; }
+
+        const info = document.createElement('div');
+        info.style.cssText = 'flex:1;min-width:0';
+        const layerTypes = [...new Set((preset.layers||[]).map(l=>(l.type||'').replace('Layer','').replace('Visualizer','Math')||'?'))].slice(0,3);
+        info.innerHTML = `
+          <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${preset.name}</div>
+          <div style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim)">${preset.layers?.length??0} layers · ${layerTypes.join(', ')}</div>
+        `;
+
+        const dlBtn = document.createElement('button');
+        dlBtn.title='Download'; dlBtn.style.cssText='background:none;border:none;color:#00d4aa;cursor:pointer;font-size:11px;padding:1px 3px;flex-shrink:0';
+        dlBtn.textContent='↓'; dlBtn.addEventListener('click',e=>{e.stopPropagation();_pbDownload(preset);});
+
+        const delBtn = document.createElement('button');
+        delBtn.title='Delete'; delBtn.style.cssText='background:none;border:none;color:#ff4444;cursor:pointer;font-size:11px;padding:1px 3px;flex-shrink:0';
+        delBtn.textContent='✕'; delBtn.addEventListener('click',e=>{e.stopPropagation();_pbSelected.delete(preset.name);PresetBrowser.remove(preset.name);_pbUpdateBulkBtns();_renderInlinePresetGrid();Toast.info(`Deleted "${preset.name}"`);});
+
+        row.append(chk, thumb, info, dlBtn, delBtn);
+        row.addEventListener('mouseenter',()=>{if(!_pbSelected.has(preset.name))row.style.borderColor='var(--accent2)';});
+        row.addEventListener('mouseleave',()=>{row.style.borderColor=_pbSelected.has(preset.name)?'var(--accent)':'var(--border-dim)';});
+        row.addEventListener('click',()=>{PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();});
+
+        grid.appendChild(row);
+
+      } else {
+        // ── Grid card ──────────────────────────────────────────
+        const card = document.createElement('div');
+        card.style.cssText = `background:var(--bg-card);border:1px solid ${isSel?'var(--accent)':'var(--border-dim)'};
+          border-radius:6px;overflow:hidden;cursor:pointer;transition:border-color 0.15s,transform 0.1s;position:relative`;
+
+        const layerTypes = [...new Set((preset.layers||[]).map(l=>(l.type||'').replace('Layer','').replace('Visualizer','Math')||'?'))].slice(0,3);
+        const savedDate  = preset.saved ? new Date(preset.saved).toLocaleDateString(undefined,{month:'short',day:'numeric'}) : '';
+
+        card.innerHTML = `
+          <div class="pb-sel" style="position:absolute;top:4px;left:4px;z-index:1;width:15px;height:15px;
+            border-radius:2px;background:${isSel?'var(--accent)':'rgba(0,0,0,0.55)'};
+            border:1px solid ${isSel?'var(--accent)':'rgba(255,255,255,0.2)'};
+            display:flex;align-items:center;justify-content:center;font-size:9px;color:var(--bg)">${isSel?'✓':''}</div>
+          ${preset.thumbnail
+            ? `<img src="${preset.thumbnail}" style="width:100%;aspect-ratio:16/9;object-fit:cover;display:block;border-bottom:1px solid var(--border-dim)">`
+            : `<div style="width:100%;aspect-ratio:16/9;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:18px;border-bottom:1px solid var(--border-dim);color:var(--text-dim)">◈</div>`
+          }
+          <div style="padding:5px 7px">
+            <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px">${preset.name}</div>
+            <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:3px">
+              ${layerTypes.map(t=>`<span style="font-family:var(--font-mono);font-size:7px;background:rgba(255,255,255,0.06);border-radius:2px;padding:1px 3px;color:var(--text-dim)">${t}</span>`).join('')}
+            </div>
+            <div style="display:flex;justify-content:space-between">
+              <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim)">${preset.layers?.length??0} layers</span>
+              <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim);opacity:0.6">${savedDate}</span>
+            </div>
           </div>
-          <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:3px">
-            ${layerTypes.map(t =>
-              `<span style="font-family:var(--font-mono);font-size:7px;background:rgba(255,255,255,0.06);
-                            border-radius:2px;padding:1px 3px;color:var(--text-dim)">${t}</span>`
-            ).join('')}
+          <div class="pb-card-acts" style="position:absolute;top:3px;right:3px;display:flex;gap:2px;opacity:0;transition:opacity 0.15s">
+            <button class="pb-dl-btn" title="Download" style="background:rgba(0,0,0,0.7);border:none;border-radius:2px;color:#00d4aa;cursor:pointer;font-size:9px;padding:1px 4px">↓</button>
+            <button class="pb-inline-del" title="Delete" style="background:rgba(0,0,0,0.7);border:none;border-radius:2px;color:#ff4444;cursor:pointer;font-size:9px;padding:1px 4px">✕</button>
           </div>
-          <div style="display:flex;justify-content:space-between">
-            <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim)">
-              ${preset.layers?.length ?? 0} layers
-            </span>
-            <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim);opacity:0.6">
-              ${savedDate}
-            </span>
-          </div>
-        </div>
-        <button class="pb-inline-del" style="position:absolute;top:3px;right:3px;
-          background:rgba(0,0,0,0.6);border:none;border-radius:2px;color:#ff4444;
-          cursor:pointer;font-size:9px;padding:1px 4px;opacity:0;transition:opacity 0.15s">✕</button>
-      `;
+        `;
 
-      card.addEventListener('mouseenter', () => {
-        card.style.borderColor = 'var(--accent)';
-        card.style.transform   = 'scale(1.02)';
-        card.querySelector('.pb-inline-del').style.opacity = '1';
-      });
-      card.addEventListener('mouseleave', () => {
-        card.style.borderColor = 'var(--border-dim)';
-        card.style.transform   = 'scale(1)';
-        card.querySelector('.pb-inline-del').style.opacity = '0';
-      });
+        card.addEventListener('mouseenter',()=>{if(!_pbSelected.has(preset.name))card.style.borderColor='var(--accent2)';card.style.transform='scale(1.02)';card.querySelector('.pb-card-acts').style.opacity='1';});
+        card.addEventListener('mouseleave',()=>{card.style.borderColor=_pbSelected.has(preset.name)?'var(--accent)':'var(--border-dim)';card.style.transform='scale(1)';card.querySelector('.pb-card-acts').style.opacity='0';});
+        card.addEventListener('click',e=>{
+          if(e.target.closest('.pb-card-acts')||e.target.closest('.pb-sel'))return;
+          PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();
+        });
+        card.querySelector('.pb-sel').addEventListener('click',e=>{
+          e.stopPropagation();
+          isSel ? _pbSelected.delete(preset.name) : _pbSelected.add(preset.name);
+          _pbUpdateBulkBtns(); _renderInlinePresetGrid();
+        });
+        card.querySelector('.pb-dl-btn').addEventListener('click',e=>{e.stopPropagation();_pbDownload(preset);});
+        card.querySelector('.pb-inline-del').addEventListener('click',e=>{
+          e.stopPropagation();_pbSelected.delete(preset.name);
+          PresetBrowser.remove(preset.name);_pbUpdateBulkBtns();_renderInlinePresetGrid();
+          Toast.info(`Deleted "${preset.name}"`);
+        });
 
-      card.addEventListener('click', e => {
-        if (e.target.closest('.pb-inline-del')) return;
-        PresetBrowser._applyPreset(preset);
-        Toast.success(`Loaded: ${preset.name}`);
-        _renderInlinePresetGrid();
-      });
-
-      card.querySelector('.pb-inline-del').addEventListener('click', e => {
-        e.stopPropagation();
-        PresetBrowser.remove(preset.name);
-        _renderInlinePresetGrid();
-        Toast.info(`Deleted "${preset.name}"`);
-      });
-
-      grid.appendChild(card);
+        grid.appendChild(card);
+      }
     });
   }
 
-  // Wire search + sort live filtering
+  // Wire toolbar controls
   document.getElementById('pb-inline-search')?.addEventListener('input',  _renderInlinePresetGrid);
   document.getElementById('pb-inline-sort')?.addEventListener('change',   _renderInlinePresetGrid);
+  document.getElementById('pb-inline-view')?.addEventListener('click', () => {
+    _pbViewMode = _pbViewMode === 'grid' ? 'list' : 'grid';
+    const btn = document.getElementById('pb-inline-view');
+    if (btn) btn.textContent = _pbViewMode === 'grid' ? '⊞' : '☰';
+    _renderInlinePresetGrid();
+  });
+  document.getElementById('pb-inline-select-all')?.addEventListener('click', () => {
+    const visible = (PresetBrowser._getAll?.() || []).filter(p => {
+      const q = (document.getElementById('pb-inline-search')?.value||'').trim().toLowerCase();
+      return !q || p.name.toLowerCase().includes(q);
+    });
+    const allSel = visible.every(p => _pbSelected.has(p.name));
+    allSel ? visible.forEach(p=>_pbSelected.delete(p.name)) : visible.forEach(p=>_pbSelected.add(p.name));
+    _pbUpdateBulkBtns(); _renderInlinePresetGrid();
+  });
+  document.getElementById('pb-inline-export')?.addEventListener('click', () => {
+    (PresetBrowser._getAll?.() || []).filter(p=>_pbSelected.has(p.name)).forEach(p=>_pbDownload(p));
+    Toast.success(`Downloading ${_pbSelected.size} scene${_pbSelected.size!==1?'s':''}`);
+  });
+  document.getElementById('pb-inline-del-sel')?.addEventListener('click', () => {
+    const names = [..._pbSelected];
+    names.forEach(n=>PresetBrowser.remove(n));
+    _pbSelected.clear(); _pbUpdateBulkBtns(); _renderInlinePresetGrid();
+    Toast.info(`Deleted ${names.length} scene${names.length!==1?'s':''}`);
+  });
 
-  // Initial render (IDB loads async so also re-render when data arrives)
+  // Initial render
   _renderInlinePresetGrid();
 
   // ── Setlist + performance mode ───────────────────────────────
