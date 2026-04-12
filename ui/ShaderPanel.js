@@ -29,9 +29,13 @@ const ShaderPanel = (() => {
       container.appendChild(h);
     }
 
-    // ── Param sliders — rename based on SHADER_META ────────────
+    // ── Param sliders — rename based on GLSL comments ─────────
+    // Parse `// iParam1 — description` lines from the current GLSL source.
+    // Falls back to static SHADER_META if defined.
     const manifest = layer.constructor.manifest;
-    const meta     = ShaderLayer.SHADER_META?.[layer._shaderName] || {};
+    const parsedMeta = _parseGLSLMeta(layer.glslSource || '');
+    const staticMeta = ShaderLayer.SHADER_META?.[layer._shaderName] || {};
+    const meta = { ...parsedMeta, ...staticMeta };
 
     if (manifest?.params) {
       manifest.params.forEach(param => {
@@ -155,6 +159,12 @@ const ShaderPanel = (() => {
           ShaderToy mainImage() auto-wrapped — or use void main() + gl_FragColor.
           Do NOT redeclare any uniforms.
         </div>
+        <div style="color:var(--accent2);margin:4px 0 2px">Naming param sliders</div>
+        Add a comment at the top of your shader to label iParam sliders:<br>
+        <span style="color:#a8d8a8">// iParam1 — density<br>
+        // iParam2 — speed<br>
+        // iParam3 — brightness</span><br>
+        Unused iParams (not referenced in code) are greyed out automatically.
       </div>
     `;
     container.appendChild(hint);
@@ -298,6 +308,29 @@ const ShaderPanel = (() => {
       layer.params[param.id] = v;
     });
     return wrap;
+  }
+
+  /**
+   * Parse `// iParam1 — label` comment lines from GLSL source.
+   * Supports em-dash (—), hyphen (-), and colon (:) as separators.
+   * Sets meta[paramN] = null for any iParamN not referenced in the source,
+   * so those sliders are greyed out in the UI.
+   */
+  function _parseGLSLMeta(glslSrc) {
+    const meta = {};
+    const re = /\/\/\s*iParam([123])\s*[\u2014\-:]\s*(.+)/g;
+    let m;
+    while ((m = re.exec(glslSrc)) !== null) {
+      meta[`param${m[1]}`] = m[2].trim();
+    }
+    // Grey out sliders for iParams that are neither labelled nor used
+    ['1','2','3'].forEach(n => {
+      const id = `param${n}`;
+      if (!(id in meta) && !glslSrc.includes(`iParam${n}`)) {
+        meta[id] = null;
+      }
+    });
+    return meta;
   }
 
   return { render };

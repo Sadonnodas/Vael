@@ -316,8 +316,8 @@ class Renderer {
         quad._overlayOpacity = 1;
         this._applyBlend(quad.mesh.material, blendMode, opacity);
       } else {
-        // WebGL blend modes: bakeOpacity works correctly for add/screen/subtract
-        // For multiply, premultiply alpha into pixels so WebGL blend equation works
+        // WebGL blend modes: add/subtract use SrcAlphaFactor so bakeOpacity works.
+        // screen is handled via canvas-blend path above (THREE.OneFactor ignores alpha).
         quad._overlayOpacity = 1;
         if (opacity < 0.999) this._bakeOpacity(quad.offscreen, W, H, opacity);
         this._applyBlend(quad.mesh.material, blendMode, 1.0);
@@ -665,15 +665,17 @@ function _blendIgnoresOpacity(mode) {
 }
 
 // Blend modes that WebGL can't do natively — handled via Canvas 2D after the GL pass.
-// Also includes multiply since WebGL multiply ignores material.opacity.
+// Also includes multiply (WebGL multiply ignores material.opacity) and screen
+// (THREE.OneFactor ignores src alpha entirely, so bakeOpacity has no effect on it).
 function _isCanvasOnlyBlend(mode) {
   return ['overlay', 'softlight', 'hardlight', 'luminosity', 'color',
-          'hue', 'saturation', 'multiply', 'difference', 'exclusion'].includes(mode);
+          'hue', 'saturation', 'multiply', 'difference', 'exclusion', 'screen'].includes(mode);
 }
 
 // Map Vael blend mode names to Canvas 2D globalCompositeOperation values.
 function _canvas2dBlendOp(mode) {
   const map = {
+    screen:     'screen',
     multiply:   'multiply',
     difference: 'difference',
     exclusion:  'exclusion',

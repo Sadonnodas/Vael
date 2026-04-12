@@ -381,6 +381,7 @@ void main() {
 }`,
 
   kaleidoscope: `
+// iParam1 — segments (2–16)
 void main() {
   vec2 uv   = vUv - .5;
   float segments = max(2., floor(iParam1 * 14.) + 2.); // 2-16 segments via param1
@@ -459,6 +460,7 @@ void main() {
   // True R-D needs framebuffer ping-pong; this is a convincing one-pass fake
   // using layered noise to mimic the characteristic spotted/striped patterns.
   turing: `
+// iParam1 — spot/stripe balance
 float _hash(vec2 p){ return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5); }
 float _n(vec2 p){
   vec2 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);
@@ -484,6 +486,7 @@ void main() {
 
 
   fbm: `
+// iParam1 — detail level (octaves 2–8)
 // Fractal Domain Noise — organic flowing colour fields
 vec3 _mod289(vec3 x){return x-floor(x*(1./289.))*289.;}
 vec2 _mod289v(vec2 x){return x-floor(x*(1./289.))*289.;}
@@ -532,6 +535,9 @@ void main(){
 }`,
 
   rings: `
+// iParam1 — ring count (4–20)
+// iParam2 — twist amount
+// iParam3 — ring thickness
 // Concentric rings with audio pulse
 vec3 hueShiftR(vec3 c,float h){
   float ch=cos(h),sh=sin(h);
@@ -564,6 +570,9 @@ void main(){
 }`,
 
   julia: `
+// iParam1 — C real part (orbit center X)
+// iParam2 — C imaginary part (orbit center Y)
+// iParam3 — coloring curve
 // Julia set fractal with audio-reactive parameters
 vec2 cMul(vec2 a,vec2 b){return vec2(a.x*b.x-a.y*b.y,a.x*b.y+a.y*b.x);}
 void main(){
@@ -593,6 +602,9 @@ void main(){
 }`,
 
   aurora: `
+// iParam1 — bass sensitivity
+// iParam2 — curtain frequency
+// iParam3 — band height
 // Aurora borealis curtains
 float hash(float n){return fract(sin(n)*43758.5453);}
 float noise(vec2 p){
@@ -629,6 +641,9 @@ void main(){
 }`,
 
   lissajous: `
+// iParam1 — X frequency (1–6)
+// iParam2 — Y frequency (1–6)
+// iParam3 — phase / line thickness
 // Lissajous figures — audio-reactive parametric curves
 void main(){
   vec2 uv=(gl_FragCoord.xy-.5*iResolution.xy)/iResolution.y;

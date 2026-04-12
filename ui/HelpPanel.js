@@ -644,9 +644,9 @@ const HelpPanel = (() => {
           ['iBpm',         'float', 'Current BPM as detected or tapped. 60–200 range typically.'],
           ['iMouseX',      'float', 'Mouse X position, 0–1 (left to right).'],
           ['iMouseY',      'float', 'Mouse Y position, 0–1 (top to bottom).'],
-          ['iParam1',      'float', 'Param 1 slider value, 0–1. Wire to anything you want to control.'],
-          ['iParam2',      'float', 'Param 2 slider value, 0–1.'],
-          ['iParam3',      'float', 'Param 3 slider value, 0–1.'],
+          ['iParam1',      'float', 'Param 1 slider value, 0–1. Wire to anything you want to control. Label it with a comment: // iParam1 — density'],
+          ['iParam2',      'float', 'Param 2 slider value, 0–1. Label with: // iParam2 — speed'],
+          ['iParam3',      'float', 'Param 3 slider value, 0–1. Label with: // iParam3 — brightness'],
           ['iColorA',      'vec3',  'Color A picker value as RGB (0–1 each). Use as your primary colour.'],
           ['iColorB',      'vec3',  'Color B picker value as RGB. Use as your secondary / accent colour.'],
           ['iHueShift',    'float', 'Hue rotation in degrees (0–360). Apply with a hueRotate function to shift all colours.'],
@@ -674,6 +674,12 @@ const HelpPanel = (() => {
         code: `void main() {\n    vec2 uv = (gl_FragCoord.xy - 0.5 * iResolution.xy) / iResolution.y;\n\n    // iParam1 controls grid density\n    float scale = 4.0 + iParam1 * 12.0;\n\n    // iScale zooms the whole thing\n    uv *= iScale;\n\n    // iIntensity controls overall brightness\n    float bright = iIntensity;\n\n    // ... rest of shader ...\n    gl_FragColor = vec4(color * bright, 1.0);\n}`,
       },
       {
+        title: 'Naming your param sliders',
+        color: '#54a0ff',
+        body: `By default the PARAMS panel shows sliders labelled "Param 1", "Param 2", "Param 3". You can give them meaningful names by adding a comment at the top of your GLSL — one line per param, using an em-dash (—), hyphen (-), or colon (:) as the separator:\n\n  // iParam1 — grid density\n  // iParam2 — animation speed\n  // iParam3 — glow radius\n\nVael reads these comments and updates the slider labels automatically. Any iParam not referenced anywhere in your code is greyed out so you know it has no effect.`,
+        code: `// iParam1 — number of cells (4–20)\n// iParam2 — rotation speed\n// iParam3 — edge sharpness\n\nvoid main() {\n    vec2 uv = (gl_FragCoord.xy - 0.5 * iResolution.xy) / iResolution.y;\n\n    float cells = mix(4.0, 20.0, iParam1);   // now labelled "number of cells"\n    float speed = iParam2 * 2.0;             // "rotation speed"\n    float sharp = mix(0.1, 2.0, iParam3);    // "edge sharpness"\n\n    // ... your effect ...\n    gl_FragColor = vec4(color, 1.0);\n}`,
+      },
+      {
         title: 'Using iColorA and iColorB',
         color: '#a78bfa',
         body: `Always drive your colours from iColorA and iColorB so users can change them from the colour pickers in PARAMS. Mix between them based on position, audio, or time:`,
@@ -689,7 +695,7 @@ const HelpPanel = (() => {
         title: 'Minimal working template',
         color: '#00d4aa',
         body: `Start from this template — it uses every uniform correctly and all sliders will do something:`,
-        code: `// Minimal Vael shader template\n// Copy this and replace the main() body with your effect.\n\nvec3 hueRotate(vec3 col, float angle) {\n    float c = cos(angle), s = sin(angle);\n    mat3 m = mat3(\n        0.299+0.701*c+0.168*s, 0.587-0.587*c+0.330*s, 0.114-0.114*c-0.497*s,\n        0.299-0.299*c-0.328*s, 0.587+0.413*c+0.035*s, 0.114-0.114*c+0.292*s,\n        0.299-0.300*c+1.250*s, 0.587-0.588*c-1.050*s, 0.114+0.886*c-0.203*s\n    );\n    return clamp(m * col, 0.0, 1.0);\n}\n\nvoid main() {\n    // Centred, aspect-corrected UV\n    vec2 uv = (gl_FragCoord.xy - 0.5 * iResolution.xy) / iResolution.y;\n\n    // Apply scale and speed (iTime already uses Speed slider)\n    uv *= iScale;\n    float t = iTime;\n\n    // iParam1/2/3 — wire to whatever you need\n    float density = 2.0 + iParam1 * 8.0;\n    float detail  = iParam2;\n    float threshold = iParam3;\n\n    // Audio — modulate appearance, never speed\n    float brightness = iIntensity * (1.0 + iBass * 0.8 + iBeat * 0.3);\n    float colorShift = iMid * 0.5;\n\n    // Your effect here — replace with your own\n    float pattern = sin(uv.x * density + t) * sin(uv.y * density + t);\n    vec3 color = mix(iColorA, iColorB, pattern * 0.5 + 0.5 + colorShift);\n    color *= brightness;\n\n    // Hue shift\n    color = hueRotate(color, iHueShift * 3.14159 / 180.0);\n\n    gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);\n}`,
+        code: `// Minimal Vael shader template\n// Copy this and replace the main() body with your effect.\n//\n// iParam1 — density        ← these comments rename the sliders in PARAMS\n// iParam2 — color shift\n// iParam3 — threshold\n\nvec3 hueRotate(vec3 col, float angle) {\n    float c = cos(angle), s = sin(angle);\n    mat3 m = mat3(\n        0.299+0.701*c+0.168*s, 0.587-0.587*c+0.330*s, 0.114-0.114*c-0.497*s,\n        0.299-0.299*c-0.328*s, 0.587+0.413*c+0.035*s, 0.114-0.114*c+0.292*s,\n        0.299-0.300*c+1.250*s, 0.587-0.588*c-1.050*s, 0.114+0.886*c-0.203*s\n    );\n    return clamp(m * col, 0.0, 1.0);\n}\n\nvoid main() {\n    // Centred, aspect-corrected UV\n    vec2 uv = (gl_FragCoord.xy - 0.5 * iResolution.xy) / iResolution.y;\n\n    // Apply scale and speed (iTime already uses Speed slider)\n    uv *= iScale;\n    float t = iTime;\n\n    // iParam1/2/3 — wire to whatever you need\n    float density = 2.0 + iParam1 * 8.0;\n    float detail  = iParam2;\n    float threshold = iParam3;\n\n    // Audio — modulate appearance, never speed\n    float brightness = iIntensity * (1.0 + iBass * 0.8 + iBeat * 0.3);\n    float colorShift = iMid * 0.5;\n\n    // Your effect here — replace with your own\n    float pattern = sin(uv.x * density + t) * sin(uv.y * density + t);\n    vec3 color = mix(iColorA, iColorB, pattern * 0.5 + 0.5 + colorShift);\n    color *= brightness;\n\n    // Hue shift\n    color = hueRotate(color, iHueShift * 3.14159 / 180.0);\n\n    gl_FragColor = vec4(clamp(color, 0.0, 1.0), 1.0);\n}`,
       },
     ];
 
