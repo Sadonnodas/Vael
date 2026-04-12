@@ -441,7 +441,7 @@ class SlideshowLayer extends BaseLayer {
     const raw   = audioData?.isActive ? (audioData.bass ?? 0) * react : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, raw, 0.1);
 
-    const isBeat   = audioData?.isBeat || false;
+    const isBeat   = (audioData?.isActive && audioData?.isBeat) || false;
     const beatFired = isBeat && !this._prevBeat;
     this._prevBeat  = isBeat;
 

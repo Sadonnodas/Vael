@@ -212,7 +212,7 @@ class ShaderLayer extends BaseLayer {
     this._trebleSmooth = VaelMath.lerp(this._trebleSmooth, active ? (audioData.treble ?? 0) * react : 0, lag);
     this._volumeSmooth = VaelMath.lerp(this._volumeSmooth, active ? (audioData.volume ?? 0) * react : 0, lag);
     this._audioSmooth  = this._bassSmooth; // keep compat
-    if (audioData?.isBeat) this._beatPulse = react > 0 ? 1.0 : 0;
+    if (audioData?.isActive && audioData?.isBeat) this._beatPulse = react > 0 ? 1.0 : 0;
     this._beatPulse = Math.max(0, this._beatPulse - dt * 6);
   }
 

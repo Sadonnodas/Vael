@@ -25,6 +25,7 @@ const PresetManager = (() => {
       vael:    VERSION,
       name,
       saved:   new Date().toISOString(),
+      postFX:  typeof PostFXPanel !== 'undefined' ? PostFXPanel.serialize() : undefined,
       layers:  layerStack.layers.map(layer => {
         const base = {
           type:        layer.constructor.name,

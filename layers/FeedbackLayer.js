@@ -30,7 +30,7 @@ class FeedbackLayer extends BaseLayer {
       { id: 'rotation',   label: 'Rotation/fr',  type: 'float', default: 0.1,  min: 0,     max: 2.0   },
       { id: 'hueShift',   label: 'Hue shift/fr', type: 'float', default: 0.5,  min: 0,     max: 10    },
       { id: 'decay',      label: 'Decay',        type: 'float', default: 0.97, min: 0.8,   max: 1.0   },
-      { id: 'audioReact', label: 'Audio → zoom', type: 'float', default: 0.4,  min: 0,     max: 1     },
+      { id: 'audioReact', label: 'Audio → zoom', type: 'float', default: 0.0,  min: 0,     max: 1     },
       { id: 'beatKick',   label: 'Beat → rotate',type: 'float', default: 0.3,  min: 0,     max: 2     },
     ],
   };
@@ -43,7 +43,7 @@ class FeedbackLayer extends BaseLayer {
       rotation:   0.1,
       hueShift:   0.5,
       decay:      0.97,
-      audioReact: 0.4,
+      audioReact: 0.0,
       beatKick:   0.3,
     };
 
@@ -65,9 +65,10 @@ class FeedbackLayer extends BaseLayer {
   }
 
   update(audioData, videoData, dt) {
-    const av = audioData?.isActive ? (audioData.bass ?? 0) : 0;
+    const react = this.params.audioReact ?? 0;
+    const av = audioData?.isActive ? (audioData.bass ?? 0) * react : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.1);
-    if (audioData?.isBeat) this._beatPulse = 1.0;
+    if (react > 0 && audioData?.isActive && audioData?.isBeat) this._beatPulse = 1.0;
     this._beatPulse = Math.max(0, this._beatPulse - dt * 6);
     this._hueAccum += this.params.hueShift * dt * 60;
   }

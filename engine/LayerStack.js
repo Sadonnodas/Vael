@@ -68,8 +68,8 @@ class LayerStack {
   update(audioData, videoData, dt) {
     const iTime = (performance.now() - this._startTime) / 1000;
 
-    // Update beat pulse (decays over ~200ms)
-    if (audioData?.isBeat) this._beatPulse = 1.0;
+    // Update beat pulse (decays over ~200ms) — only when audio is actually playing
+    if (audioData?.isActive && audioData?.isBeat) this._beatPulse = 1.0;
     this._beatPulse = Math.max(0, this._beatPulse - dt * 5);
     if (audioData?.bpm) this._bpm = audioData.bpm;
 

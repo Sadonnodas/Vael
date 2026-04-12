@@ -234,7 +234,7 @@ class ParticleLayer extends BaseLayer {
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, targetAudio, 0.08);
 
     const mode = this.params.mode;
-    if (audioData?.isBeat && react > 0) {
+    if (audioData?.isActive && audioData?.isBeat && react > 0) {
       this._beatPulse = 1.0;
     } else if (!audioData?.isActive && react > 0 && (mode === 'pulse' || mode === 'scatter')) {
       // Synthetic beat only for modes that need it, and only when audioReact > 0

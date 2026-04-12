@@ -240,15 +240,19 @@ class NoiseFieldLayer extends BaseLayer {
           }
           case 'crystal': {
             // Faceted crystal: angular voronoi-like with sharp edges
-            const gx = Math.floor(nx * 4) / 4;
-            const gy = Math.floor(ny * 4) / 4;
-            const jx2 = VaelMath.noise2D(gx * 9.1 + 300, gy * 9.1 + t * 0.15) * 0.25;
-            const jy2 = VaelMath.noise2D(gx * 7.3 + 400, gy * 7.3 + t * 0.12) * 0.25;
-            const dx3 = (nx - gx - 0.125) - jx2;
-            const dy3 = (ny - gy - 0.125) - jy2;
-            const facetNoise = VaelMath.noise2D(gx * 5 + 500, gy * 5);
+            // Cell size scales with sc so the Scale param is meaningful
+            const cellSize = 0.5; // cells are 0.5 units in noise-space
+            const gx = Math.floor(nx / cellSize) * cellSize;
+            const gy = Math.floor(ny / cellSize) * cellSize;
+            // Jitter moves with time so facets slowly drift
+            const jx2 = VaelMath.noise2D(gx * 9.1 + 300, gy * 9.1 + t * 0.4) * cellSize * 0.45;
+            const jy2 = VaelMath.noise2D(gx * 7.3 + 400, gy * 7.3 + t * 0.35) * cellSize * 0.45;
+            const dx3 = (nx - gx - cellSize * 0.5) - jx2;
+            const dy3 = (ny - gy - cellSize * 0.5) - jy2;
+            // facetNoise includes t so hue slowly shifts
+            const facetNoise = VaelMath.noise2D(gx * 5 + 500, gy * 5 + t * 0.08);
             const edge  = Math.abs(dx3) + Math.abs(dy3);
-            n   = VaelMath.clamp(1 - edge * con * 6, 0, 1);
+            n   = VaelMath.clamp(1 - edge * con * (6 / cellSize), 0, 1);
             hue = VaelMath.lerp(hueA, hueB, facetNoise * 0.5 + 0.5);
             l   = lit * 0.2 + n * 0.5 + (1 - n) * 0.02;
             s   = sat * (0.6 + n * 0.4);

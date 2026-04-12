@@ -870,6 +870,7 @@
       if (preset.name) document.getElementById('preset-name').value = preset.name;
       // LFO state per-layer — lfoManager kept for compatibility
       if (preset.lfos?.length) { lfoManager.clear(); lfoManager.fromJSON(preset.lfos, layers); }
+      if (preset.postFX) PostFXPanel.restore(preset.postFX);
       _selectedLayerId = null; LayerPanel.setSelectedId(null);
       paramsContent.innerHTML   = '';
       paramsEmpty.style.display = 'block';
@@ -1049,15 +1050,15 @@
     }
 
     if (!audio.smoothed.isActive) {
-      const t     = performance.now() / 1000;
-      const bpm   = seq.bpm || 120;
-      const phase = (t * bpm / 60) % 1;
-      const pulse = Math.pow(Math.max(0, Math.sin(phase * Math.PI)), 3);
-      audio.smoothed.bass     = pulse * 0.6;
-      audio.smoothed.mid      = pulse * 0.3;
-      audio.smoothed.treble   = 0;
-      audio.smoothed.volume   = pulse * 0.4;
-      audio.smoothed.isActive = false;
+      // No audio playing — zero all signal values so layers don't react.
+      // Audio reactivity is opt-in; nothing should move without a real signal.
+      audio.smoothed.bass        = 0;
+      audio.smoothed.mid         = 0;
+      audio.smoothed.treble      = 0;
+      audio.smoothed.volume      = 0;
+      audio.smoothed.isBeat      = false;
+      audio.smoothed.isDownbeat  = false;
+      audio.smoothed.songPosition = 0;
     }
 
     seq.tick(dt);
@@ -1111,7 +1112,8 @@
             params: layer.params ? { ...layer.params } : {},
           }
         ),
-        lfos: lfoManager.toJSON(),
+        lfos:  lfoManager.toJSON(),
+        postFX: PostFXPanel.serialize(),
       };
       localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(preset));
     } catch (e) { console.warn('Auto-save failed:', e); }
@@ -1197,6 +1199,7 @@
         overlay.remove();
         PresetManager._applyRaw(preset, layers, layerFactory);
         if (preset.lfos?.length) { lfoManager.fromJSON(preset.lfos, layers); }
+        if (preset.postFX) PostFXPanel.restore(preset.postFX);
         Toast.success(`Resumed: "${preset.name}"`);
       });
 

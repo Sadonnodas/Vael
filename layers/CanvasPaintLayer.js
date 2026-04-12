@@ -124,7 +124,7 @@ class CanvasPaintLayer extends BaseLayer {
     const av          = audioData?.isActive ? (audioData.bass ?? 0) : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.1);
 
-    if (this.params.beatClear && audioData?.isBeat) {
+    if (this.params.beatClear && audioData?.isActive && audioData?.isBeat) {
       this._beatCount++;
       if (this._beatCount >= (this.params.beatEvery ?? 4)) {
         this._beatCount = 0;

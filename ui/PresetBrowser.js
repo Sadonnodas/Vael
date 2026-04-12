@@ -166,6 +166,7 @@ const PresetBrowser = (() => {
         if (layer.params) base.params = { ...layer.params };
         return base;
       }),
+      postFX: typeof PostFXPanel !== 'undefined' ? PostFXPanel.serialize() : undefined,
     };
 
     const existing = _getAll().filter(p => p.name !== name);
@@ -205,6 +206,7 @@ const PresetBrowser = (() => {
         _layerStack.add(layer);
       } catch (e) { console.warn('PresetBrowser: could not load layer', e); }
     });
+    if (preset.postFX && typeof PostFXPanel !== 'undefined') PostFXPanel.restore(preset.postFX);
     if (typeof _onLoad === 'function') _onLoad(preset);
     Toast.success(`Loaded: ${preset.name}`);
   }

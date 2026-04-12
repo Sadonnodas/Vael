@@ -108,14 +108,14 @@ class MathVisualizer extends BaseLayer {
   update(audioData, videoData, dt) {
     this._time += dt;
 
-    const react       = this.params.audioReact ?? 0.5;
+    const react       = this.params.audioReact ?? 0;
     const audioVal    = audioData?.isActive ? (audioData.bass ?? 0) * react : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth ?? 0, audioVal, 0.08);
 
     this._angleSmooth = VaelMath.lerp(this._angleSmooth, this.params.angle + audioVal * 25, 0.06);
     this._zoomSmooth  = VaelMath.lerp(this._zoomSmooth,  this.params.zoom  + audioVal * 0.3, 0.04);
 
-    if (audioData?.isBeat) this._beatPulse = 1.0;
+    if (react > 0 && audioData?.isActive && audioData?.isBeat) this._beatPulse = 1.0;
     this._beatPulse = Math.max(0, this._beatPulse - dt * 5);
 
     if (this.params.buildMode) {

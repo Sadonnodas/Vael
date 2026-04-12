@@ -260,6 +260,15 @@ const PostFX = (() => {
   function has(name)  { return _active.has(name); }
   function list()     { return Array.from(_active.keys()); }
 
+  /** Return current uniform values for a named effect, or null if not active. */
+  function getValues(name) {
+    const pass = _active.get(name);
+    if (!pass) return null;
+    const out = {};
+    Object.entries(pass.uniforms).forEach(([k, u]) => { out[k] = u.value; });
+    return out;
+  }
+
   /**
    * Reorder active passes to match the given names array.
    * Names not currently active are ignored.
@@ -280,6 +289,6 @@ const PostFX = (() => {
     renderer._buildPostMeshes?.();
   }
 
-  return { add, remove, update, has, list, reorder, SHADERS };
+  return { add, remove, update, has, list, reorder, getValues, SHADERS };
 
 })();

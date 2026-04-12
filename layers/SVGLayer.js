@@ -172,7 +172,7 @@ class SVGLayer extends BaseLayer {
     const av = audioData?.isActive ? (audioData.bass ?? 0) : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.08);
 
-    if (audioData?.isBeat && this.params.pulseOnBeat) {
+    if (audioData?.isActive && audioData?.isBeat && this.params.pulseOnBeat) {
       this._beatPulse = 1.0;
     }
     this._beatPulse = Math.max(0, this._beatPulse - dt * 7);

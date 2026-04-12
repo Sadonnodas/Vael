@@ -48,11 +48,12 @@ class PatternLayer extends BaseLayer {
 
   init(params = {}) { Object.assign(this.params, params); }
 
-  update(audioData, videoData, dt) {
+  update(audioData, _videoData, dt) {
     this._time += dt * this.params.speed;
-    const av = audioData?.isActive ? (audioData.bass ?? 0) * (this.params.audioReact ?? 0.3) : 0;
+    const react = this.params.audioReact ?? 0;
+    const av = audioData?.isActive ? (audioData.bass ?? 0) * react : 0;
     this._audioSmooth = VaelMath.lerp(this._audioSmooth, av, 0.08);
-    if (audioData?.isBeat) this._beatPulse = 1.0;
+    if (react > 0 && audioData?.isActive && audioData?.isBeat) this._beatPulse = 1.0;
     this._beatPulse = Math.max(0, this._beatPulse - dt * 6);
   }
 
@@ -88,14 +89,14 @@ class PatternLayer extends BaseLayer {
       case 'weave':       this._drawWeave(ctx, width, height, baseSize, t, c1, c2, lw); break;
       case 'rays':        this._drawRays(ctx, baseSize, n, t, c1, c2, lw); break;
       case 'rose':        this._drawRose(ctx, baseSize, n, t, c1, lw); break;
-      case 'maze':        this._drawMaze(ctx, width, height, baseSize, t, c1, lw); break;
+      case 'maze':        this._drawMaze(ctx, width, height, baseSize, n, t, c1, lw); break;
       case 'dots':        this._drawDots(ctx, width, height, baseSize, n, t, c1, c2); break;
     }
 
     ctx.restore();
   }
 
-  _drawStar(ctx, r, n, t, c1, c2, filled) {
+  _drawStar(ctx, r, n, t, c1, _c2, filled) {
     const inner = r * 0.4;
     const rot   = t * 0.5;
     ctx.beginPath();
@@ -112,13 +113,11 @@ class PatternLayer extends BaseLayer {
   }
 
   _drawMandala(ctx, r, n, t, c1, c2, lw, filled) {
-    const rings    = Math.max(2, Math.floor(n / 2));
-    const petals   = Math.max(4, n);
-    const hueShift = this.params.hueShift || 0;
+    const rings  = Math.max(2, Math.floor(n / 2));
+    const petals = Math.max(4, n);
 
     // Outer petal ring
     for (let i = 0; i < petals; i++) {
-      const a   = (i / petals) * Math.PI * 2 + t * 0.2;
       const rot = (i / petals) * Math.PI * 2;
       ctx.save();
       ctx.rotate(rot + t * 0.15);
@@ -269,7 +268,7 @@ class PatternLayer extends BaseLayer {
     ctx.stroke();
   }
 
-  _drawSpirograph(ctx, r, n, t, c1, c2, lw) {
+  _drawSpirograph(ctx, r, n, t, c1, _c2, lw) {
     const R = r;
     const rr = r / n;
     const d  = rr * 0.8;
@@ -430,26 +429,28 @@ class PatternLayer extends BaseLayer {
   }
 
   // ── Recursive maze-like grid ─────────────────────────────────
-  _drawMaze(ctx, W, H, cellSize, t, c1, lw) {
-    const cell = cellSize * 0.22;
-    const cols = Math.ceil(W / cell / 2);
-    const rows = Math.ceil(H / cell / 2);
+  _drawMaze(ctx, W, H, cellSize, n, t, c1, lw) {
+    // n (complexity 2–20) controls cell density: more complexity → smaller cells
+    const cell = cellSize * (0.5 - (n - 2) / 18 * 0.38);
+    // Continuously scroll the grid — static pattern seen through a moving window
+    const scrollX = (t * 0.4 * cell) % cell;
+    const scrollY = (t * 0.25 * cell) % cell;
+    const cols = Math.ceil(W / cell / 2) + 2;
+    const rows = Math.ceil(H / cell / 2) + 2;
     ctx.strokeStyle = c1;
     ctx.lineWidth   = lw * 0.5;
     ctx.globalAlpha = 0.6;
     for (let col = -cols; col <= cols; col++) {
       for (let row = -rows; row <= rows; row++) {
-        const x = col * cell;
-        const y = row * cell;
-        // Deterministic "random" wall choice based on grid position + slow time
-        const seed = Math.abs(Math.sin(col * 7.3 + row * 13.7 + Math.floor(t * 0.2) * 99));
+        const x = col * cell + scrollX;
+        const y = row * cell + scrollY;
+        // Wall pattern is static per cell (no time in seed) — grid scrolls, pattern doesn't flip
+        const seed = Math.abs(Math.sin(col * 7.3 + row * 13.7));
         if (seed < 0.5) {
-          // Horizontal wall segment
           ctx.beginPath();
           ctx.moveTo(x, y); ctx.lineTo(x + cell, y);
           ctx.stroke();
         } else {
-          // Vertical wall segment
           ctx.beginPath();
           ctx.moveTo(x, y); ctx.lineTo(x, y + cell);
           ctx.stroke();

@@ -20,15 +20,51 @@ const PostFXPanel = (() => {
     { id: 'volume',       label: 'Volume'        },
     { id: 'isBeat',       label: 'Beat pulse'    },
     { id: 'songPosition', label: 'Song position' },
+    { id: 'lfo1',         label: 'LFO 1'         },
+    { id: 'lfo2',         label: 'LFO 2'         },
+    { id: 'lfo3',         label: 'LFO 3'         },
   ];
+
+  // Three built-in global LFOs for FX modulation (independent of layer LFOs)
+  const _globalLFOs = [
+    { phase: 0, rate: 0.5, shape: 'sine',  value: 0 },
+    { phase: 0, rate: 1.0, shape: 'sine',  value: 0 },
+    { phase: 0, rate: 2.0, shape: 'triangle', value: 0 },
+  ];
+  const _lfoValues = { lfo1: 0, lfo2: 0, lfo3: 0 };
+
+  function _tickGlobalLFOs(dt) {
+    _globalLFOs.forEach((lfo, i) => {
+      lfo.phase = (lfo.phase + lfo.rate * dt) % 1;
+      const p = lfo.phase;
+      switch (lfo.shape) {
+        case 'sine':     lfo.value = Math.sin(p * Math.PI * 2); break;
+        case 'triangle': lfo.value = p < 0.5 ? p * 4 - 1 : 3 - p * 4; break;
+        case 'saw':      lfo.value = p * 2 - 1; break;
+        case 'square':   lfo.value = p < 0.5 ? 1 : -1; break;
+        default:         lfo.value = Math.sin(p * Math.PI * 2);
+      }
+    });
+    _lfoValues.lfo1 = _globalLFOs[0].value;
+    _lfoValues.lfo2 = _globalLFOs[1].value;
+    _lfoValues.lfo3 = _globalLFOs[2].value;
+  }
 
   // Called each frame from App.js render loop
   function tick(audioSmoothed) {
+    const dt = audioSmoothed?._dt ?? 0.016;
+    _tickGlobalLFOs(dt);
     if (!audioSmoothed || !_fxMods.length) return;
     _fxMods.forEach(mod => {
       if (!mod._enabled) return;
-      let raw = audioSmoothed[mod.source] ?? 0;
-      if (mod.source === 'isBeat') raw = audioSmoothed.isBeat ? 1 : 0;
+      let raw;
+      if (mod.source.startsWith('lfo')) {
+        raw = (_lfoValues[mod.source] ?? 0) * 0.5 + 0.5; // convert -1..1 → 0..1
+      } else if (mod.source === 'isBeat') {
+        raw = audioSmoothed.isBeat ? 1 : 0;
+      } else {
+        raw = audioSmoothed[mod.source] ?? 0;
+      }
       mod._smoothed = (mod._smoothed ?? 0) + (raw - (mod._smoothed ?? 0)) * 0.12;
       const effect = EFFECTS.find(e => e.id === mod.effectId);
       const pDef   = effect?.params.find(p => p.id === mod.paramId);
@@ -133,6 +169,38 @@ const PostFXPanel = (() => {
       const div = document.createElement('div');
       div.style.cssText = 'height:1px;background:var(--border-dim);margin:14px 0';
       _container.appendChild(div);
+    }
+
+    // ── Global LFOs ───────────────────────────────────────────────
+    if (activeNames.length > 0) {
+      const lfoLabel = document.createElement('div');
+      lfoLabel.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px';
+      lfoLabel.textContent = 'Global LFOs';
+      _container.appendChild(lfoLabel);
+
+      const SHAPES = ['sine','triangle','saw','square'];
+      _globalLFOs.forEach((lfo, i) => {
+        const row = document.createElement('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:6px';
+        const shapeOpts = SHAPES.map(s => `<option value="${s}"${lfo.shape===s?' selected':''}>${s}</option>`).join('');
+        row.innerHTML = `
+          <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim);min-width:28px">LFO ${i+1}</span>
+          <select class="lfo-shape" style="background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:8px;padding:2px 4px;flex:1">${shapeOpts}</select>
+          <input type="number" class="lfo-rate" value="${lfo.rate.toFixed(2)}" min="0.01" max="20" step="0.1"
+            style="width:48px;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--accent);font-family:var(--font-mono);font-size:8px;padding:2px 4px;text-align:right" />
+          <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">Hz</span>
+        `;
+        row.querySelector('.lfo-shape').addEventListener('change', e => { lfo.shape = e.target.value; });
+        row.querySelector('.lfo-rate').addEventListener('change', e => {
+          const v = parseFloat(e.target.value);
+          if (!isNaN(v) && v > 0) lfo.rate = v;
+        });
+        _container.appendChild(row);
+      });
+
+      const div2 = document.createElement('div');
+      div2.style.cssText = 'height:1px;background:var(--border-dim);margin:14px 0';
+      _container.appendChild(div2);
     }
 
     // ── Available effects catalogue ───────────────────────────────
@@ -293,7 +361,10 @@ const PostFXPanel = (() => {
   }
 
   function _buildParams(effect) {
-    return effect.params.map(param => `
+    const current = PostFX.getValues(effect.id) || {};
+    return effect.params.map(param => {
+      const val = current[param.id] ?? param.default;
+      return `
       <div style="margin-bottom:8px">
         <div style="display:flex;justify-content:space-between;margin-bottom:4px">
           <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted)">
@@ -301,17 +372,79 @@ const PostFXPanel = (() => {
           </span>
           <span data-val="${param.id}"
             style="font-family:var(--font-mono);font-size:9px;color:var(--accent)">
-            ${param.default.toFixed(3)}
+            ${val.toFixed(3)}
           </span>
         </div>
         <input type="range" data-param="${param.id}"
           min="${param.min}" max="${param.max}" step="${param.step}"
-          value="${param.default}"
+          value="${val}"
           style="width:100%;accent-color:var(--accent)" />
       </div>
-    `).join('');
+    `}).join('');
   }
 
-  return { init, tick };
+  /**
+   * Serialise active FX chain + param values + mod routes for preset save.
+   * @returns {{ chain: string[], params: object, mods: object[] }}
+   */
+  function serialize() {
+    const chain  = PostFX.list();
+    const params = {};
+    chain.forEach(name => {
+      params[name] = PostFX.getValues(name) || {};
+    });
+    const mods = _fxMods.map(m => ({
+      effectId: m.effectId, paramId: m.paramId,
+      source: m.source, depth: m.depth, base: m._base,
+    }));
+    const lfos = _globalLFOs.map(l => ({ rate: l.rate, shape: l.shape }));
+    return { chain, params, mods, lfos };
+  }
+
+  /**
+   * Restore active FX chain from a serialised state.
+   * @param {{ chain: string[], params: object, mods: object[] }} data
+   */
+  function restore(data) {
+    if (!data?.chain) return;
+    // Remove all current effects
+    PostFX.list().forEach(name => PostFX.remove(_renderer, name));
+    _fxMods.splice(0);
+
+    // Re-add in saved order with saved param values
+    data.chain.forEach(name => {
+      const effect = EFFECTS.find(e => e.id === name);
+      if (!effect) return;
+      const defaults = { ...effect.defaults, ...(data.params?.[name] || {}) };
+      PostFX.add(_renderer, name, defaults);
+    });
+
+    // Restore mod routes
+    (data.mods || []).forEach(m => {
+      const effect = EFFECTS.find(e => e.id === m.effectId);
+      const pDef   = effect?.params.find(p => p.id === m.paramId);
+      if (!pDef) return;
+      _fxMods.push({
+        id: `fxmod-${Date.now()}-${Math.random()}`,
+        effectId: m.effectId, paramId: m.paramId,
+        source: m.source, depth: m.depth,
+        _smoothed: 0, _base: m.base ?? pDef.default, _enabled: true,
+      });
+    });
+
+    // Restore global LFO settings
+    if (data.lfos) {
+      data.lfos.forEach((saved, i) => {
+        if (_globalLFOs[i]) {
+          if (saved.rate  !== undefined) _globalLFOs[i].rate  = saved.rate;
+          if (saved.shape !== undefined) _globalLFOs[i].shape = saved.shape;
+        }
+      });
+    }
+
+    _render();
+  }
+
+  return { init, tick, serialize, restore };
 
 })();
