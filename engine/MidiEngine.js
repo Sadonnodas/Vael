@@ -5,13 +5,19 @@
  * Links are stored as { channel, cc } → { layerId, paramId, min, max }
  * and can be saved/loaded as part of a preset.
  *
+ * Global action links (note/CC/PC → Vael action string):
+ *   key formats:
+ *     'cc-{ch}-{num}'   → any CC value > 0 fires the action
+ *     'note-{ch}-{num}' → note-on fires the action
+ *     'pc-{ch}'         → any PC on that channel fires 'scene:jump:{program}'
+ *                         (or the stored action verbatim if it isn't 'scene:jump')
+ *
  * Usage:
  *   const midi = new MidiEngine(layerStack);
  *   await midi.init();
- *   midi.startLearn(layerId, paramId, min, max);
+ *   midi.startLearn(layerId, paramId, min, max);   // arm for param link
+ *   midi.startLearnGlobal(action);                 // arm for action link
  *   midi.stopLearn();
- *
- *   // Every CC message automatically updates the mapped parameter.
  */
 
 class MidiEngine {
@@ -20,10 +26,9 @@ class MidiEngine {
     this._layerStack = layerStack;
     this._access     = null;
     this._inputs     = [];
-    this._links      = new Map();   // key: `${ch}-${cc}` → { layerId, paramId, min, max }
-    this._globalLinks = new Map();  // key: `${type}-${ch}-${num}` → action string
-                                    // type: 'cc' | 'note'
-                                    // action: 'scene:next' | 'scene:prev' | 'scene:N'
+    this._links      = new Map();        // key: `${ch}-${cc}` → { channel, cc, layerId, paramId, min, max }
+    this._globalLinks = new Map();       // key: `${type}-${ch}-${num}` → action string
+                                         // type: 'cc' | 'note' | 'pc'
 
     // Learn mode state
     this._learning      = false;
@@ -39,22 +44,6 @@ class MidiEngine {
     this._selectedDevice  = null;  // device name string or null
     this._filterChannel   = null;  // 0-indexed channel (0 = MIDI ch1), null = all
 
-    // ── Performance profile ──────────────────────────────────────
-    // Fixed CC/PC → action mappings that work without learn mode.
-    // Designed for the Hotone Ampero Control (CC 64/65/66 + PC on Ch 1).
-    this._perfProfile = {
-      enabled: false,
-      channel: 0,   // 0-indexed (ch1 = 0)
-      // CC mappings: { ccNumber: { high: 'action', low: 'action' } }
-      // high fires when value >= 64, low fires when value < 64
-      cc: {
-        64: { high: 'scene:play',  low: 'scene:stop' },
-        65: { high: 'scene:prev' },
-        66: { high: 'scene:next' },
-      },
-      programChange: true,  // PC N → scene:jump:N
-    };
-
     // State
     this.isAvailable    = false;
     this.deviceNames    = [];
@@ -65,6 +54,17 @@ class MidiEngine {
     this.onDeviceChange = null;   // () → void, devices connected/disconnected
     this.onGlobalAction = null;   // (action) → void, called on global action trigger
     this.onActivity     = null;   // () → void, called on every incoming MIDI message
+
+    // MIDI Clock callbacks
+    this.onClockBpm   = null;     // (bpm) → void
+    this.onClockStart = null;     // () → void
+    this.onClockStop  = null;     // () → void
+
+    // Clock internals
+    this._clockTicks   = 0;
+    this._clockLast    = 0;
+    this.clockSync     = false;
+    this.clockBpm      = 0;
   }
 
   // ── Init ─────────────────────────────────────────────────────
@@ -124,14 +124,8 @@ class MidiEngine {
     this._filterChannel = (channel && channel > 0) ? channel - 1 : null;
   }
 
-  /** Enable or configure the performance profile. */
-  setPerformanceProfile(config) {
-    Object.assign(this._perfProfile, config);
-  }
-
   get selectedDevice()  { return this._selectedDevice; }
   get filterChannel()   { return this._filterChannel === null ? null : this._filterChannel + 1; }
-  get perfProfile()     { return this._perfProfile; }
 
   // ── Incoming MIDI messages ───────────────────────────────────
 
@@ -143,23 +137,44 @@ class MidiEngine {
     // ── Activity callback ────────────────────────────────────────
     if (typeof this.onActivity === 'function') this.onActivity();
 
+    // ── MIDI Clock (0xF8) ────────────────────────────────────────
+    if (status === 0xf8) {
+      this._handleClock();
+      return;
+    }
+
+    // ── MIDI Clock Start/Stop ─────────────────────────────────────
+    if (status === 0xfa) { this.clockSync = true;  if (typeof this.onClockStart === 'function') this.onClockStart(); return; }
+    if (status === 0xfc) { this.clockSync = false; if (typeof this.onClockStop  === 'function') this.onClockStop();  return; }
+
     // ── Channel filter ───────────────────────────────────────────
     if (this._filterChannel !== null && channel !== this._filterChannel) return;
 
     // ── Program Change (0xC0) ────────────────────────────────────
     if (type === 0xc0) {
       const program = data1;  // 0-indexed program number
-      // Performance profile: PC → scene:jump:N
-      if (this._perfProfile.enabled &&
-          this._perfProfile.programChange &&
-          (this._filterChannel !== null
-            ? channel === this._filterChannel
-            : channel === this._perfProfile.channel)) {
+
+      // Learn mode: capture PC channel for global action
+      if (this._learnGlobal) {
+        const pcKey = `pc-${channel}`;
+        this._globalLinks.set(pcKey, this._learnAction);
+        this._learnGlobal = false;
+        if (typeof this.onLink === 'function') this.onLink({ type: 'global', key: pcKey, action: this._learnAction });
+        return;
+      }
+
+      // Check global links for a PC mapping on this channel
+      const pcKey = `pc-${channel}`;
+      if (this._globalLinks.has(pcKey)) {
+        const baseAction = this._globalLinks.get(pcKey);
         if (typeof this.onGlobalAction === 'function') {
-          this.onGlobalAction(`scene:jump:${program}`);
+          // scene:jump stores just 'scene:jump'; append program number at runtime
+          const action = baseAction === 'scene:jump' ? `scene:jump:${program}` : baseAction;
+          this.onGlobalAction(action);
         }
       }
-      if (typeof this.onMessage === 'function') this.onMessage(channel, `pc`, data1 / 127);
+
+      if (typeof this.onMessage === 'function') this.onMessage(channel, 'pc', data1 / 127);
       return;
     }
 
@@ -188,21 +203,6 @@ class MidiEngine {
     const value = data2 / 127;   // normalise to 0–1
 
     if (typeof this.onMessage === 'function') this.onMessage(channel, cc, value);
-
-    // ── Performance profile CC handling ──────────────────────────
-    if (this._perfProfile.enabled) {
-      const perfCh = this._filterChannel !== null
-        ? this._filterChannel
-        : this._perfProfile.channel;
-      if (channel === perfCh && this._perfProfile.cc[cc]) {
-        const mapping = this._perfProfile.cc[cc];
-        const action  = data2 >= 64 ? mapping.high : mapping.low;
-        if (action && typeof this.onGlobalAction === 'function') {
-          this.onGlobalAction(action);
-        }
-        return;  // consumed by performance profile — don't fall through
-      }
-    }
 
     // ── Learn mode — capture first CC movement ───────────────────
     if (this._learnGlobal) {
@@ -233,6 +233,21 @@ class MidiEngine {
     if (link) this._applyLink(link, value);
   }
 
+  // ── MIDI Clock ───────────────────────────────────────────────
+
+  _handleClock() {
+    const now = performance.now();
+    this._clockTicks++;
+    if (this._clockTicks % 24 === 0) {
+      if (this._clockLast > 0) {
+        const interval = now - this._clockLast;
+        this.clockBpm = Math.round(60000 / interval);
+        if (typeof this.onClockBpm === 'function') this.onClockBpm(this.clockBpm);
+      }
+      this._clockLast = now;
+    }
+  }
+
   // ── Learn mode ───────────────────────────────────────────────
 
   /**
@@ -253,7 +268,7 @@ class MidiEngine {
     this._learnGlobal = true;
     this._learnAction = action;
     this._learning    = false;
-    console.log(`MidiEngine: learning global action "${action}" — press a note or move a CC`);
+    console.log(`MidiEngine: learning global action "${action}" — press a note, move a CC, or send a PC`);
   }
 
   stopLearn() {
@@ -287,6 +302,12 @@ class MidiEngine {
 
   clearLinks() { this._links.clear(); }
 
+  updateLinkRange(channel, cc, min, max) {
+    const key  = `${channel}-${cc}`;
+    const link = this._links.get(key);
+    if (link) { link.min = min; link.max = max; }
+  }
+
   get links() { return Array.from(this._links.values()); }
 
   _applyLink(link, normalised) {
@@ -307,7 +328,6 @@ class MidiEngine {
       globalLinks:    Array.from(this._globalLinks.entries()).map(([key, action]) => ({ key, action })),
       selectedDevice: this._selectedDevice,
       filterChannel:  this._filterChannel,
-      perfProfile:    { ...this._perfProfile },
     };
   }
 
@@ -322,7 +342,6 @@ class MidiEngine {
     }
     if (data.selectedDevice !== undefined) this._selectedDevice = data.selectedDevice;
     if (data.filterChannel  !== undefined) this._filterChannel  = data.filterChannel;
-    if (data.perfProfile) Object.assign(this._perfProfile, data.perfProfile);
     // Re-scan devices to apply new device filter
     if (this._access) this._scanDevices();
   }

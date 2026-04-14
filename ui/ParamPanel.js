@@ -690,6 +690,24 @@ const ParamPanel = (() => {
       labelLeft.appendChild(badge);
     }
 
+    // MIDI arm button — visible when body.midi-learn-active (controlled by CSS)
+    if (!customSetter) {
+      const armBtn = document.createElement('span');
+      armBtn.className = 'midi-learn-arm-btn';
+      armBtn.textContent = 'MIDI';
+      armBtn.title = `Arm for MIDI learn: ${param.label}`;
+      armBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        const midi = window._vaelMidi;
+        if (!midi || !layer) return;
+        midi.startLearn(layer.id, param.id, param.min ?? 0, param.max ?? 1);
+        // Exit global learn mode (App.js onLink will finalize)
+        if (window._exitLearnMode) window._exitLearnMode();
+        if (typeof Toast !== 'undefined') Toast.info(`Move a controller to map → ${param.label}`);
+      });
+      labelLeft.appendChild(armBtn);
+    }
+
     // ∿ LFO quick-add button (float/int params only, no custom setters)
     // LFO button removed — use the LFO panel (between Modulation and FX sections)
 

@@ -137,9 +137,53 @@ const PlaylistPanel = (() => {
 
     if(total>0){
       const t=document.createElement('div'); t.style.cssText='display:flex;gap:6px;margin-top:10px';
-      const pb=document.createElement('button'); pb.className='btn'; pb.style.cssText='flex:1;font-size:9px'; pb.textContent='← Prev'; pb.disabled=activeIdx<=0; pb.addEventListener('click',_prevPart);
-      const nb=document.createElement('button'); nb.className='btn accent'; nb.style.cssText='flex:1;font-size:9px'; nb.textContent='Next →'; nb.disabled=activeIdx>=total-1; nb.addEventListener('click',_nextPart);
+
+      function _armableClick(action, fallback) {
+        return function(e) {
+          if (window._vaelLearnMode && window._vaelMidi) {
+            e.stopPropagation();
+            window._vaelMidi.startLearnGlobal(action);
+            Toast.info(`Move a controller to map → ${action.replace('scene:','')}`);
+            return;
+          }
+          fallback();
+        };
+      }
+
+      const pb=document.createElement('button');
+      pb.className='btn midi-armable'; pb.style.cssText='flex:1;font-size:9px';
+      pb.textContent='← Prev'; pb.disabled=(!window._vaelLearnMode && activeIdx<=0);
+      pb.title='Prev scene (click in MIDI Learn to arm)';
+      pb.addEventListener('click', _armableClick('scene:prev', _prevPart));
+
+      const nb=document.createElement('button');
+      nb.className='btn accent midi-armable'; nb.style.cssText='flex:1;font-size:9px';
+      nb.textContent='Next →'; nb.disabled=(!window._vaelLearnMode && activeIdx>=total-1);
+      nb.title='Next scene (click in MIDI Learn to arm)';
+      nb.addEventListener('click', _armableClick('scene:next', _nextPart));
+
       t.append(pb,nb); container.appendChild(t);
+
+      // Play / Stop arm row — only shown as MIDI targets
+      const t2=document.createElement('div'); t2.style.cssText='display:flex;gap:6px;margin-top:4px';
+
+      const playBtn=document.createElement('button');
+      playBtn.className='btn midi-armable'; playBtn.style.cssText='flex:1;font-size:9px';
+      playBtn.textContent='▶ Play'; playBtn.title='Trigger current scene (click in MIDI Learn to arm)';
+      playBtn.addEventListener('click', _armableClick('scene:play', ()=>{
+        if(_activePartId) _selectPart(_activePartId);
+        else { const p=_flatParts(); if(p.length>0) _selectPart(p[0].id); }
+      }));
+
+      const stopBtn=document.createElement('button');
+      stopBtn.className='btn midi-armable'; stopBtn.style.cssText='flex:1;font-size:9px';
+      stopBtn.textContent='⏹ Stop'; stopBtn.title='Stop playback (click in MIDI Learn to arm)';
+      stopBtn.addEventListener('click', _armableClick('scene:stop', ()=>{
+        if(_audio) { try { _audio.pause?.() || _audio.stop?.(); } catch(_){} }
+        Toast.info('⏹ Stopped');
+      }));
+
+      t2.append(playBtn,stopBtn); container.appendChild(t2);
     }
 
     // ── Transition controls ───────────────────────────────────

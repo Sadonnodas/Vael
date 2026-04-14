@@ -660,14 +660,51 @@
   // Performance mode TAP button fires this event (no direct seq ref in PerformanceMode)
   window.addEventListener('vael:tap-tempo', () => seq.tapTempo());
 
-  // ── MIDI learn ───────────────────────────────────────────────
+  // ── Global MIDI learn mode ───────────────────────────────────
+  // window._vaelLearnMode: true while the user is in MIDI learn mode.
+  // UI elements with class .midi-learn-arm-btn and .midi-armable light up.
+  // Clicking an armable button/param arms it (calls startLearn / startLearnGlobal)
+  // and then exits learn mode.
+  window._vaelLearnMode = false;
+
+  function _exitLearnMode() {
+    window._vaelLearnMode = false;
+    document.body.classList.remove('midi-learn-active');
+    window.dispatchEvent(new CustomEvent('vael:learn-mode-changed', { detail: { active: false } }));
+    MidiPanel.refresh();
+  }
+  window._exitLearnMode = _exitLearnMode;
+
+  window.addEventListener('vael:learn-mode-toggle', () => {
+    window._vaelLearnMode = !window._vaelLearnMode;
+    if (!window._vaelLearnMode) midi.stopLearn();
+    document.body.classList.toggle('midi-learn-active', window._vaelLearnMode);
+    window.dispatchEvent(new CustomEvent('vael:learn-mode-changed', { detail: { active: window._vaelLearnMode } }));
+    MidiPanel.refresh();
+  });
+
+  // When MidiEngine creates a link, auto-exit learn mode and save settings
+  const _origOnLink = midi.onLink;
+  midi.onLink = (link) => {
+    if (_origOnLink) _origOnLink(link);
+    _exitLearnMode();
+    _saveMidiSettings();
+    MidiPanel.refresh();
+  };
+
+  function _saveMidiSettings() {
+    try { localStorage.setItem('vael-midi-settings', JSON.stringify(midi.toJSON())); } catch (_) {}
+  }
+  window._saveMidiSettings = _saveMidiSettings;
+
+  // ── MIDI learn (legacy event — now also triggered from ParamPanel arm buttons) ──
   window.addEventListener('vael:midi-learn-requested', () => {
-    if (!_selectedLayerId) { alert('Select a layer first.'); return; }
+    if (!_selectedLayerId) { Toast.warn('Select a layer first.'); return; }
     const layer = layers.layers.find(l => l.id === _selectedLayerId);
     if (!layer) return;
     const manifest = layer.constructor.manifest;
     const param    = manifest?.params?.find(p => p.type === 'float' || p.type === 'int');
-    if (!param) { alert('No learnable parameters on this layer.'); return; }
+    if (!param) { Toast.warn('No learnable parameters on this layer.'); return; }
     midi.startLearn(_selectedLayerId, param.id, param.min ?? 0, param.max ?? 1);
     MidiPanel.refresh();
   });

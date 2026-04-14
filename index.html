@@ -532,6 +532,9 @@
 </head>
 <body>
 
+<!-- MIDI learn mode badge — shown via body.midi-learn-active class -->
+<div id="midi-learn-badge">⏺ MIDI LEARN</div>
+
 <div id="app">
 
   <!-- ── CANVAS AREA ─────────────────────────────────────────── -->
@@ -1225,6 +1228,67 @@
   @keyframes pulse {
     0%, 100% { opacity: 1; }
     50%       { opacity: 0.3; }
+  }
+
+  /* ── MIDI Learn Mode ─────────────────────────────────────────── */
+  @keyframes midi-learn-pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 40%, transparent); }
+    50%       { opacity: 0.8; box-shadow: 0 0 0 8px color-mix(in srgb, var(--accent) 0%, transparent); }
+  }
+
+  #midi-learn-badge {
+    display: none;
+    position: fixed;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--accent);
+    color: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    padding: 5px 16px;
+    border-radius: 20px;
+    z-index: 9999;
+    pointer-events: none;
+    animation: midi-learn-pulse 1.1s ease-in-out infinite;
+    white-space: nowrap;
+  }
+
+  body.midi-learn-active #midi-learn-badge {
+    display: block;
+  }
+
+  body.midi-learn-active #sidebar {
+    border-left: 2px solid var(--accent);
+    box-shadow: -3px 0 16px color-mix(in srgb, var(--accent) 18%, transparent);
+  }
+
+  /* MIDI learn arm buttons — shown on every float/int param when learn mode is on */
+  .midi-learn-arm-btn {
+    display: none;
+    font-family: var(--font-mono);
+    font-size: 7px;
+    cursor: pointer;
+    border-radius: 3px;
+    padding: 1px 5px;
+    flex-shrink: 0;
+    background: color-mix(in srgb, var(--accent) 15%, transparent);
+    color: var(--accent);
+    border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+    line-height: 1.4;
+  }
+
+  body.midi-learn-active .midi-learn-arm-btn {
+    display: inline-block;
+  }
+
+  /* Armable action buttons pulse border when learn mode is on */
+  body.midi-learn-active .midi-armable {
+    border-color: color-mix(in srgb, var(--accent) 50%, transparent) !important;
+    color: var(--accent) !important;
+    animation: midi-learn-pulse 1.1s ease-in-out infinite;
   }
 </style>
 
