@@ -16,8 +16,37 @@ const PlaylistPanel = (() => {
     if(window._vaelMidi){
       const orig=window._vaelMidi.onGlobalAction;
       window._vaelMidi.onGlobalAction=(action)=>{
-        if(action==='scene:next'){_nextPart();return;}
-        if(action==='scene:prev'){_prevPart();return;}
+        if(action==='scene:next'){ _nextPart(); return; }
+        if(action==='scene:prev'){ _prevPart(); return; }
+
+        if(action==='scene:play'){
+          // Re-trigger the currently active part (reload scene + restart audio)
+          if(_activePartId) _selectPart(_activePartId);
+          else { const p=_flatParts(); if(p.length>0) _selectPart(p[0].id); }
+          return;
+        }
+
+        if(action==='scene:stop'){
+          // Stop audio; leave visuals as-is
+          if(_audio) { try { _audio.pause?.() || _audio.stop?.(); } catch(_){} }
+          Toast.info('⏹ Stopped');
+          return;
+        }
+
+        if(action.startsWith('scene:jump:')){
+          // PC-style jump: jump to part at 0-indexed position in the flat parts list
+          const pcNum = parseInt(action.split(':')[2]);
+          if(!isNaN(pcNum)){
+            const flat=_flatParts();
+            if(pcNum < flat.length){
+              _selectPart(flat[pcNum].id);
+            } else {
+              Toast.warn(`MIDI jump: no part at index ${pcNum} (${flat.length} parts total)`);
+            }
+          }
+          return;
+        }
+
         if(orig)orig(action);
       };
     }

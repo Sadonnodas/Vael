@@ -548,6 +548,14 @@
           <div class="status-dot inactive" id="dot-video"></div>
           <span id="label-video">No video</span>
         </div>
+        <!-- MIDI activity indicator -->
+        <div class="status-item" id="midi-status-item" title="MIDI activity" style="display:flex;align-items:center;gap:4px">
+          <div id="midi-activity-dot" style="width:7px;height:7px;border-radius:50%;
+            background:rgba(255,255,255,0.15);
+            transition:background 0.06s,box-shadow 0.06s;flex-shrink:0"></div>
+          <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-dim)">MIDI</span>
+        </div>
+
         <!-- Recording indicator — shown only while recording -->
         <div id="status-rec-indicator" style="display:none;align-items:center;gap:5px">
           <div style="width:7px;height:7px;border-radius:50%;background:#ff4444;

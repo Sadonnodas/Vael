@@ -513,31 +513,54 @@
   // ── MIDI ──────────────────────────────────────────────────────
   const midi = new MidiEngine(layers);
   window._vaelMidi = midi;
+
+  // Restore saved MIDI settings (device selection, channel filter, perf profile)
+  try {
+    const savedMidi = localStorage.getItem('vael-midi-settings');
+    if (savedMidi) midi.fromJSON(JSON.parse(savedMidi));
+  } catch (_) {}
+
   midi.init().then(() => MidiPanel.init(midi, layers, document.getElementById('midi-panel-content')));
 
   // MIDI clock sync — override beat detector BPM when external clock is active
   midi.onClockBpm = (bpm) => {
-    // Sequencer always gets the clock BPM
     seq.setBpm(bpm);
-    // Refresh MIDI panel to show current BPM
     MidiPanel.refresh();
   };
   midi.onClockStart = () => Toast.info('MIDI clock: started');
   midi.onClockStop  = () => Toast.info('MIDI clock: stopped');
 
   // Global MIDI actions → setlist navigation
+  // NOTE: PlaylistPanel may override this in its init() to intercept
+  // scene:next / scene:prev for the concert setlist. Other actions fall
+  // through via the `orig` callback chain PlaylistPanel sets up.
   midi.onGlobalAction = (action) => {
     if (action === 'scene:next') {
       setlist.next();
       Toast.info(`Scene → ${setlist.currentIndex + 1} / ${setlist.entries.length}`);
+
     } else if (action === 'scene:prev') {
       setlist.prev();
       Toast.info(`Scene → ${setlist.currentIndex + 1} / ${setlist.entries.length}`);
-    } else if (action.startsWith('scene:')) {
-      const idx = parseInt(action.split(':')[1]) - 1;
-      if (!isNaN(idx)) {
-        setlist.goto(idx);
-        Toast.info(`Scene → ${idx + 1} / ${setlist.entries.length}`);
+
+    } else if (action === 'scene:play') {
+      // Trigger / re-activate the current scene in SetlistManager
+      setlist.goto(setlist.currentIndex ?? 0);
+      Toast.info('▶ Scene triggered');
+
+    } else if (action === 'scene:stop') {
+      // Stop audio playback
+      if (typeof audio !== 'undefined') {
+        try { audio.pause?.() || audio.stop?.(); } catch (_) {}
+      }
+      Toast.info('⏹ Stopped');
+
+    } else if (action.startsWith('scene:jump:')) {
+      // PC-style direct jump: scene:jump:N (0-indexed program number)
+      const pcNum = parseInt(action.split(':')[2]);
+      if (!isNaN(pcNum)) {
+        setlist.goto(pcNum);
+        Toast.info(`Scene → ${pcNum + 1} / ${setlist.entries.length}`);
       }
     }
   };
