@@ -214,10 +214,15 @@ class HistoryManager {
         layer.blendMode   = def.blendMode ?? 'normal';
         layer.maskLayerId = def.maskLayerId || null;
         layer.maskMode    = def.maskMode    || 'luminance';
-        if (def.transform) Object.assign(layer.transform, def.transform);
-        if (def.modMatrix) layer.modMatrix?.fromJSON(def.modMatrix, layer);
-        if (def.fx)        layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
+        if (def.transform)  Object.assign(layer.transform, def.transform);
+        if (def.clipShape  !== undefined) layer.clipShape  = def.clipShape  ? { ...def.clipShape  } : null;
+        if (def.colorMask  !== undefined) layer.colorMask  = def.colorMask  ? { ...def.colorMask  } : null;
+        if (def.modMatrix)  layer.modMatrix?.fromJSON(def.modMatrix, layer);
+        if (def.fx)         layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
         if (def.params && layer.params) Object.assign(layer.params, def.params);
+        if (Array.isArray(def.freeformPoints) && layer.freeformPoints !== undefined) {
+          layer.freeformPoints = def.freeformPoints.map(p => ({ ...p }));
+        }
         if (typeof layer.init === 'function') layer.init(layer.params || {});
         this._layers.add(layer);
       } catch (e) {

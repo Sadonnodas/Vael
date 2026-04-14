@@ -162,6 +162,16 @@ const LayerFX = (() => {
         _applyPixelate(offscreen, offCtx, W, H, px);
         break;
       }
+
+      case 'chroma-key': {
+        _applyChromaKeyFX(offCtx, W, H, p, false);
+        break;
+      }
+
+      case 'color-isolate': {
+        _applyChromaKeyFX(offCtx, W, H, p, true);
+        break;
+      }
     }
   }
 
@@ -300,6 +310,67 @@ const LayerFX = (() => {
     geo.dispose();
   }
 
+  // ── Chroma Key / Color Isolate ────────────────────────────────
+
+  /**
+   * Shared pixel-loop for Chroma Key and Color Isolate.
+   * isolate=false → remove pixels matching the key color (green screen)
+   * isolate=true  → keep only pixels matching the key color; rest → transparent
+   *                 When p.invert is true, behaviour flips back to chroma-key.
+   */
+  function _applyChromaKeyFX(offCtx, W, H, p, isolate) {
+    const [kr, kg, kb] = VaelColor.hexToRgb(p.color || (isolate ? '#ffff00' : '#00ff00'));
+    const [kh, ks, kl] = VaelColor.rgbToHsl(kr, kg, kb);
+    const khN  = kh / 360;
+    const tol  = p.tolerance ?? 0.3;
+    const soft = Math.max(0.001, p.softness ?? 0.1);
+    const spill = p.spill ?? 0.1;
+    const invert = p.invert ?? false;
+
+    const imageData = offCtx.getImageData(0, 0, W, H);
+    const d = imageData.data;
+
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i+3] === 0) continue;
+      const [ph, ps, pl] = VaelColor.rgbToHsl(d[i]/255, d[i+1]/255, d[i+2]/255);
+      const phN = ph / 360;
+      const dh   = Math.min(Math.abs(phN - khN), 1 - Math.abs(phN - khN));
+      const dist = dh * 0.6 + Math.abs(ps - ks) * 0.2 + Math.abs(pl - kl) * 0.2;
+
+      // removeMatching=true  → chroma key behaviour (remove pixels near key color)
+      // removeMatching=false → isolate behaviour   (keep pixels near key color)
+      const removeMatching = isolate ? invert : !invert;
+
+      if (removeMatching) {
+        if (dist < tol) {
+          d[i+3] = 0;
+        } else if (dist < tol + soft) {
+          const t = (dist - tol) / soft;
+          d[i+3] = Math.round(d[i+3] * t);
+          // Spill suppression: desaturate pixels near the key hue
+          if (!isolate && spill > 0 && dh < 0.15) {
+            const grey   = d[i] * 0.299 + d[i+1] * 0.587 + d[i+2] * 0.114;
+            const factor = spill * (1 - t);
+            d[i]   = Math.round(d[i]   + (grey - d[i])   * factor);
+            d[i+1] = Math.round(d[i+1] + (grey - d[i+1]) * factor);
+            d[i+2] = Math.round(d[i+2] + (grey - d[i+2]) * factor);
+          }
+        }
+      } else {
+        // Keep pixels near key color, remove everything else
+        if (dist < tol) {
+          // fully keep — no change
+        } else if (dist < tol + soft) {
+          const t = (dist - tol) / soft;
+          d[i+3] = Math.round(d[i+3] * (1 - t));
+        } else {
+          d[i+3] = 0;
+        }
+      }
+    }
+    offCtx.putImageData(imageData, 0, 0);
+  }
+
   // ── Effect catalog for UI ─────────────────────────────────────
 
   const CATALOG = [
@@ -316,6 +387,8 @@ const LayerFX = (() => {
     { type: 'threshold',    label: 'Threshold',       params: { threshold: 0.5 } },
     { type: 'color-overlay',label: 'Color overlay',   params: { color: '#ff6600', opacity: 0.3, blendMode: 'color', audioAmount: 0 } },
     { type: 'pixelate',     label: 'Pixelate',        params: { size: 8,      audioAmount: 0 } },
+    { type: 'chroma-key',   label: '🎨 Chroma Key',   params: { color: '#00ff00', tolerance: 0.3, softness: 0.1, spill: 0.1 } },
+    { type: 'color-isolate',label: '🎯 Color Isolate', params: { color: '#ffff00', tolerance: 0.3, softness: 0.1, invert: false } },
   ];
 
   return { apply, CATALOG };

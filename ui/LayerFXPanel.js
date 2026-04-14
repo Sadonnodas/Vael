@@ -32,6 +32,11 @@ const LayerFXPanel = (() => {
                       { id: 'audioAmount', label: 'Audio →',    min: 0,   max: 2,   step: 0.1, default: 0    }],
     'pixelate':      [{ id: 'size',        label: 'Pixel size', min: 2,   max: 40,  step: 1,    default: 8   },
                       { id: 'audioAmount', label: 'Audio →',    min: 0,   max: 2,   step: 0.1, default: 0    }],
+    'chroma-key':    [{ id: 'tolerance',   label: 'Tolerance',  min: 0,   max: 1,   step: 0.01, default: 0.3 },
+                      { id: 'softness',    label: 'Softness',   min: 0,   max: 1,   step: 0.01, default: 0.1 },
+                      { id: 'spill',       label: 'Spill suppr.',min: 0,  max: 1,   step: 0.01, default: 0.1 }],
+    'color-isolate': [{ id: 'tolerance',   label: 'Tolerance',  min: 0,   max: 1,   step: 0.01, default: 0.3 },
+                      { id: 'softness',    label: 'Softness',   min: 0,   max: 1,   step: 0.01, default: 0.1 }],
   };
 
   function render(layer, container) {
@@ -166,11 +171,22 @@ const LayerFXPanel = (() => {
             </span>
           </div>
         `).join('')}
-        ${effect.type === 'color-overlay' ? `
+        ${(effect.type === 'color-overlay' || effect.type === 'chroma-key' || effect.type === 'color-isolate') ? `
           <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
             <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:52px">Color</span>
-            <input type="color" class="lfx-color" value="${effect.params.color || '#ff6600'}"
+            <input type="color" class="lfx-color" value="${effect.params.color || (effect.type === 'color-isolate' ? '#ffff00' : '#00ff00')}"
               style="height:22px;border:1px solid var(--border);border-radius:3px;background:var(--bg);cursor:pointer;flex:1" />
+            ${(effect.type === 'chroma-key' || effect.type === 'color-isolate') ? `
+            <button class="lfx-eyedropper" title="Sample color from canvas"
+              style="background:none;border:1px solid var(--border-dim);border-radius:3px;
+                     color:var(--text-dim);font-family:var(--font-mono);font-size:10px;
+                     padding:1px 6px;cursor:pointer;line-height:20px">🎯</button>` : ''}
+          </div>` : ''}
+        ${effect.type === 'color-isolate' ? `
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-top:6px">
+            <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">Invert (acts as chroma key)</span>
+            <input type="checkbox" class="lfx-invert" ${effect.params.invert ? 'checked' : ''}
+              style="accent-color:var(--accent);width:14px;height:14px;cursor:pointer" />
           </div>` : ''}
       `;
 
@@ -203,6 +219,43 @@ const LayerFXPanel = (() => {
       // Color picker
       card.querySelector('.lfx-color')?.addEventListener('input', e => {
         effect.params.color = e.target.value;
+      });
+
+      // Eyedropper — sample pixel from the rendered WebGL canvas
+      card.querySelector('.lfx-eyedropper')?.addEventListener('click', () => {
+        const colorInput = card.querySelector('.lfx-color');
+        Toast.info('Click anywhere on the canvas to sample a color');
+        const mainCanvas = document.getElementById('main-canvas');
+        if (!mainCanvas) return;
+        const onCanvasClick = (evt) => {
+          mainCanvas.removeEventListener('click', onCanvasClick);
+          mainCanvas.style.cursor = '';
+          const rect = mainCanvas.getBoundingClientRect();
+          const scaleX = mainCanvas.width  / rect.width;
+          const scaleY = mainCanvas.height / rect.height;
+          const px = Math.round((evt.clientX - rect.left) * scaleX);
+          const py = Math.round((evt.clientY - rect.top)  * scaleY);
+          try {
+            const tmp = document.createElement('canvas');
+            tmp.width = tmp.height = 1;
+            const tc = tmp.getContext('2d');
+            tc.drawImage(mainCanvas, -px, -py);
+            const d = tc.getImageData(0, 0, 1, 1).data;
+            const hex = VaelColor.rgbToHex(d[0]/255, d[1]/255, d[2]/255);
+            effect.params.color = hex;
+            if (colorInput) colorInput.value = hex;
+            Toast.success('Color sampled: ' + hex);
+          } catch (e) {
+            Toast.error('Could not sample color');
+          }
+        };
+        mainCanvas.style.cursor = 'crosshair';
+        mainCanvas.addEventListener('click', onCanvasClick);
+      });
+
+      // Invert toggle (color-isolate only)
+      card.querySelector('.lfx-invert')?.addEventListener('change', e => {
+        effect.params.invert = e.target.checked;
       });
 
       // Reorder

@@ -149,8 +149,36 @@ const ParamPanel = (() => {
       pSec.el.querySelector('summary').appendChild(randBtn);
 
       params.forEach(p => {
+        // TileLayer: populate sourceId dropdown dynamically from live layer stack
+        if (typeof TileLayer !== 'undefined' && layer instanceof TileLayer && p.id === 'sourceId') {
+          const allLayers = window._vaelLayers?.layers ?? [];
+          p.options = allLayers
+            .filter(l => l.id !== layer.id)
+            .map(l => ({ value: l.id, label: l.name || l.constructor?.name || l.id }));
+        }
         pSec.body.appendChild(buildControl(p, layer.params?.[p.id] ?? p.default, layer));
       });
+
+      // TileLayer: freeform crop draw button
+      if (typeof TileLayer !== 'undefined' && layer instanceof TileLayer) {
+        const drawBtn = document.createElement('button');
+        drawBtn.style.cssText = `
+          width:100%;margin-top:8px;padding:5px 0;
+          background:none;border:1px solid var(--border-dim);border-radius:4px;
+          color:var(--text-muted);font-family:var(--font-mono);font-size:9px;
+          cursor:pointer;transition:border-color 0.1s,color 0.1s;
+        `;
+        drawBtn.textContent = '✏ Draw freeform crop shape';
+        drawBtn.title = 'Click points on the canvas to define a custom crop region';
+        drawBtn.addEventListener('mouseenter', () => { drawBtn.style.borderColor = 'var(--accent)'; drawBtn.style.color = 'var(--accent)'; });
+        drawBtn.addEventListener('mouseleave', () => { drawBtn.style.borderColor = 'var(--border-dim)'; drawBtn.style.color = 'var(--text-muted)'; });
+        drawBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          window.dispatchEvent(new CustomEvent('vael:tilelayer-draw', { detail: { layerId: layer.id } }));
+        });
+        pSec.body.appendChild(drawBtn);
+      }
+
       container.appendChild(pSec.el);
     }
 
@@ -445,6 +473,157 @@ const ParamPanel = (() => {
     clipDiv.appendChild(clipSizeContainer);
     _refreshClip();
     container.appendChild(clipDiv);
+
+    // ── Color Mask ───────────────────────────────────────────────
+    _buildColorMaskSection(layer, container);
+  }
+
+  function _buildColorMaskSection(layer, container) {
+    const cm = layer.colorMask;
+    const enabled = cm?.enabled ?? false;
+
+    const section = document.createElement('div');
+    section.style.cssText = 'margin-top:10px;padding-top:8px;border-top:1px solid var(--border-dim)';
+
+    // Header row: label + enable toggle
+    const headerRow = document.createElement('div');
+    headerRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px';
+
+    const label = document.createElement('div');
+    label.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);text-transform:uppercase;letter-spacing:0.5px';
+    label.textContent = 'Color Mask';
+
+    const toggle = document.createElement('input');
+    toggle.type    = 'checkbox';
+    toggle.checked = enabled;
+    toggle.style.cssText = 'accent-color:var(--accent);width:14px;height:14px;cursor:pointer';
+
+    headerRow.appendChild(label);
+    headerRow.appendChild(toggle);
+    section.appendChild(headerRow);
+
+    // Controls — shown only when enabled
+    const body = document.createElement('div');
+    body.style.display = enabled ? 'block' : 'none';
+
+    const _buildCMControls = () => {
+      body.innerHTML = '';
+      const cur = layer.colorMask || {};
+
+      // Color picker + eyedropper
+      const colorRow = document.createElement('div');
+      colorRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+      colorRow.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:52px">Color</span>
+        <input type="color" class="cm-color" value="${cur.color || '#00ff00'}"
+          style="height:22px;flex:1;border:1px solid var(--border);border-radius:3px;background:var(--bg);cursor:pointer" />
+        <button class="cm-eyedropper" title="Sample color from canvas"
+          style="background:none;border:1px solid var(--border-dim);border-radius:3px;
+                 color:var(--text-dim);font-family:var(--font-mono);font-size:10px;
+                 padding:1px 6px;cursor:pointer;line-height:20px">🎯</button>
+      `;
+      body.appendChild(colorRow);
+
+      // Tolerance slider
+      body.appendChild(_buildInlineSlider('Tolerance', cur.tolerance ?? 0.3, 0, 1, 0.01, v => {
+        if (layer.colorMask) layer.colorMask.tolerance = v;
+      }));
+
+      // Softness slider
+      body.appendChild(_buildInlineSlider('Softness', cur.softness ?? 0.1, 0, 1, 0.01, v => {
+        if (layer.colorMask) layer.colorMask.softness = v;
+      }));
+
+      // Invert toggle
+      const invertRow = document.createElement('div');
+      invertRow.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-top:4px';
+      invertRow.innerHTML = `
+        <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">Invert (keep color, remove rest)</span>
+        <input type="checkbox" class="cm-invert" ${cur.invert ? 'checked' : ''}
+          style="accent-color:var(--accent);width:14px;height:14px;cursor:pointer" />
+      `;
+      body.appendChild(invertRow);
+
+      // Wire events
+      body.querySelector('.cm-color').addEventListener('input', e => {
+        if (layer.colorMask) layer.colorMask.color = e.target.value;
+      });
+
+      body.querySelector('.cm-eyedropper').addEventListener('click', () => {
+        const colorInput = body.querySelector('.cm-color');
+        Toast.info('Click anywhere on the canvas to sample a color');
+        const mainCanvas = document.getElementById('main-canvas');
+        if (!mainCanvas) return;
+        const onCanvasClick = (evt) => {
+          mainCanvas.removeEventListener('click', onCanvasClick);
+          mainCanvas.style.cursor = '';
+          const rect = mainCanvas.getBoundingClientRect();
+          const px = Math.round((evt.clientX - rect.left) * (mainCanvas.width / rect.width));
+          const py = Math.round((evt.clientY - rect.top)  * (mainCanvas.height / rect.height));
+          try {
+            const tmp = document.createElement('canvas');
+            tmp.width = tmp.height = 1;
+            tmp.getContext('2d').drawImage(mainCanvas, -px, -py);
+            const d = tmp.getContext('2d').getImageData(0, 0, 1, 1).data;
+            const hex = VaelColor.rgbToHex(d[0]/255, d[1]/255, d[2]/255);
+            if (layer.colorMask) layer.colorMask.color = hex;
+            if (colorInput) colorInput.value = hex;
+            Toast.success('Color sampled: ' + hex);
+          } catch (_) { Toast.error('Could not sample color'); }
+        };
+        mainCanvas.style.cursor = 'crosshair';
+        mainCanvas.addEventListener('click', onCanvasClick);
+      });
+
+      body.querySelector('.cm-invert').addEventListener('change', e => {
+        if (layer.colorMask) layer.colorMask.invert = e.target.checked;
+      });
+    };
+
+    _buildCMControls();
+    section.appendChild(body);
+
+    toggle.addEventListener('change', () => {
+      if (toggle.checked) {
+        layer.colorMask = {
+          enabled:   true,
+          color:     layer.colorMask?.color     || '#00ff00',
+          tolerance: layer.colorMask?.tolerance ?? 0.3,
+          softness:  layer.colorMask?.softness  ?? 0.1,
+          invert:    layer.colorMask?.invert    ?? false,
+        };
+        body.style.display = 'block';
+        _buildCMControls();
+      } else {
+        layer.colorMask = null;
+        body.style.display = 'none';
+      }
+    });
+
+    container.appendChild(section);
+  }
+
+  function _buildInlineSlider(labelText, value, min, max, step, onChange) {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:6px';
+    const lbl = document.createElement('span');
+    lbl.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:52px';
+    lbl.textContent = labelText;
+    const slider = document.createElement('input');
+    slider.type  = 'range';
+    slider.min   = min; slider.max = max; slider.step = step;
+    slider.value = value;
+    slider.style.cssText = 'flex:1;accent-color:var(--accent)';
+    const valSpan = document.createElement('span');
+    valSpan.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--accent);min-width:28px;text-align:right';
+    valSpan.textContent = parseFloat(value).toFixed(2);
+    slider.addEventListener('input', () => {
+      const v = parseFloat(slider.value);
+      valSpan.textContent = v.toFixed(2);
+      onChange(v);
+    });
+    row.appendChild(lbl); row.appendChild(slider); row.appendChild(valSpan);
+    return row;
   }
 
   // ── Control builders ─────────────────────────────────────────

@@ -198,9 +198,14 @@ const PresetBrowser = (() => {
         layer.opacity     = def.opacity   ?? 1;
         layer.blendMode   = def.blendMode ?? 'normal';
         layer.maskLayerId = def.maskLayerId || null;
-        if (def.transform) Object.assign(layer.transform, def.transform);
-        if (def.modMatrix) layer.modMatrix?.fromJSON(def.modMatrix);
+        if (def.transform)  Object.assign(layer.transform, def.transform);
+        if (def.clipShape  !== undefined) layer.clipShape  = def.clipShape  ? { ...def.clipShape  } : null;
+        if (def.colorMask  !== undefined) layer.colorMask  = def.colorMask  ? { ...def.colorMask  } : null;
+        if (def.modMatrix)  layer.modMatrix?.fromJSON(def.modMatrix);
         if (def.params && layer.params) Object.assign(layer.params, def.params);
+        if (Array.isArray(def.freeformPoints) && layer.freeformPoints !== undefined) {
+          layer.freeformPoints = def.freeformPoints.map(p => ({ ...p }));
+        }
         // Pass shaderName + glsl so custom ShaderLayers restore correctly
         if (typeof layer.init === 'function') layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
         _layerStack.add(layer);

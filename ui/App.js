@@ -13,6 +13,7 @@
   const video    = new VideoEngine();
   const recorder = new Recorder();
   const layers   = new LayerStack();
+  window._vaelLayers = layers;  // TileLayer reads source layers via this reference
   const beat     = new BeatDetector();
 
   const videoLibrary  = new VideoLibrary();
@@ -44,6 +45,7 @@
       case 'SVGLayer':         return new SVGLayer(uid);
       case 'FeedbackLayer':    return new FeedbackLayer(uid);
       case 'SlideshowLayer':   return new SlideshowLayer(uid);
+      case 'TileLayer':        return new TileLayer(uid);
       default: console.warn('Unknown layer type:', typeName); return null;
     }
   }
@@ -679,6 +681,9 @@
     // ── Text ─────────────────────────────────────────────────
     { id: 'lyrics',           label: '💬 Lyrics / Text',          cls: () => new LyricsLayer(`lyrics-${Date.now()}`) },
 
+    // ── Generative ───────────────────────────────────────────
+    { id: 'tile',             label: '⊞ Tile & Repeat',          cls: () => new TileLayer(`tile-${Date.now()}`) },
+
     // ── Utilities ────────────────────────────────────────────
     { id: 'feedback',         label: '⟳ Feedback Trail',         cls: () => new FeedbackLayer(`feedback-${Date.now()}`) },
     { id: 'canvas-paint',     label: '✏ Canvas Paint',           cls: () => new CanvasPaintLayer(`canvas-paint-${Date.now()}`) },
@@ -724,6 +729,111 @@
 
   // Wire canvas drag — hold Alt to drag/scroll selected layer
   LayerPanel._initCanvasDrag(canvas);
+
+  // ── TileLayer freeform crop drawing mode ─────────────────────
+  // Triggered by the "✏ Draw crop shape" button in ParamPanel
+  // when a TileLayer has shape='freeform' selected.
+  window.addEventListener('vael:tilelayer-draw', e => {
+    const layerId = e.detail?.layerId;
+    const layer   = _findLayerAnywhere(layerId);
+    if (!(layer instanceof TileLayer)) return;
+
+    const points = [];
+    const overlay = document.createElement('canvas');
+    overlay.style.cssText = `
+      position:absolute;top:0;left:0;width:100%;height:100%;
+      pointer-events:all;cursor:crosshair;z-index:100;
+    `;
+    const canvasArea = document.getElementById('canvas-area');
+    canvasArea?.appendChild(overlay);
+
+    const resize = () => {
+      overlay.width  = canvasArea?.clientWidth  || window.innerWidth;
+      overlay.height = canvasArea?.clientHeight || window.innerHeight;
+    };
+    resize();
+
+    const hint = document.createElement('div');
+    hint.style.cssText = `
+      position:absolute;bottom:60px;left:50%;transform:translateX(-50%);
+      background:rgba(0,0,0,0.8);color:var(--accent);
+      font-family:var(--font-mono);font-size:11px;padding:8px 16px;
+      border-radius:6px;z-index:101;pointer-events:none;white-space:nowrap;
+    `;
+    hint.textContent = 'Click to place points • Enter or click first point to close • ESC to cancel';
+    canvasArea?.appendChild(hint);
+
+    const oc = overlay.getContext('2d');
+    const CLOSE_RADIUS = 15;
+
+    const _redraw = () => {
+      oc.clearRect(0, 0, overlay.width, overlay.height);
+      if (points.length === 0) return;
+      oc.save();
+      oc.strokeStyle = 'var(--accent, #00d4aa)';
+      oc.fillStyle   = 'rgba(0,212,170,0.15)';
+      oc.lineWidth   = 2;
+      oc.setLineDash([6, 3]);
+      oc.beginPath();
+      oc.moveTo(points[0].cx, points[0].cy);
+      for (let i = 1; i < points.length; i++) oc.lineTo(points[i].cx, points[i].cy);
+      oc.stroke();
+      if (points.length > 2) {
+        oc.beginPath();
+        oc.moveTo(points[0].cx, points[0].cy);
+        for (let i = 1; i < points.length; i++) oc.lineTo(points[i].cx, points[i].cy);
+        oc.closePath();
+        oc.fill();
+      }
+      // Draw point dots
+      points.forEach((p, i) => {
+        oc.beginPath();
+        oc.arc(p.cx, p.cy, i === 0 ? 6 : 4, 0, Math.PI * 2);
+        oc.fillStyle = i === 0 ? 'rgba(0,212,170,0.9)' : 'rgba(0,212,170,0.6)';
+        oc.fill();
+      });
+      oc.restore();
+    };
+
+    const _finish = () => {
+      overlay.removeEventListener('click', _onClick);
+      document.removeEventListener('keydown', _onKey);
+      overlay.remove();
+      hint.remove();
+      if (points.length > 2) {
+        const rect = canvas.getBoundingClientRect();
+        layer.freeformPoints = points.map(p => ({
+          x: p.cx / (rect.width  || overlay.width),
+          y: p.cy / (rect.height || overlay.height),
+        }));
+        window.dispatchEvent(new CustomEvent('vael:refresh-params'));
+        Toast.success('Crop shape set — ' + points.length + ' points');
+      } else {
+        Toast.info('Cancelled — need at least 3 points');
+      }
+    };
+
+    const _onClick = (evt) => {
+      const cx = evt.offsetX;
+      const cy = evt.offsetY;
+      // Close if click is near first point and we have enough points
+      if (points.length > 2) {
+        const dx = cx - points[0].cx;
+        const dy = cy - points[0].cy;
+        if (Math.sqrt(dx*dx + dy*dy) < CLOSE_RADIUS) { _finish(); return; }
+      }
+      points.push({ cx, cy });
+      _redraw();
+    };
+
+    const _onKey = (evt) => {
+      if (evt.key === 'Enter') { _finish(); }
+      if (evt.key === 'Escape') { points.length = 0; _finish(); }
+    };
+
+    overlay.addEventListener('click', _onClick);
+    document.addEventListener('keydown', _onKey);
+  });
 
   // Hook selectLayer to inject Restart button for MathVisualizer
   const _origSelectLayer = LayerPanel.selectLayer.bind(LayerPanel);

@@ -37,6 +37,10 @@ class BaseLayer {
     // false = instant (full reinitialise on every param change, old behaviour)
     this.softUpdate = true;
 
+    // Color mask — punch holes in the layer by color. null = disabled.
+    // { enabled, color, tolerance, softness, invert }
+    this.colorMask = null;
+
     // Per-layer FX chain
     this.fx = [];
 
@@ -75,7 +79,8 @@ class BaseLayer {
       maskLayerId: this.maskLayerId || null,
       maskMode:    this.maskMode    || 'luminance',
       transform:   { ...this.transform },
-      clipShape:   this.clipShape ? { ...this.clipShape } : null,
+      clipShape:   this.clipShape  ? { ...this.clipShape }  : null,
+      colorMask:   this.colorMask  ? { ...this.colorMask }  : null,
       softUpdate:  this.softUpdate,
       fx:          this.fx ? this.fx.map(f => ({ ...f, params: { ...f.params } })) : [],
       modMatrix:   this.modMatrix?.toJSON() || [],

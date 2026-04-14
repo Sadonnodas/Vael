@@ -209,6 +209,11 @@ class Renderer {
       }
       offCtx.restore();
 
+      // Color mask — punch through pixels by color after rendering
+      if (layer.colorMask?.enabled) {
+        _applyColorMask(offCtx, W, H, layer.colorMask);
+      }
+
       // Apply clip shape — punch out everything outside rect/ellipse
       if (layer.clipShape?.type && layer.clipShape.type !== 'none') {
         const cs      = layer.clipShape;
@@ -284,6 +289,13 @@ class Renderer {
       if (!layer.visible) return;
       const quad = this._quads.get(layer.id);
       if (!quad) return;
+
+      // Hidden source — TileLayer sets this each frame to suppress a source layer
+      // from appearing in the composite output while still allowing Pass 1 to render it.
+      if (layer._hiddenSource) {
+        layer._hiddenSource = false; // reset so TileLayer must re-set next frame
+        return;
+      }
 
       // Apply mask if set
       if (layer.maskLayerId) {
@@ -688,6 +700,43 @@ function _canvas2dBlendOp(mode) {
     saturation: 'saturation',
   };
   return map[mode] || 'source-over';
+}
+
+/**
+ * Punch holes in a layer's offscreen canvas by color.
+ * mask.invert=false → remove pixels matching color (default, like chroma key)
+ * mask.invert=true  → keep only pixels matching color, remove everything else
+ */
+function _applyColorMask(offCtx, W, H, mask) {
+  const [kr, kg, kb] = VaelColor.hexToRgb(mask.color || '#00ff00');
+  const [kh, ks, kl] = VaelColor.rgbToHsl(kr, kg, kb);
+  const khN  = kh / 360;
+  const tol  = mask.tolerance ?? 0.3;
+  const soft = Math.max(0.001, mask.softness ?? 0.1);
+  const invert = mask.invert ?? false;
+
+  try {
+    const imageData = offCtx.getImageData(0, 0, W, H);
+    const d = imageData.data;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i+3] === 0) continue;
+      const [ph, ps, pl] = VaelColor.rgbToHsl(d[i]/255, d[i+1]/255, d[i+2]/255);
+      const phN = ph / 360;
+      const dh   = Math.min(Math.abs(phN - khN), 1 - Math.abs(phN - khN));
+      const dist = dh * 0.6 + Math.abs(ps - ks) * 0.2 + Math.abs(pl - kl) * 0.2;
+      // invert=false → chroma-key: remove matching pixels
+      // invert=true  → isolate: keep matching pixels, remove rest
+      const removeMatching = !invert;
+      if (removeMatching) {
+        if (dist < tol)               { d[i+3] = 0; }
+        else if (dist < tol + soft)   { d[i+3] = Math.round(d[i+3] * (dist - tol) / soft); }
+      } else {
+        if (dist >= tol + soft)       { d[i+3] = 0; }
+        else if (dist >= tol)         { d[i+3] = Math.round(d[i+3] * (1 - (dist - tol) / soft)); }
+      }
+    }
+    offCtx.putImageData(imageData, 0, 0);
+  } catch (_) { /* tainted canvas or other error — skip silently */ }
 }
 
 /**
