@@ -290,18 +290,62 @@ class SetlistManager {
       try {
         const layer = this._layerFactory(def.type, def.id + '-sl');
         if (!layer) return;
-        layer.name      = def.name      ?? layer.name;
-        layer.visible   = def.visible   ?? true;
-        layer.opacity   = def.opacity   ?? 1;
-        layer.blendMode = def.blendMode ?? 'normal';
-        if (def.params    && layer.params)     Object.assign(layer.params, def.params);
-        if (def.transform && layer.transform)  Object.assign(layer.transform, def.transform);
-        if (def.modMatrix && layer.modMatrix)  layer.modMatrix.fromJSON(def.modMatrix, layer);
+
+        layer.name        = def.name        ?? layer.name;
+        layer.visible     = def.visible     ?? true;
+        layer.opacity     = def.opacity     ?? 1;
+        layer.blendMode   = def.blendMode   ?? 'normal';
+        layer.maskLayerId = def.maskLayerId  || null;
+        layer.maskMode    = def.maskMode     || 'luminance';
+
+        if (def.params    && layer.params)    Object.assign(layer.params, def.params);
+        if (def.transform && layer.transform) Object.assign(layer.transform, def.transform);
+        if (def.modMatrix && layer.modMatrix) layer.modMatrix.fromJSON(def.modMatrix, layer);
+        if (def.fx)         layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
+        if (def.clipShape  !== undefined) layer.clipShape  = def.clipShape  ? { ...def.clipShape  } : null;
+        if (def.colorMask  !== undefined) layer.colorMask  = def.colorMask  ? { ...def.colorMask  } : null;
+        if (def.softUpdate !== undefined) layer.softUpdate = def.softUpdate;
+        if (Array.isArray(def.freeformPoints) && layer.freeformPoints !== undefined) {
+          layer.freeformPoints = def.freeformPoints.map(p => ({ ...p }));
+        }
+
         // Re-attach audio engine for layers that need direct analyser access
         if (this._audioEngine && '_audioEngine' in layer) {
           layer._audioEngine = this._audioEngine;
         }
-        if (typeof layer.init === 'function')  layer.init(layer.params || {});
+
+        // Shaders need shaderName + glsl passed into init, not just params
+        if (typeof layer.init === 'function') {
+          layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
+        }
+
+        // VideoPlayerLayer: reload from in-memory library if available,
+        // avoiding re-prompts or broken blob URLs after scene switches
+        if (def.params?._libraryId && window.videoLibrary) {
+          const entry = window.videoLibrary.entries.find(e => e.id === def.params._libraryId);
+          if (entry) layer.loadFromLibraryEntry(entry);
+        }
+
+        // GroupLayer children
+        if (typeof layer.addChild === 'function' && Array.isArray(def.children)) {
+          def.children.forEach(cd => {
+            try {
+              const child = this._layerFactory(cd.type, cd.id + '-sl');
+              if (!child) return;
+              child.name      = cd.name      ?? child.name;
+              child.visible   = cd.visible   ?? true;
+              child.opacity   = cd.opacity   ?? 1;
+              child.blendMode = cd.blendMode ?? 'normal';
+              if (cd.transform && child.transform) Object.assign(child.transform, cd.transform);
+              if (cd.modMatrix && child.modMatrix) child.modMatrix.fromJSON(cd.modMatrix, child);
+              if (cd.params && child.params) Object.assign(child.params, cd.params);
+              if (typeof child.init === 'function') child.init({ shaderName: cd.shaderName, glsl: cd.glsl, ...child.params });
+              layer.addChild(child);
+            } catch (e) { console.warn('SetlistManager: group child load error', e); }
+          });
+          layer.collapsed = def.collapsed ?? false;
+        }
+
         this._layerStack.add(layer);
       } catch (e) {
         console.warn('SetlistManager: could not load layer', e);

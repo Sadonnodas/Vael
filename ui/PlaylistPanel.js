@@ -117,8 +117,24 @@ const PlaylistPanel = (() => {
     container.appendChild(btn);
   }
 
+  let _perfView=false;
+
   function _renderPlaylist(container){
     const flat=_flatParts(),total=flat.length,activeIdx=flat.findIndex(p=>p.id===_activePartId);
+
+    // ── Performance view toggle ───────────────────────────────────
+    const perfToggle=document.createElement('button');
+    perfToggle.className=`btn ${_perfView?'accent':''}`;
+    perfToggle.style.cssText='width:100%;font-size:9px;margin-bottom:10px';
+    perfToggle.textContent=_perfView?'✕ Exit Performance View':'⚡ Performance View';
+    perfToggle.title='Flat grid of all parts for quick live navigation';
+    perfToggle.addEventListener('click',()=>{_perfView=!_perfView;_refreshUI();});
+    container.appendChild(perfToggle);
+
+    if(_perfView){
+      _renderPerfGrid(container,flat,activeIdx);
+      return;
+    }
 
     if(total>0){
       const prog=document.createElement('div'); prog.style.cssText='height:3px;background:var(--border-dim);border-radius:2px;margin-bottom:8px;overflow:hidden';
@@ -227,6 +243,61 @@ const PlaylistPanel = (() => {
     const hint=document.createElement('p'); hint.style.cssText='font-family:var(--font-mono);font-size:8px;color:var(--text-dim);line-height:1.6;margin-top:8px';
     hint.innerHTML='Map MIDI buttons in <strong style="color:var(--text)">MIDI tab</strong> → Scene navigation to step through parts live';
     container.appendChild(hint);
+  }
+
+  function _renderPerfGrid(container,flat,activeIdx){
+    // Progress bar
+    if(flat.length>0){
+      const prog=document.createElement('div'); prog.style.cssText='height:3px;background:var(--border-dim);border-radius:2px;margin-bottom:10px;overflow:hidden';
+      const fill=document.createElement('div'); const pct=activeIdx>=0?Math.round(((activeIdx+1)/flat.length)*100):0;
+      fill.style.cssText=`height:100%;width:${pct}%;background:var(--accent);border-radius:2px;transition:width 0.3s`; prog.appendChild(fill); container.appendChild(prog);
+    }
+
+    // Group parts by song and render as sections
+    _playlist.songs.forEach(song=>{
+      const songParts=flat.filter(p=>p.songId===song.id);
+      if(!songParts.length)return;
+
+      const songHdr=document.createElement('div');
+      songHdr.style.cssText='font-family:var(--font-mono);font-size:8px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin:8px 0 5px;padding:0 2px';
+      songHdr.textContent=song.name;
+      container.appendChild(songHdr);
+
+      const grid=document.createElement('div');
+      grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:5px;margin-bottom:4px';
+
+      songParts.forEach(p=>{
+        const isAct=p.id===_activePartId;
+        const chip=document.createElement('button');
+        chip.style.cssText=`
+          font-family:var(--font-mono);font-size:8px;padding:7px 8px;
+          background:${isAct?'color-mix(in srgb,var(--accent) 20%,var(--bg-card))':'var(--bg-card)'};
+          border:1px solid ${isAct?'var(--accent)':'var(--border-dim)'};
+          border-radius:5px;color:${isAct?'var(--accent)':'var(--text)'};
+          cursor:pointer;text-align:left;line-height:1.4;transition:border-color 0.1s;
+          overflow:hidden;
+        `;
+        chip.innerHTML=`
+          <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.name}</div>
+          ${p.sceneName?`<div style="font-size:7px;color:${isAct?'var(--accent)':'var(--text-dim)'};margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">✦ ${p.sceneName}</div>`:''}
+          ${p.audioName?`<div style="font-size:7px;color:var(--accent2);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">♪ ${p.audioName}</div>`:''}
+        `;
+        chip.addEventListener('click',()=>_selectPart(p.id));
+        chip.addEventListener('mouseenter',()=>{ if(!isAct) chip.style.borderColor='var(--text-dim)'; });
+        chip.addEventListener('mouseleave',()=>{ if(!isAct) chip.style.borderColor='var(--border-dim)'; });
+        grid.appendChild(chip);
+      });
+      container.appendChild(grid);
+    });
+
+    // Nav controls still available in perf view
+    if(flat.length>0){
+      const t=document.createElement('div'); t.style.cssText='display:flex;gap:6px;margin-top:12px';
+      function _armableClick(action,fallback){return function(e){if(window._vaelLearnMode&&window._vaelMidi){e.stopPropagation();window._vaelMidi.startLearnGlobal(action);Toast.info(`Move a controller to map → ${action.replace('scene:','')}`);return;}fallback();};}
+      const pb=document.createElement('button'); pb.className='btn midi-armable'; pb.style.cssText='flex:1;font-size:9px'; pb.textContent='← Prev'; pb.disabled=(!window._vaelLearnMode&&activeIdx<=0); pb.addEventListener('click',_armableClick('scene:prev',_prevPart));
+      const nb=document.createElement('button'); nb.className='btn accent midi-armable'; nb.style.cssText='flex:1;font-size:9px'; nb.textContent='Next →'; nb.disabled=(!window._vaelLearnMode&&activeIdx>=flat.length-1); nb.addEventListener('click',_armableClick('scene:next',_nextPart));
+      t.append(pb,nb); container.appendChild(t);
+    }
   }
 
   function _buildSong(song,si,flat){
@@ -340,20 +411,25 @@ const PlaylistPanel = (() => {
 
     const audioIcon=document.createElement('span');
     audioIcon.title='Audio'+(part.audioUrl?' — '+part.audioName:' — not set');
-    audioIcon.style.cssText=`font-size:9px;opacity:${part.audioUrl?1:0.2};color:var(--accent2)`;
+    audioIcon.style.cssText=`font-size:9px;opacity:${part.audioUrl?1:0.2};color:var(--accent2);flex-shrink:0`;
     audioIcon.textContent='♪';
 
-    const sceneIcon=document.createElement('span');
-    sceneIcon.title='Scene'+(part.sceneName?' — '+part.sceneName:' — not set');
-    sceneIcon.style.cssText=`font-size:9px;opacity:${part.sceneName?1:0.2};color:var(--accent)`;
-    sceneIcon.textContent='✦';
+    // Scene name badge — shown when a scene is linked
+    const sceneTag=document.createElement('span');
+    if(part.sceneName){
+      sceneTag.style.cssText='font-family:var(--font-mono);font-size:7px;color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);border-radius:3px;padding:1px 5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:80px;flex-shrink:0';
+      sceneTag.textContent=part.sceneName;
+      sceneTag.title='Scene: '+part.sceneName;
+    }
 
     const eb=document.createElement('button');
     eb.style.cssText='background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:7px;padding:2px 6px;cursor:pointer;flex-shrink:0';
     eb.textContent='Edit'; eb.title='Edit this part (audio, scene, notes)';
     eb.addEventListener('click',e=>{e.stopPropagation();_partEditor(part,song,pi);});
 
-    row.append(numSpan,playSpan,nameSpan,audioIcon,sceneIcon,eb);
+    row.append(numSpan,playSpan,nameSpan,audioIcon);
+    if(part.sceneName) row.appendChild(sceneTag);
+    row.appendChild(eb);
     return row;
   }
 

@@ -90,6 +90,42 @@ const ParamPanel = (() => {
       container.appendChild(editBtn);
     }
 
+    // ── Image / Video source replace buttons ─────────────────────
+    if (typeof ImageLayer !== 'undefined' && layer instanceof ImageLayer) {
+      const srcBtn = document.createElement('button');
+      srcBtn.className = 'btn accent';
+      srcBtn.style.cssText = 'width:100%;font-size:9px;margin-bottom:10px';
+      srcBtn.textContent = layer._sourceName
+        ? `🖼 ${layer._sourceName}  — Change image`
+        : '🖼 Choose image';
+      srcBtn.addEventListener('click', () => {
+        if (typeof LibraryPanel !== 'undefined') {
+          LibraryPanel.promptImageForLayer(layer, container);
+        }
+      });
+      container.appendChild(srcBtn);
+    }
+
+    if (typeof VideoPlayerLayer !== 'undefined' && layer instanceof VideoPlayerLayer) {
+      const srcBtn = document.createElement('button');
+      srcBtn.className = 'btn accent';
+      srcBtn.style.cssText = 'width:100%;font-size:9px;margin-bottom:6px';
+      srcBtn.textContent = layer._sourceName
+        ? `▶ ${layer._sourceName}  — Change video`
+        : '⬆ Choose / upload video';
+      srcBtn.addEventListener('click', () => {
+        window.dispatchEvent(new CustomEvent('vael:open-video-picker', { detail: { layerId: layer.id } }));
+      });
+      container.appendChild(srcBtn);
+      // Metadata line
+      if (layer._videoEl?.readyState >= 1 && layer._videoEl.videoWidth) {
+        const meta = document.createElement('div');
+        meta.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:10px;line-height:1.8';
+        meta.textContent = `${layer._videoEl.videoWidth}×${layer._videoEl.videoHeight}  ·  ${layer._videoEl.duration ? layer._videoEl.duration.toFixed(1) + 's' : ''}`;
+        container.appendChild(meta);
+      }
+    }
+
     // Transform & Opacity — always shown for every layer
     const xfSec = _buildCollapsible('Transform & Opacity', sec.transform, o => { sec.transform = o; });
     _buildTransformControls(layer, xfSec.body);
@@ -852,7 +888,11 @@ const ParamPanel = (() => {
     const wrap = document.createElement('div');
     wrap.style.cssText = 'margin-bottom:14px';
     const options = (param.options || [])
-      .map(o => `<option value="${o}" ${o === current ? 'selected' : ''}>${o}</option>`).join('');
+      .map(o => {
+        const val   = (o && typeof o === 'object') ? o.value : o;
+        const label = (o && typeof o === 'object') ? o.label : o;
+        return `<option value="${val}" ${val === current ? 'selected' : ''}>${label}</option>`;
+      }).join('');
     wrap.innerHTML = `
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
         <span style="font-family:var(--font-mono);font-size:9px;color:var(--text-muted)">${param.label}</span>

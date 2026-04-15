@@ -99,6 +99,13 @@
     document.getElementById('_lib-image-single-input').click();
   });
 
+  // Open video picker for a layer by ID — dispatched from ParamPanel's Change Video button
+  window.addEventListener('vael:open-video-picker', e => {
+    const layer = _findLayerAnywhere(e.detail?.layerId);
+    if (!layer) return;
+    _openVideoPicker(layer, paramsContent);
+  });
+
   // Wire shader library load into currently selected ShaderLayer
   window.addEventListener('vael:library-load-shader', e => {
     const { glsl, name } = e.detail;
@@ -491,17 +498,6 @@
   window._vaelSetlist = setlist;
   const perfMode = new PerformanceMode({ setlist, audio, beatDetector: beat, layerStack: layers });
 
-  // Concert setlist panel in SCENES tab
-  if (typeof PlaylistPanel !== 'undefined') {
-    PlaylistPanel.init({
-      setlist,
-      audio,
-      layerStack:   layers,
-      layerFactory: layerFactory,
-      container:    document.getElementById('tab-scenes'),
-    });
-  }
-
   document.addEventListener('vael:fade-duration',   e => { setlist.fadeDuration   = e.detail; });
   document.addEventListener('vael:transition-type', e => { setlist.transitionType = e.detail; });
 
@@ -564,6 +560,18 @@
       }
     }
   };
+
+  // Concert setlist panel in SCENES tab — initialised AFTER midi.onGlobalAction
+  // so PlaylistPanel can safely wrap it with its own next/prev/play/stop handlers.
+  if (typeof PlaylistPanel !== 'undefined') {
+    PlaylistPanel.init({
+      setlist,
+      audio,
+      layerStack:   layers,
+      layerFactory: layerFactory,
+      container:    document.getElementById('tab-scenes'),
+    });
+  }
 
   // ── OSC ──────────────────────────────────────────────────────
   const osc = new OscBridge({ layerStack: layers, setlist, recorder });
@@ -649,12 +657,40 @@
     }
   };
 
+  // ── Presentation mode ────────────────────────────────────────
+  // P → hide sidebar, status strip, toasts, assistant bubble for clean projector output.
+  // F → browser native fullscreen (independent — use both together for best results).
+  let _presentationMode = false;
+
+  function _togglePresentation() {
+    _presentationMode = !_presentationMode;
+    document.body.classList.toggle('vael-presentation', _presentationMode);
+    if (_presentationMode) {
+      Toast.info('Presentation mode ON — press P to exit');
+    }
+  }
+  window._togglePresentation = _togglePresentation;
+
+  document.getElementById('presentation-exit-btn')?.addEventListener('click', () => {
+    _presentationMode = true;  // force off
+    _togglePresentation();
+  });
+
   document.addEventListener('keydown', e => {
     const _tag = e.target.tagName;
     if (_tag === 'INPUT' || _tag === 'SELECT' || _tag === 'TEXTAREA') return;
     if (e.target.isContentEditable) return;
     if (e.target.closest?.('#vael-assistant-panel, [data-no-shortcuts]')) return;
     if (e.key === 't' || e.key === 'T') { e.preventDefault(); seq.tapTempo(); }
+    if (e.key === 'p' || e.key === 'P') { e.preventDefault(); _togglePresentation(); }
+    if (e.key === 'f' || e.key === 'F') {
+      e.preventDefault();
+      if (!document.fullscreenElement) {
+        document.documentElement.requestFullscreen?.().catch(() => {});
+      } else {
+        document.exitFullscreen?.().catch(() => {});
+      }
+    }
   });
 
   // Performance mode TAP button fires this event (no direct seq ref in PerformanceMode)
