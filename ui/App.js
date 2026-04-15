@@ -676,11 +676,23 @@
     _togglePresentation();
   });
 
+  // Mouse-move: briefly reveal exit button while in presentation mode
+  let _presMouseTimer = null;
+  document.addEventListener('mousemove', () => {
+    if (!_presentationMode) return;
+    document.body.classList.add('presentation-mouse-active');
+    clearTimeout(_presMouseTimer);
+    _presMouseTimer = setTimeout(() => {
+      document.body.classList.remove('presentation-mouse-active');
+    }, 2000);
+  });
+
   document.addEventListener('keydown', e => {
     const _tag = e.target.tagName;
     if (_tag === 'INPUT' || _tag === 'SELECT' || _tag === 'TEXTAREA') return;
     if (e.target.isContentEditable) return;
     if (e.target.closest?.('#vael-assistant-panel, [data-no-shortcuts]')) return;
+    if (e.key === 'Escape' && _presentationMode) { e.preventDefault(); _togglePresentation(); return; }
     if (e.key === 't' || e.key === 'T') { e.preventDefault(); seq.tapTempo(); }
     if (e.key === 'p' || e.key === 'P') { e.preventDefault(); _togglePresentation(); }
     if (e.key === 'f' || e.key === 'F') {
@@ -1138,6 +1150,7 @@
 
   // ── Canvas ratio toolbar (injected above canvas) ───────────────
   const ratioToolbar = document.createElement('div');
+  ratioToolbar.id = 'canvas-ratio-toolbar';
   ratioToolbar.style.cssText = `
     position:absolute;top:8px;left:50%;transform:translateX(-50%);
     display:flex;align-items:center;gap:6px;z-index:50;
@@ -1186,6 +1199,7 @@
 
   // FPS cap selector — sits right next to the ratio toolbar
   const fpsPill = document.createElement('div');
+  fpsPill.id = 'canvas-fps-pill';
   fpsPill.style.cssText = `
     position:absolute;top:8px;right:12px;
     display:flex;align-items:center;gap:6px;z-index:50;
@@ -1210,11 +1224,72 @@
   fpsPill.append(fpsLabel, fpsSel);
   if (canvasArea) canvasArea.appendChild(fpsPill);
 
+  // ── Output window (projector) ────────────────────────────────
+  // Broadcasts every rendered frame via BroadcastChannel to output.html.
+  // In Electron, opens a dedicated window on the external display.
+  // In browser, opens a new tab with output.html.
+  const _outputChannel = new BroadcastChannel('vael-output');
+  let   _outputOpen    = false;
+  let   _outputWindow  = null;
+
+  // Output button — bottom-right of canvas area
+  const outputBtn = document.createElement('button');
+  outputBtn.id = 'output-window-btn';
+  outputBtn.style.cssText = `
+    position:absolute;bottom:10px;right:12px;z-index:50;
+    background:rgba(0,0,0,0.6);border:1px solid rgba(255,255,255,0.12);
+    color:rgba(255,255,255,0.55);font-family:var(--font-mono);font-size:8px;
+    letter-spacing:0.5px;padding:4px 10px;border-radius:20px;cursor:pointer;
+    backdrop-filter:blur(4px);transition:color 0.2s,border-color 0.2s;
+  `;
+  outputBtn.textContent = '⎋ Output';
+  outputBtn.title = 'Open projector output window';
+
+  function _setOutputActive(active) {
+    _outputOpen = active;
+    outputBtn.style.color        = active ? 'var(--accent)'                     : 'rgba(255,255,255,0.55)';
+    outputBtn.style.borderColor  = active ? 'var(--accent)'                     : 'rgba(255,255,255,0.12)';
+    outputBtn.textContent        = active ? '⎋ Output ●'                        : '⎋ Output';
+  }
+
+  outputBtn.addEventListener('click', () => {
+    if (_outputOpen) {
+      // Close
+      if (window.electronAPI?.closeOutput) {
+        window.electronAPI.closeOutput();
+      } else if (_outputWindow && !_outputWindow.closed) {
+        _outputWindow.close();
+      }
+      _setOutputActive(false);
+    } else {
+      // Open
+      if (window.electronAPI?.openOutput) {
+        window.electronAPI.openOutput();
+        _setOutputActive(true);
+        // Listen for the window being closed externally
+        window.electronAPI.onOutputClosed?.(() => _setOutputActive(false));
+      } else {
+        _outputWindow = window.open('output.html', 'vael-output', 'width=1280,height=720');
+        if (_outputWindow) {
+          _setOutputActive(true);
+          const checkClosed = setInterval(() => {
+            if (_outputWindow.closed) { _setOutputActive(false); clearInterval(checkClosed); }
+          }, 1000);
+        }
+      }
+    }
+  });
+
+  if (canvasArea) canvasArea.appendChild(outputBtn);
+
   // Inject into canvas-area (above canvas, centered)
   if (canvasArea) {
     canvasArea.style.position = 'relative';
     canvasArea.appendChild(ratioToolbar);
   }
+
+  // Frame counter to throttle output broadcast (every other frame at 60fps = 30fps output)
+  let _outputFrameCounter = 0;
 
   renderer.onFrame = (dt, fps) => {
     labelFps.textContent    = `${fps} fps`;
@@ -1290,6 +1365,19 @@
         recIndicator.querySelector('#status-rec-time').textContent = `REC ${m}:${s}`;
       } else {
         recIndicator.style.display = 'none';
+      }
+    }
+
+    // Broadcast frame to output window (every other frame → ~30fps at 60fps)
+    if (_outputOpen) {
+      _outputFrameCounter++;
+      if (_outputFrameCounter % 2 === 0) {
+        const mainCanvas = renderer.canvas;
+        if (mainCanvas) {
+          createImageBitmap(mainCanvas).then(bmp => {
+            _outputChannel.postMessage({ type: 'frame', bitmap: bmp }, [bmp]);
+          }).catch(() => {});
+        }
       }
     }
   };

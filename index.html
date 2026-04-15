@@ -1299,11 +1299,18 @@
   body.vael-presentation #status-strip,
   body.vael-presentation #midi-learn-badge,
   body.vael-presentation #vael-rec-banner,
+  body.vael-presentation #rec-float-stop,
   body.vael-presentation #vael-assistant-panel,
-  body.vael-presentation .vael-toast-container {
+  body.vael-presentation #vael-assistant-fab,
+  body.vael-presentation .vael-toast-container,
+  body.vael-presentation #vael-hud,
+  body.vael-presentation #canvas-ratio-toolbar,
+  body.vael-presentation #canvas-fps-pill,
+  body.vael-presentation #output-window-btn {
     display: none !important;
   }
 
+  /* Exit button: hidden until mouse moves, then fades in briefly */
   #presentation-exit-btn {
     display: none;
     position: fixed;
@@ -1311,25 +1318,31 @@
     right: 12px;
     z-index: 9999;
     background: rgba(0,0,0,0.55);
-    color: rgba(255,255,255,0.3);
-    border: 1px solid rgba(255,255,255,0.1);
+    color: rgba(255,255,255,0.0);   /* invisible by default */
+    border: 1px solid rgba(255,255,255,0.0);
     border-radius: 5px;
     font-family: var(--font-mono);
     font-size: 9px;
     padding: 5px 10px;
     cursor: pointer;
     letter-spacing: 0.5px;
-    transition: color 0.2s, background 0.2s, border-color 0.2s;
-  }
-
-  #presentation-exit-btn:hover {
-    color: rgba(255,255,255,0.85);
-    background: rgba(0,0,0,0.8);
-    border-color: rgba(255,255,255,0.3);
+    transition: color 0.3s, border-color 0.3s;
+    pointer-events: none;
   }
 
   body.vael-presentation #presentation-exit-btn {
     display: block;
+  }
+
+  body.vael-presentation.presentation-mouse-active #presentation-exit-btn {
+    color: rgba(255,255,255,0.55);
+    border-color: rgba(255,255,255,0.2);
+    pointer-events: auto;
+  }
+
+  body.vael-presentation.presentation-mouse-active #presentation-exit-btn:hover {
+    color: rgba(255,255,255,0.9);
+    border-color: rgba(255,255,255,0.4);
   }
 </style>
 

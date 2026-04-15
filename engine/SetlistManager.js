@@ -319,11 +319,21 @@ class SetlistManager {
           layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
         }
 
-        // VideoPlayerLayer: reload from in-memory library if available,
-        // avoiding re-prompts or broken blob URLs after scene switches
-        if (def.params?._libraryId && window.videoLibrary) {
-          const entry = window.videoLibrary.entries.find(e => e.id === def.params._libraryId);
-          if (entry) layer.loadFromLibraryEntry(entry);
+        // VideoPlayerLayer: reload from in-memory library (by ID, then by name), else direct URL
+        if (layer instanceof VideoPlayerLayer && def.params) {
+          const p = def.params;
+          let restored = false;
+          if (p._libraryId && window.videoLibrary) {
+            const entry = window.videoLibrary.entries.find(e => e.id === p._libraryId);
+            if (entry) { layer.loadFromLibraryEntry(entry); restored = true; }
+          }
+          if (!restored && p._sourceName && window.videoLibrary) {
+            const entry = window.videoLibrary.entries.find(e => e.name === p._sourceName);
+            if (entry) { layer.loadFromLibraryEntry(entry); restored = true; }
+          }
+          if (!restored && p._sourceUrl) {
+            layer._loadUrl(p._sourceUrl, p._sourceName || 'video');
+          }
         }
 
         // GroupLayer children

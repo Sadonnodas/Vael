@@ -129,7 +129,8 @@ const PresetManager = (() => {
           layer.collapsed = def.collapsed ?? false;
         }
 
-        if (typeof layer.init === 'function') layer.init(layer.params || {});
+        if (typeof layer.init === 'function') layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
+        _restoreVideoSource(layer, def);
         layerStack.add(layer);
       } catch (e) {
         errors.push(`Error loading layer "${def.type}": ${e.message}`);
@@ -246,9 +247,32 @@ const PresetManager = (() => {
           layer.collapsed = def.collapsed ?? false;
         }
         if (typeof layer.init === 'function') layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
+        _restoreVideoSource(layer, def);
         layerStack.add(layer);
       } catch {}
     });
+  }
+
+  /**
+   * After init(), restore video source from library (by ID then by name fallback)
+   * or from a direct URL stored in params._sourceUrl.
+   */
+  function _restoreVideoSource(layer, def) {
+    if (!(layer instanceof VideoPlayerLayer)) return;
+    const p = def.params || {};
+    if (p._libraryId && window.videoLibrary) {
+      const entry = window.videoLibrary.entries.find(e => e.id === p._libraryId);
+      if (entry) { layer.loadFromLibraryEntry(entry); return; }
+    }
+    // Fallback: match by source name in library
+    if (p._sourceName && window.videoLibrary) {
+      const entry = window.videoLibrary.entries.find(e => e.name === p._sourceName);
+      if (entry) { layer.loadFromLibraryEntry(entry); return; }
+    }
+    // Fallback: direct URL (uploaded file — blob URLs don't survive reload, so this is best-effort)
+    if (p._sourceUrl) {
+      layer._loadUrl(p._sourceUrl, p._sourceName || 'video');
+    }
   }
 
   return { save, load, storeRecent, getRecent, template, _applyRaw };
