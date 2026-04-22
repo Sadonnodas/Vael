@@ -38,6 +38,12 @@ const LibraryPanel = (() => {
   const _shaders     = new Map();
   let   _shaderCallback = null; // set by openShaderSection for picker mode
 
+  // Audio section state — persists across re-renders
+  let _audioFilter     = '';
+  let _audioSort       = 'name-asc';
+  let _expandedAudioId = null;
+  let _previewAudioEl  = null;
+
   // ── Init ─────────────────────────────────────────────────────
 
   function init({ videoLibrary, audioEngine, layerStack,
@@ -343,8 +349,6 @@ const LibraryPanel = (() => {
   // ── Audio section ─────────────────────────────────────────────
 
   function _renderAudioSection() {
-    _addIntro('Store audio files here. Click "Set as audio source" to load into the AudioEngine ready to play.');
-
     const uploadBtn = _addUploadBtn('+ Add audio files…');
     uploadBtn.addEventListener('click', () => {
       document.getElementById('_lib-audio-input').value = '';
@@ -356,85 +360,141 @@ const LibraryPanel = (() => {
       return;
     }
 
-    _addSectionLabel(`${_audioFiles.size} audio file${_audioFiles.size !== 1 ? 's' : ''}`);
+    // ── Filter + sort bar ──────────────────────────────────────
+    const ctrl = document.createElement('div');
+    ctrl.style.cssText = 'display:flex;gap:6px;margin-bottom:10px;align-items:center';
 
-    // Track the currently previewing audio element so we can stop it
-    // when another track is previewed or the section is re-rendered.
-    let _previewEl = null;
+    const srch = document.createElement('input');
+    srch.type = 'search'; srch.placeholder = 'Filter…'; srch.value = _audioFilter;
+    srch.style.cssText = 'flex:1;background:var(--bg);border:1px solid var(--border-dim);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 7px;outline:none';
+    srch.addEventListener('input', e => { _audioFilter = e.target.value; _render(); });
+    srch.addEventListener('keydown', e => e.stopPropagation());
+    ctrl.appendChild(srch);
 
-    _audioFiles.forEach(entry => {
-      const card = _card();
+    const srt = document.createElement('select');
+    srt.style.cssText = 'background:var(--bg);border:1px solid var(--border-dim);border-radius:4px;color:var(--text-dim);font-family:var(--font-mono);font-size:8px;padding:4px 5px;cursor:pointer';
+    [['name-asc','Name A→Z'],['name-desc','Name Z→A'],['dur-asc','Shortest first'],['dur-desc','Longest first']].forEach(([v,l]) => {
+      const o = document.createElement('option'); o.value=v; o.textContent=l; o.selected=(v===_audioSort);
+      srt.appendChild(o);
+    });
+    srt.addEventListener('change', e => { _audioSort = e.target.value; _render(); });
+    ctrl.appendChild(srt);
+    _container.appendChild(ctrl);
 
+    // ── Apply filter + sort ────────────────────────────────────
+    let entries = [..._audioFiles.values()];
+    if (_audioFilter) {
+      const q = _audioFilter.toLowerCase();
+      entries = entries.filter(e => e.name.toLowerCase().includes(q));
+    }
+    const [sortKey, sortDir] = _audioSort.split('-');
+    entries.sort((a, b) => {
+      const sign = sortDir === 'desc' ? -1 : 1;
+      if (sortKey === 'name') return sign * a.name.localeCompare(b.name);
+      return sign * ((a.duration || 0) - (b.duration || 0));
+    });
+
+    if (entries.length === 0) { _addEmpty(`No matches for "${_audioFilter}".`); return; }
+
+    const lbl = document.createElement('div');
+    lbl.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px';
+    lbl.textContent = entries.length === _audioFiles.size
+      ? `${entries.length} file${entries.length !== 1 ? 's' : ''}`
+      : `${entries.length} of ${_audioFiles.size} files`;
+    _container.appendChild(lbl);
+
+    // ── Entry rows ─────────────────────────────────────────────
+    entries.forEach(entry => {
+      const isExp = _expandedAudioId === entry.id;
+      const card  = _card();
+      card.dataset.audioCard = '1';
+      card.style.cursor = 'pointer';
+      if (isExp) {
+        card.style.background   = 'color-mix(in srgb,var(--accent) 6%,var(--bg-card))';
+        card.style.borderColor  = 'color-mix(in srgb,var(--accent) 30%,var(--border-dim))';
+      }
+
+      // ── Row: preview ▶ | name + duration | ✕ ─────────────────
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
+      row.style.cssText = 'display:flex;align-items:center;gap:7px';
 
-      // Preview play/pause button — local preview only, does NOT affect AudioEngine
       const previewBtn = document.createElement('button');
-      previewBtn.style.cssText = `
-        width:32px;height:32px;flex-shrink:0;border-radius:3px;
-        background:color-mix(in srgb,var(--accent) 12%,var(--bg));
-        border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);
-        color:var(--accent);font-size:12px;cursor:pointer;
-        display:flex;align-items:center;justify-content:center;
-      `;
-      previewBtn.textContent = '▶';
-      previewBtn.title = 'Preview (local only — does not affect audio source)';
-
-      previewBtn.addEventListener('click', () => {
-        if (_previewEl && !_previewEl.paused) {
-          // Stop whatever is playing
-          _previewEl.pause();
-          _previewEl.currentTime = 0;
-          _previewEl = null;
-          // Reset all preview buttons
-          card.closest('[id="library-panel-content"]')
-            ?.querySelectorAll('.lib-preview-btn')
-            .forEach(b => { b.textContent = '▶'; b.style.color = 'var(--accent)'; });
+      previewBtn.className = 'lib-preview-btn';
+      previewBtn.style.cssText = 'width:26px;height:26px;flex-shrink:0;border-radius:3px;background:color-mix(in srgb,var(--accent) 12%,var(--bg));border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);color:var(--accent);font-size:10px;cursor:pointer;display:flex;align-items:center;justify-content:center';
+      previewBtn.textContent = (_previewAudioEl && !_previewAudioEl.paused && _previewAudioEl._vaelId === entry.id) ? '■' : '▶';
+      if (previewBtn.textContent === '■') previewBtn.style.color = 'var(--accent2)';
+      previewBtn.title = 'Preview (does not affect audio source)';
+      previewBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        const playing = _previewAudioEl && !_previewAudioEl.paused;
+        if (playing) {
+          _previewAudioEl.pause(); _previewAudioEl.currentTime = 0; _previewAudioEl = null;
+          _container.querySelectorAll('.lib-preview-btn').forEach(b => { b.textContent='▶'; b.style.color='var(--accent)'; });
           return;
         }
-        // Stop any other preview
-        if (_previewEl) { _previewEl.pause(); _previewEl.currentTime = 0; }
-
-        const el = new Audio(entry.url);
-        el.volume = 0.7;
+        if (_previewAudioEl) { _previewAudioEl.pause(); _previewAudioEl.currentTime = 0; }
+        _container.querySelectorAll('.lib-preview-btn').forEach(b => { b.textContent='▶'; b.style.color='var(--accent)'; });
+        const el = new Audio(entry.url); el.volume = 0.7; el._vaelId = entry.id;
         el.play().catch(() => {});
-        el.addEventListener('ended', () => {
-          previewBtn.textContent = '▶';
-          previewBtn.style.color = 'var(--accent)';
-          _previewEl = null;
-        });
-        _previewEl = el;
-        previewBtn.textContent = '■';
-        previewBtn.style.color = 'var(--accent2)';
+        el.addEventListener('ended', () => { previewBtn.textContent='▶'; previewBtn.style.color='var(--accent)'; _previewAudioEl=null; });
+        _previewAudioEl = el;
+        previewBtn.textContent = '■'; previewBtn.style.color = 'var(--accent2)';
       });
-
-      previewBtn.classList.add('lib-preview-btn');
       row.appendChild(previewBtn);
 
       const info = document.createElement('div');
       info.style.cssText = 'flex:1;min-width:0';
       info.innerHTML = `<div style="font-family:var(--font-mono);font-size:9px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${entry.name}</div>
-        <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-top:2px">${VaelMath.formatTime(entry.duration)}</div>`;
+        <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-top:1px">${VaelMath.formatTime(entry.duration)}</div>`;
       row.appendChild(info);
+
       row.appendChild(_delBtn(() => {
-        if (_previewEl) { _previewEl.pause(); _previewEl = null; }
+        if (_previewAudioEl?._vaelId === entry.id) { _previewAudioEl.pause(); _previewAudioEl = null; }
         URL.revokeObjectURL(entry.url);
         _audioFiles.delete(entry.id);
+        if (_expandedAudioId === entry.id) _expandedAudioId = null;
+        if (typeof AssetStore !== 'undefined') AssetStore.remove(entry.id).catch(() => {});
         _render();
       }));
       card.appendChild(row);
 
-      const srcBtn = _smallBtn('Set as audio source', 'accent');
+      // ── Expandable actions (click row to show) ─────────────────
+      const actions = document.createElement('div');
+      actions.dataset.audioActions = '1';
+      actions.style.cssText = `margin-top:8px;padding-top:8px;border-top:1px solid var(--border-dim);display:${isExp?'block':'none'}`;
+
+      const srcBtn = _smallBtn('♪ Set as audio source', 'accent');
       srcBtn.style.width = '100%';
-      srcBtn.addEventListener('click', () => {
-        // Stop local preview if playing
-        if (_previewEl) { _previewEl.pause(); _previewEl.currentTime = 0; _previewEl = null; }
+      srcBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        if (_previewAudioEl) { _previewAudioEl.pause(); _previewAudioEl.currentTime = 0; _previewAudioEl = null; }
         window.dispatchEvent(new CustomEvent('vael:library-set-audio-source', {
           detail: { name: entry.name, file: entry.file, url: entry.url, duration: entry.duration }
         }));
         document.querySelector('[data-tab="audio"]')?.click();
       });
-      card.appendChild(srcBtn);
+      actions.appendChild(srcBtn);
+      card.appendChild(actions);
+
+      // Toggle expand on card click (not on buttons)
+      card.addEventListener('click', e => {
+        if (e.target.closest('button')) return;
+        const nowExp = actions.style.display === 'none';
+        // Collapse all others
+        _container.querySelectorAll('[data-audio-actions]').forEach(a => {
+          a.style.display = 'none';
+          const c = a.closest('[data-audio-card]');
+          if (c) { c.style.background = 'var(--bg-card)'; c.style.borderColor = 'var(--border-dim)'; }
+        });
+        if (nowExp) {
+          actions.style.display = 'block';
+          card.style.background  = 'color-mix(in srgb,var(--accent) 6%,var(--bg-card))';
+          card.style.borderColor = 'color-mix(in srgb,var(--accent) 30%,var(--border-dim))';
+          _expandedAudioId = entry.id;
+        } else {
+          _expandedAudioId = null;
+        }
+      });
     });
   }
 
@@ -912,6 +972,13 @@ const LibraryPanel = (() => {
   // Allows files uploaded in the AUDIO or VIDEO tabs to appear in
   // the LIBRARY without duplicating the file input listeners.
 
+  function findAudioByName(name) {
+    for (const entry of _audioFiles.values()) {
+      if (entry.name === name) return entry;
+    }
+    return null;
+  }
+
   async function addAudioFile(file) {
     const id       = `aud-${++_audioCounter}-${Date.now()}`;
     const url      = URL.createObjectURL(file);
@@ -932,6 +999,7 @@ const LibraryPanel = (() => {
     showAddImagePrompt,
     getImages,
     addAudioFile,
+    findAudioByName,
     addShader,
     openShaderSection,
   };

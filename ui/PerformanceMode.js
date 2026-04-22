@@ -93,7 +93,7 @@ class PerformanceMode {
         </div>
       </div>
 
-      <!-- Hint + TAP button -->
+      <!-- Hint + TAP + Output buttons -->
       <div style="font-size:8px;opacity:0.2;border-left:1px solid rgba(255,255,255,0.1);
                   padding-left:14px;line-height:1.8;display:flex;flex-direction:column;gap:6px">
         <span>← → scene<br>S setlist<br>F exit</span>
@@ -103,6 +103,12 @@ class PerformanceMode {
           font-size:8px;letter-spacing:1.5px;padding:5px 10px;cursor:pointer;
           transition:background 0.08s,transform 0.08s;user-select:none;opacity:1
         ">T · TAP</button>
+        <button id="phud-output" title="Open output window for beamer/projector" style="
+          background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);
+          border-radius:5px;color:rgba(255,255,255,0.5);font-family:'JetBrains Mono',monospace;
+          font-size:8px;letter-spacing:1.5px;padding:5px 10px;cursor:pointer;
+          transition:background 0.08s,border-color 0.15s,color 0.15s;user-select:none;opacity:1
+        ">⎋ OUTPUT</button>
       </div>
     `;
 
@@ -115,13 +121,26 @@ class PerformanceMode {
       tapBtn.addEventListener('pointerdown', () => {
         tapBtn.style.background = 'rgba(0,212,170,0.3)';
         tapBtn.style.transform  = 'scale(0.94)';
-        // Dispatch tap event — App.js listens for T key but we can reuse it
-        // by firing the same keydown simulation, or via custom event
         window.dispatchEvent(new CustomEvent('vael:tap-tempo'));
       });
       tapBtn.addEventListener('pointerup', () => {
         tapBtn.style.background = 'rgba(255,255,255,0.07)';
         tapBtn.style.transform  = 'scale(1)';
+      });
+    }
+
+    // Wire Output button — asks App.js to toggle the output window
+    const outputBtn = document.getElementById('phud-output');
+    if (outputBtn) {
+      outputBtn.addEventListener('click', () => {
+        window.dispatchEvent(new CustomEvent('vael:toggle-output'));
+      });
+      // Keep button appearance in sync with output state
+      window.addEventListener('vael:output-state', e => {
+        const on = e.detail?.active;
+        outputBtn.style.color       = on ? 'rgba(0,212,170,0.9)' : 'rgba(255,255,255,0.5)';
+        outputBtn.style.borderColor = on ? 'rgba(0,212,170,0.5)' : 'rgba(255,255,255,0.15)';
+        outputBtn.textContent       = on ? '⎋ OUTPUT ●' : '⎋ OUTPUT';
       });
     }
   }
@@ -428,19 +447,21 @@ class PerformanceMode {
         const layerStack = this._layerStack;
         entry.preset = {
           name:   entry.name,
-          layers: layerStack.layers.map(layer => ({
-            type:        layer.constructor.name,
-            id:          layer.id,
-            name:        layer.name,
-            visible:     layer.visible,
-            opacity:     layer.opacity,
-            blendMode:   layer.blendMode,
-            maskLayerId: layer.maskLayerId || null,
-            transform:   { ...layer.transform },
-            modMatrix:   layer.modMatrix?.toJSON() || [],
-            fx:          layer.fx ? layer.fx.map(f => ({ ...f, params: { ...f.params } })) : [],
-            params:      layer.params ? { ...layer.params } : {},
-          })),
+          layers: layerStack.layers.map(layer =>
+            typeof layer.toJSON === 'function' ? layer.toJSON() : {
+              type:        layer.constructor.name,
+              id:          layer.id,
+              name:        layer.name,
+              visible:     layer.visible,
+              opacity:     layer.opacity,
+              blendMode:   layer.blendMode,
+              maskLayerId: layer.maskLayerId || null,
+              transform:   { ...layer.transform },
+              modMatrix:   layer.modMatrix?.toJSON() || [],
+              fx:          layer.fx ? layer.fx.map(f => ({ ...f, params: { ...f.params } })) : [],
+              params:      layer.params ? { ...layer.params } : {},
+            }
+          ),
         };
         // Also refresh thumbnail
         try {
@@ -486,15 +507,17 @@ class PerformanceMode {
       // Capture current layer stack as a preset
       const preset = {
         name,
-        layers: this._layers.layers.map(layer => ({
-          type:      layer.constructor.name,
-          id:        layer.id,
-          name:      layer.name,
-          visible:   layer.visible,
-          opacity:   layer.opacity,
-          blendMode: layer.blendMode,
-          params:    layer.params ? { ...layer.params } : {},
-        })),
+        layers: this._layers.layers.map(layer =>
+          typeof layer.toJSON === 'function' ? layer.toJSON() : {
+            type:      layer.constructor.name,
+            id:        layer.id,
+            name:      layer.name,
+            visible:   layer.visible,
+            opacity:   layer.opacity,
+            blendMode: layer.blendMode,
+            params:    layer.params ? { ...layer.params } : {},
+          }
+        ),
       };
 
       // Capture thumbnail from main canvas
@@ -892,6 +915,9 @@ class PerformanceMode {
       if (e.target.isContentEditable) return;
       // Also block if focus is inside the Vael assistant panel or any modal/overlay
       if (e.target.closest?.('#vael-assistant-panel, .vael-modal, .pl-editor-overlay, [data-no-shortcuts]')) return;
+      const activeTag = document.activeElement?.tagName;
+      if (activeTag === 'INPUT' || activeTag === 'SELECT' || activeTag === 'TEXTAREA') return;
+      if (document.activeElement?.isContentEditable) return;
 
       switch (e.key) {
         case 'f':

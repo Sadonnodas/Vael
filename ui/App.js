@@ -295,6 +295,100 @@
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   }
 
+  // ── Version history panel ─────────────────────────────────────
+  let _versionPanel = null;
+
+  function _showVersionPanel(presetName, anchor) {
+    // Close existing panel
+    _versionPanel?.remove();
+    _versionPanel = null;
+
+    const preset = (PresetBrowser._getAll?.() || []).find(p => p.name === presetName);
+    if (!preset?.versions?.length) return;
+
+    const panel = document.createElement('div');
+    _versionPanel = panel;
+    panel.style.cssText = `
+      position:fixed;z-index:9999;
+      background:var(--bg-mid);border:1px solid var(--border);
+      border-radius:8px;padding:10px;min-width:220px;max-width:280px;
+      box-shadow:0 8px 32px rgba(0,0,0,0.7);
+      font-family:var(--font-mono);
+    `;
+
+    const header = document.createElement('div');
+    header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px';
+    header.innerHTML = `
+      <span style="font-size:9px;letter-spacing:1px;color:var(--accent);text-transform:uppercase">Version history</span>
+      <button id="vp-close" style="background:none;border:none;color:var(--text-dim);cursor:pointer;font-size:13px;line-height:1;padding:0">✕</button>
+    `;
+    panel.appendChild(header);
+    header.querySelector('#vp-close').addEventListener('click', () => { panel.remove(); _versionPanel = null; });
+
+    preset.versions.forEach((ver, i) => {
+      const date = ver.saved
+        ? new Date(ver.saved).toLocaleString(undefined, { month:'short', day:'numeric', hour:'2-digit', minute:'2-digit' })
+        : `Version ${i + 1}`;
+
+      const row = document.createElement('div');
+      row.style.cssText = `display:flex;align-items:center;gap:7px;padding:5px 4px;
+        border-radius:4px;cursor:pointer;transition:background 0.1s;border-bottom:1px solid var(--border-dim)`;
+      row.addEventListener('mouseenter', () => row.style.background = 'rgba(255,255,255,0.05)');
+      row.addEventListener('mouseleave', () => row.style.background = 'transparent');
+
+      const thumb = document.createElement('div');
+      thumb.style.cssText = 'flex-shrink:0;width:48px;height:27px;border-radius:3px;overflow:hidden;background:var(--bg)';
+      if (ver.thumbnail) {
+        const img = document.createElement('img');
+        img.src = ver.thumbnail; img.style.cssText = 'width:100%;height:100%;object-fit:cover';
+        thumb.appendChild(img);
+      } else {
+        thumb.style.cssText += ';display:flex;align-items:center;justify-content:center;color:var(--text-dim);font-size:10px';
+        thumb.textContent = '◈';
+      }
+
+      const meta = document.createElement('div');
+      meta.style.cssText = 'flex:1;min-width:0';
+      meta.innerHTML = `
+        <div style="font-size:8px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${date}</div>
+        <div style="font-size:7px;color:var(--text-dim)">${ver.layers?.length ?? 0} layers</div>
+      `;
+
+      const restoreBtn = document.createElement('button');
+      restoreBtn.textContent = '↩ Restore';
+      restoreBtn.style.cssText = 'background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);border-radius:3px;color:var(--accent);cursor:pointer;font-size:7px;padding:2px 6px;flex-shrink:0';
+      restoreBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        const restored = PresetBrowser.restoreVersion(presetName, i);
+        if (restored) {
+          PresetBrowser._applyPreset(restored);
+          _renderInlinePresetGrid();
+          panel.remove(); _versionPanel = null;
+          Toast.success(`Restored version from ${date}`);
+        }
+      });
+
+      row.append(thumb, meta, restoreBtn);
+      panel.appendChild(row);
+    });
+
+    // Position near anchor
+    document.body.appendChild(panel);
+    const rect  = anchor.getBoundingClientRect();
+    const ph    = panel.offsetHeight;
+    const pw    = panel.offsetWidth;
+    let top  = rect.bottom + 6;
+    let left = rect.left;
+    if (top + ph > window.innerHeight - 10) top = rect.top - ph - 6;
+    if (left + pw > window.innerWidth  - 10) left = window.innerWidth - pw - 10;
+    panel.style.top  = `${top}px`;
+    panel.style.left = `${Math.max(8, left)}px`;
+
+    // Close on outside click
+    const _outside = (e) => { if (!panel.contains(e.target)) { panel.remove(); _versionPanel = null; document.removeEventListener('mousedown', _outside, true); } };
+    setTimeout(() => document.addEventListener('mousedown', _outside, true), 0);
+  }
+
   // Render inline preset grid in the SCENES tab
   function _renderInlinePresetGrid() {
     const grid    = document.getElementById('pb-inline-grid');
@@ -352,13 +446,14 @@
     }
 
     presets.forEach(preset => {
-      const isSel = _pbSelected.has(preset.name);
+      const isSel    = _pbSelected.has(preset.name);
+      const isActive = preset.name === window._vaelActiveScene;
 
       if (_pbViewMode === 'list') {
         // ── List row ───────────────────────────────────────────
         const row = document.createElement('div');
         row.style.cssText = `display:flex;align-items:center;gap:7px;padding:5px 7px;
-          background:var(--bg-card);border:1px solid ${isSel?'var(--accent)':'var(--border-dim)'};
+          background:var(--bg-card);border:1px solid ${isActive||isSel?'var(--accent)':'var(--border-dim)'};
           border-radius:4px;cursor:pointer;transition:border-color 0.15s`;
 
         const chk = document.createElement('div');
@@ -385,9 +480,40 @@
         info.style.cssText = 'flex:1;min-width:0';
         const layerTypes = [...new Set((preset.layers||[]).map(l=>(l.type||'').replace('Layer','').replace('Visualizer','Math')||'?'))].slice(0,3);
         info.innerHTML = `
-          <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${preset.name}</div>
+          <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+            ${isActive ? '<span style="color:var(--accent)">◉</span> ' : ''}${preset.name}
+          </div>
           <div style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim)">${preset.layers?.length??0} layers · ${layerTypes.join(', ')}</div>
         `;
+
+        if (preset.versions?.length > 0) {
+          const histBtn = document.createElement('button');
+          histBtn.title = 'Version history';
+          histBtn.style.cssText = 'background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:3px;color:rgba(255,255,255,0.45);cursor:pointer;font-size:8px;padding:1px 5px;font-family:var(--font-mono);flex-shrink:0';
+          histBtn.textContent = `⏱ ${preset.versions.length}`;
+          histBtn.addEventListener('click', e => { e.stopPropagation(); _showVersionPanel(preset.name, histBtn); });
+          row.appendChild(histBtn);
+        }
+
+        const updBtn = document.createElement('button');
+        updBtn.title='Overwrite with current scene'; updBtn.style.cssText='background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);border-radius:3px;color:var(--accent);cursor:pointer;font-size:8px;padding:1px 5px;font-family:var(--font-mono);flex-shrink:0';
+        updBtn.textContent='↑'; updBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          const activeName = window._vaelActiveScene;
+          if (activeName && activeName !== preset.name) {
+            if (!confirm(`Are you sure you want to update "${preset.name}"?\n\nYou're currently editing "${activeName}".`)) return;
+          }
+          let thumb = null;
+          try {
+            const cv = document.getElementById('main-canvas');
+            const t = document.createElement('canvas'); t.width = 120; t.height = 68;
+            t.getContext('2d').drawImage(cv, 0, 0, 120, 68);
+            thumb = t.toDataURL('image/jpeg', 0.6);
+          } catch {}
+          PresetBrowser.save(layers, preset.name, thumb);
+          _renderInlinePresetGrid();
+          Toast.success(`"${preset.name}" updated`);
+        });
 
         const dlBtn = document.createElement('button');
         dlBtn.title='Download'; dlBtn.style.cssText='background:none;border:none;color:#00d4aa;cursor:pointer;font-size:11px;padding:1px 3px;flex-shrink:0';
@@ -397,17 +523,17 @@
         delBtn.title='Delete'; delBtn.style.cssText='background:none;border:none;color:#ff4444;cursor:pointer;font-size:11px;padding:1px 3px;flex-shrink:0';
         delBtn.textContent='✕'; delBtn.addEventListener('click',e=>{e.stopPropagation();_pbSelected.delete(preset.name);PresetBrowser.remove(preset.name);_pbUpdateBulkBtns();_renderInlinePresetGrid();Toast.info(`Deleted "${preset.name}"`);});
 
-        row.append(chk, thumb, info, dlBtn, delBtn);
-        row.addEventListener('mouseenter',()=>{if(!_pbSelected.has(preset.name))row.style.borderColor='var(--accent2)';});
-        row.addEventListener('mouseleave',()=>{row.style.borderColor=_pbSelected.has(preset.name)?'var(--accent)':'var(--border-dim)';});
-        row.addEventListener('click',()=>{PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();});
+        row.append(chk, thumb, info, updBtn, dlBtn, delBtn);
+        row.addEventListener('mouseenter',()=>{if(!isActive&&!_pbSelected.has(preset.name))row.style.borderColor='var(--accent2)';});
+        row.addEventListener('mouseleave',()=>{row.style.borderColor=isActive||_pbSelected.has(preset.name)?'var(--accent)':'var(--border-dim)';});
+        row.addEventListener('click',()=>{window._vaelActiveScene=preset.name;PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();});
 
         grid.appendChild(row);
 
       } else {
         // ── Grid card ──────────────────────────────────────────
         const card = document.createElement('div');
-        card.style.cssText = `background:var(--bg-card);border:1px solid ${isSel?'var(--accent)':'var(--border-dim)'};
+        card.style.cssText = `background:var(--bg-card);border:1px solid ${isActive||isSel?'var(--accent)':'var(--border-dim)'};
           border-radius:6px;overflow:hidden;cursor:pointer;transition:border-color 0.15s,transform 0.1s;position:relative`;
 
         const layerTypes = [...new Set((preset.layers||[]).map(l=>(l.type||'').replace('Layer','').replace('Visualizer','Math')||'?'))].slice(0,3);
@@ -427,9 +553,13 @@
             <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:3px">
               ${layerTypes.map(t=>`<span style="font-family:var(--font-mono);font-size:7px;background:rgba(255,255,255,0.06);border-radius:2px;padding:1px 3px;color:var(--text-dim)">${t}</span>`).join('')}
             </div>
-            <div style="display:flex;justify-content:space-between">
-              <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim)">${preset.layers?.length??0} layers</span>
-              <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim);opacity:0.6">${savedDate}</span>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:3px">
+              <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${isActive?'<span style="color:var(--accent)">◉ editing</span> · ':''}${preset.layers?.length??0} layers · ${savedDate}</span>
+              ${(preset.versions?.length > 0) ? `<button class="pb-hist-btn" title="Version history" style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:3px;color:rgba(255,255,255,0.45);cursor:pointer;font-size:7px;padding:1px 4px;font-family:var(--font-mono);flex-shrink:0">⏱ ${preset.versions.length}</button>` : ''}
+              <button class="pb-update-btn" title="Overwrite with current scene"
+                style="background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);border-radius:3px;
+                       color:var(--accent);cursor:pointer;font-size:7px;padding:1px 5px;
+                       font-family:var(--font-mono);flex-shrink:0">↑ Update</button>
             </div>
           </div>
           <div class="pb-card-acts" style="position:absolute;top:3px;right:3px;display:flex;gap:2px;opacity:0;transition:opacity 0.15s">
@@ -438,16 +568,37 @@
           </div>
         `;
 
-        card.addEventListener('mouseenter',()=>{if(!_pbSelected.has(preset.name))card.style.borderColor='var(--accent2)';card.style.transform='scale(1.02)';card.querySelector('.pb-card-acts').style.opacity='1';});
-        card.addEventListener('mouseleave',()=>{card.style.borderColor=_pbSelected.has(preset.name)?'var(--accent)':'var(--border-dim)';card.style.transform='scale(1)';card.querySelector('.pb-card-acts').style.opacity='0';});
+        card.addEventListener('mouseenter',()=>{if(!isActive&&!_pbSelected.has(preset.name))card.style.borderColor='var(--accent2)';card.style.transform='scale(1.02)';card.querySelector('.pb-card-acts').style.opacity='1';});
+        card.addEventListener('mouseleave',()=>{card.style.borderColor=isActive||_pbSelected.has(preset.name)?'var(--accent)':'var(--border-dim)';card.style.transform='scale(1)';card.querySelector('.pb-card-acts').style.opacity='0';});
         card.addEventListener('click',e=>{
           if(e.target.closest('.pb-card-acts')||e.target.closest('.pb-sel'))return;
-          PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();
+          window._vaelActiveScene=preset.name;PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();
         });
         card.querySelector('.pb-sel').addEventListener('click',e=>{
           e.stopPropagation();
           isSel ? _pbSelected.delete(preset.name) : _pbSelected.add(preset.name);
           _pbUpdateBulkBtns(); _renderInlinePresetGrid();
+        });
+        card.querySelector('.pb-update-btn').addEventListener('click', e => {
+          e.stopPropagation();
+          const activeName = window._vaelActiveScene;
+          if (activeName && activeName !== preset.name) {
+            if (!confirm(`Are you sure you want to update "${preset.name}"?\n\nYou're currently editing "${activeName}".`)) return;
+          }
+          let thumb = null;
+          try {
+            const cv = document.getElementById('main-canvas');
+            const t = document.createElement('canvas'); t.width = 120; t.height = 68;
+            t.getContext('2d').drawImage(cv, 0, 0, 120, 68);
+            thumb = t.toDataURL('image/jpeg', 0.6);
+          } catch {}
+          PresetBrowser.save(layers, preset.name, thumb);
+          _renderInlinePresetGrid();
+          Toast.success(`"${preset.name}" updated`);
+        });
+        card.querySelector('.pb-hist-btn')?.addEventListener('click', e => {
+          e.stopPropagation();
+          _showVersionPanel(preset.name, card);
         });
         card.querySelector('.pb-dl-btn').addEventListener('click',e=>{e.stopPropagation();_pbDownload(preset);});
         card.querySelector('.pb-inline-del').addEventListener('click',e=>{
@@ -531,6 +682,24 @@
   // scene:next / scene:prev for the concert setlist. Other actions fall
   // through via the `orig` callback chain PlaylistPanel sets up.
   midi.onGlobalAction = (action) => {
+    // ── Layer transport actions ────────────────────────────────
+    if (action.startsWith('layer:')) {
+      const parts   = action.split(':');
+      const layerId = parts[1];
+      const verb    = parts[2];
+      const layer   = _findLayerAnywhere(layerId);
+      if (layer instanceof VideoPlayerLayer) {
+        const name = layer._sourceName || 'Video';
+        if (verb === 'play')   { layer.play();  Toast.info(`▶ ${name}`); }
+        if (verb === 'pause')  { layer.pause(); Toast.info(`⏸ ${name}`); }
+        if (verb === 'stop')   { layer.stop();  Toast.info(`⏹ ${name}`); }
+        if (verb === 'toggle') {
+          if (layer.isPlaying) { layer.pause(); Toast.info(`⏸ ${name}`); }
+          else                 { layer.play();  Toast.info(`▶ ${name}`); }
+        }
+      }
+      return;
+    }
     if (action === 'scene:next') {
       setlist.next();
       Toast.info(`Scene → ${setlist.currentIndex + 1} / ${setlist.entries.length}`);
@@ -692,6 +861,9 @@
     if (_tag === 'INPUT' || _tag === 'SELECT' || _tag === 'TEXTAREA') return;
     if (e.target.isContentEditable) return;
     if (e.target.closest?.('#vael-assistant-panel, [data-no-shortcuts]')) return;
+    const _activeTag = document.activeElement?.tagName;
+    if (_activeTag === 'INPUT' || _activeTag === 'SELECT' || _activeTag === 'TEXTAREA') return;
+    if (document.activeElement?.isContentEditable) return;
     if (e.key === 'Escape' && _presentationMode) { e.preventDefault(); _togglePresentation(); return; }
     if (e.key === 't' || e.key === 'T') { e.preventDefault(); seq.tapTempo(); }
     if (e.key === 'p' || e.key === 'P') { e.preventDefault(); _togglePresentation(); }
@@ -1172,6 +1344,8 @@
     ratioSel.appendChild(opt);
   });
 
+  window._vaelCurrentRatio = { label: 'Free', w: null, h: null };
+
   const _applyRatio = (chosen) => {
     if (!chosen) return;
     if (chosen.custom) {
@@ -1181,13 +1355,32 @@
       if (!match) { Toast.warn('Invalid format — use e.g. 9x16 or 1080x1920'); ratioSel.value = 'Free'; return; }
       const [, rw, rh] = match;
       renderer.setRatio(parseInt(rw), parseInt(rh));
+      window._vaelCurrentRatio = { label: 'Custom', w: parseInt(rw), h: parseInt(rh) };
       Toast.info(`Canvas ratio locked: ${rw}:${rh}`);
     } else if (chosen.w) {
       renderer.setRatio(chosen.w, chosen.h);
+      window._vaelCurrentRatio = { label: chosen.label, w: chosen.w, h: chosen.h };
       Toast.info(`Canvas ratio: ${chosen.label}`);
     } else {
       renderer.setRatio(null, null);
+      window._vaelCurrentRatio = { label: 'Free', w: null, h: null };
       Toast.info('Canvas ratio: free');
+    }
+  };
+
+  // Called by PresetBrowser and autosave restore to apply a saved ratio object
+  window._vaelApplyRatioObj = (ratio) => {
+    if (!ratio || !ratio.label) return;
+    if (ratio.w && ratio.h) {
+      renderer.setRatio(ratio.w, ratio.h);
+      window._vaelCurrentRatio = { label: ratio.label, w: ratio.w, h: ratio.h };
+      // Sync the dropdown — use named label if it exists, otherwise show Custom
+      const known = RATIOS.find(r => r.label === ratio.label && !r.custom);
+      ratioSel.value = known ? known.label : 'Custom';
+    } else {
+      renderer.setRatio(null, null);
+      window._vaelCurrentRatio = { label: 'Free', w: null, h: null };
+      ratioSel.value = 'Free';
     }
   };
 
@@ -1247,10 +1440,14 @@
 
   function _setOutputActive(active) {
     _outputOpen = active;
-    outputBtn.style.color        = active ? 'var(--accent)'                     : 'rgba(255,255,255,0.55)';
-    outputBtn.style.borderColor  = active ? 'var(--accent)'                     : 'rgba(255,255,255,0.12)';
-    outputBtn.textContent        = active ? '⎋ Output ●'                        : '⎋ Output';
+    outputBtn.style.color        = active ? 'var(--accent)'    : 'rgba(255,255,255,0.55)';
+    outputBtn.style.borderColor  = active ? 'var(--accent)'    : 'rgba(255,255,255,0.12)';
+    outputBtn.textContent        = active ? '⎋ Output ●'       : '⎋ Output';
+    window.dispatchEvent(new CustomEvent('vael:output-state', { detail: { active } }));
   }
+
+  // Let the performance mode HUD trigger the output window
+  window.addEventListener('vael:toggle-output', () => outputBtn.click());
 
   outputBtn.addEventListener('click', () => {
     if (_outputOpen) {
@@ -1307,13 +1504,21 @@
     beat.update(audio.smoothed, audio._dataArray);
     // MIDI clock overrides beat detector BPM when active
     const activeBpm = (midi.clockSync && midi.clockBpm > 0) ? midi.clockBpm : beat.bpm;
-    audio.smoothed.isBeat     = beat.isBeat;
-    audio.smoothed.bpm        = activeBpm;
-    audio.smoothed.beat       = beat.beat;
-    audio.smoothed.bar        = beat.bar;
-    audio.smoothed.phrase     = beat.phrase;
-    audio.smoothed.isDownbeat = beat.isDownbeat;
-    audio.smoothed.isBarOne   = beat.isBarOne;
+    audio.smoothed.isBeat           = beat.isBeat;
+    audio.smoothed.bpm              = activeBpm;
+    audio.smoothed.beat             = beat.beat;
+    audio.smoothed.bar              = beat.bar;
+    audio.smoothed.phrase           = beat.phrase;
+    audio.smoothed.isDownbeat       = beat.isDownbeat;
+    audio.smoothed.isBarOne         = beat.isBarOne;
+    // Merge all spectral/per-band signals so ModMatrix routes can read them
+    audio.smoothed.kickEnergy       = beat.kickEnergy;
+    audio.smoothed.snareEnergy      = beat.snareEnergy;
+    audio.smoothed.hihatEnergy      = beat.hihatEnergy;
+    audio.smoothed.rms              = beat.rms;
+    audio.smoothed.spectralCentroid = beat.spectralCentroid;
+    audio.smoothed.spectralSpread   = beat.spectralSpread;
+    audio.smoothed.spectralFlux     = beat.spectralFlux;
 
     // Song position signals — available as ModMatrix sources
     // songPosition: 0.0 (start) → 1.0 (end), useful for "reveal over time" effects
@@ -1333,13 +1538,20 @@
     if (!audio.smoothed.isActive) {
       // No audio playing — zero all signal values so layers don't react.
       // Audio reactivity is opt-in; nothing should move without a real signal.
-      audio.smoothed.bass        = 0;
-      audio.smoothed.mid         = 0;
-      audio.smoothed.treble      = 0;
-      audio.smoothed.volume      = 0;
-      audio.smoothed.isBeat      = false;
-      audio.smoothed.isDownbeat  = false;
-      audio.smoothed.songPosition = 0;
+      audio.smoothed.bass             = 0;
+      audio.smoothed.mid              = 0;
+      audio.smoothed.treble           = 0;
+      audio.smoothed.volume           = 0;
+      audio.smoothed.isBeat           = false;
+      audio.smoothed.isDownbeat       = false;
+      audio.smoothed.songPosition     = 0;
+      audio.smoothed.kickEnergy       = 0;
+      audio.smoothed.snareEnergy      = 0;
+      audio.smoothed.hihatEnergy      = 0;
+      audio.smoothed.rms              = 0;
+      audio.smoothed.spectralCentroid = 0;
+      audio.smoothed.spectralSpread   = 0;
+      audio.smoothed.spectralFlux     = 0;
     }
 
     seq.tick(dt);
@@ -1406,8 +1618,10 @@
             params: layer.params ? { ...layer.params } : {},
           }
         ),
-        lfos:  lfoManager.toJSON(),
+        lfos:   lfoManager.toJSON(),
         postFX: PostFXPanel.serialize(),
+        audio:  audio.fileName ? { fileName: audio.fileName } : null,
+        ratio:  window._vaelCurrentRatio || null,
       };
       localStorage.setItem(AUTOSAVE_KEY, JSON.stringify(preset));
     } catch (e) { console.warn('Auto-save failed:', e); }
@@ -1494,7 +1708,19 @@
         PresetManager._applyRaw(preset, layers, layerFactory);
         if (preset.lfos?.length) { lfoManager.fromJSON(preset.lfos, layers); }
         if (preset.postFX) PostFXPanel.restore(preset.postFX);
+        if (preset.ratio) window._vaelApplyRatioObj?.(preset.ratio);
         Toast.success(`Resumed: "${preset.name}"`);
+
+        // Restore last audio file from library (IndexedDB restore runs async,
+        // so wait a tick for LibraryPanel to finish hydrating before searching)
+        if (preset.audio?.fileName && typeof LibraryPanel !== 'undefined') {
+          setTimeout(() => {
+            const entry = LibraryPanel.findAudioByName(preset.audio.fileName);
+            if (entry) {
+              window.dispatchEvent(new CustomEvent('vael:library-set-audio-source', { detail: entry }));
+            }
+          }, 400);
+        }
       });
 
       // Fresh start — delete save, add default layers
@@ -1548,6 +1774,9 @@
     if (_etag === 'INPUT' || _etag === 'SELECT' || _etag === 'TEXTAREA') return;
     if (e.target.isContentEditable) return;
     if (e.target.closest?.('#vael-assistant-panel, [data-no-shortcuts]')) return;
+    const _eActiveTag = document.activeElement?.tagName;
+    if (_eActiveTag === 'INPUT' || _eActiveTag === 'SELECT' || _eActiveTag === 'TEXTAREA') return;
+    if (document.activeElement?.isContentEditable) return;
     if (e.key === ' ') {
       e.preventDefault();
       const btnPlay = document.getElementById('btn-audio-play');

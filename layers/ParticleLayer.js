@@ -62,7 +62,6 @@ class ParticleLayer extends BaseLayer {
     this._time        = 0;
     this._audioSmooth = 0;
     this._beatPulse   = 0;
-    this._prevCount   = 0;
     this._prevMode    = '';
     this._trailCanvas = null;
     this._trailCtx    = null;
@@ -70,16 +69,15 @@ class ParticleLayer extends BaseLayer {
 
   init(params = {}) {
     Object.assign(this.params, params);
-    this._prevCount = 0; // force re-init
+    this._prevMode = ''; // force re-init on next render
   }
 
   _initParticles(w, h) {
-    const count = this.params.count;
+    const count = Math.round(this.params.count);
     const mode  = this.params.mode;
     this._particles = Array.from({ length: count }, (_, i) =>
       this._newParticle(w, h, i, count)
     );
-    this._prevCount = count;
     this._prevMode  = mode;
 
     // Trail mode gets its own offscreen canvas for persistence
@@ -248,10 +246,20 @@ class ParticleLayer extends BaseLayer {
   }
 
   render(ctx, width, height) {
-    if (this._prevCount !== this.params.count ||
-        this._prevMode  !== this.params.mode  ||
-        this._particles.length === 0) {
+    // Re-init only on mode change or first frame — never on count change.
+    if (this._prevMode !== this.params.mode || this._particles.length === 0) {
       this._initParticles(width, height);
+    }
+
+    // Grow or shrink incrementally so count modulation is smooth:
+    // new particles spawn in, excess particles quietly disappear.
+    const targetCount = Math.round(this.params.count);
+    if (this._particles.length < targetCount) {
+      while (this._particles.length < targetCount) {
+        this._particles.push(this._newParticle(width, height, this._particles.length, targetCount));
+      }
+    } else if (this._particles.length > targetCount) {
+      this._particles.length = targetCount;
     }
 
     const dt    = 1 / 60;

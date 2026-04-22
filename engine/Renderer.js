@@ -216,68 +216,72 @@ class Renderer {
 
       // Apply clip shape — punch out everything outside rect/ellipse
       if (layer.clipShape?.type && layer.clipShape.type !== 'none') {
-        const cs      = layer.clipShape;
-        const t2      = layer.transform || {};
-        const cx2     = W / 2 + (t2.x || 0);
-        const cy2     = H / 2 + (t2.y || 0);
-        const cw      = W * (cs.w ?? 0.5);
-        const ch      = H * (cs.h ?? 0.5);
+        const cs        = layer.clipShape;
+        const t2        = layer.transform || {};
+        const cx2       = W / 2 + (t2.x || 0) + W * (cs.x ?? 0);
+        const cy2       = H / 2 + (t2.y || 0) + H * (cs.y ?? 0);
+        const cw        = W * (cs.w ?? 0.5);
+        const ch        = H * (cs.h ?? 0.5);
         const isEllipse = cs.type.includes('ellipse');
-        const lw      = cs.lineWidth ?? 3;
+        const lw        = cs.lineWidth ?? 3;
+        const feather   = cs.feather ?? 0;
 
-        // Build a mask canvas with the shape drawn as needed
+        // Build a mask canvas with the shape drawn as needed.
+        // For feathering we draw the shape slightly larger to compensate for
+        // the blur eating into the edge, so the visible area stays the same size.
+        const expand = feather * 1.5;
         const tmp    = document.createElement('canvas');
         tmp.width    = W; tmp.height = H;
         const tc     = tmp.getContext('2d');
 
-        const _drawShape = (ctx) => {
+        const _drawShape = (ctx, extraRadius = 0) => {
           ctx.beginPath();
           if (isEllipse) {
-            ctx.ellipse(cx2, cy2, cw, ch, 0, 0, Math.PI * 2);
+            ctx.ellipse(cx2, cy2, cw + extraRadius, ch + extraRadius, 0, 0, Math.PI * 2);
           } else {
-            ctx.rect(cx2 - cw, cy2 - ch, cw * 2, ch * 2);
+            const er = extraRadius;
+            ctx.rect(cx2 - cw - er, cy2 - ch - er, (cw + er) * 2, (ch + er) * 2);
           }
+        };
+
+        // Helper: composite the mask with optional blur
+        const _applyMaskCanvas = () => {
+          offCtx.save();
+          offCtx.globalCompositeOperation = 'destination-in';
+          if (feather > 0) offCtx.filter = `blur(${feather}px)`;
+          offCtx.drawImage(tmp, 0, 0);
+          offCtx.restore();
         };
 
         if (cs.type === 'rect-inside' || cs.type === 'ellipse-inside' ||
             cs.type === 'rect'        || cs.type === 'ellipse') {
           // Inside: keep only pixels within the shape
           tc.fillStyle = '#fff';
-          _drawShape(tc);
+          _drawShape(tc, expand);
           tc.fill();
-          offCtx.save();
-          offCtx.globalCompositeOperation = 'destination-in';
-          offCtx.drawImage(tmp, 0, 0);
-          offCtx.restore();
+          _applyMaskCanvas();
 
         } else if (cs.type === 'rect-outside' || cs.type === 'ellipse-outside') {
-          // Outside: keep only pixels OUTSIDE the shape (punch hole)
-          // Fill everything white, then fill shape black → invert via destination-out
+          // Outside: keep only pixels OUTSIDE the shape (punch hole).
+          // Fill everything white, cut out the shape — feather softens the hole edge.
           tc.fillStyle = '#fff';
           tc.fillRect(0, 0, W, H);
           tc.globalCompositeOperation = 'destination-out';
           tc.fillStyle = '#000';
-          _drawShape(tc);
+          _drawShape(tc, -expand);   // shrink hole to compensate for blur spreading inward
           tc.fill();
           tc.globalCompositeOperation = 'source-over';
-          offCtx.save();
-          offCtx.globalCompositeOperation = 'destination-in';
-          offCtx.drawImage(tmp, 0, 0);
-          offCtx.restore();
+          _applyMaskCanvas();
 
         } else if (cs.type === 'rect-line' || cs.type === 'ellipse-line') {
           // On-line: keep only pixels that fall on the stroke of the shape
-          // Draw the stroke as a thick white line on black → use as mask
           tc.fillStyle = '#000';
           tc.fillRect(0, 0, W, H);
           tc.strokeStyle = '#fff';
-          tc.lineWidth   = lw;
+          tc.lineWidth   = lw + expand * 2;
           _drawShape(tc);
           tc.stroke();
-          offCtx.save();
-          offCtx.globalCompositeOperation = 'destination-in';
-          offCtx.drawImage(tmp, 0, 0);
-          offCtx.restore();
+          _applyMaskCanvas();
         }
       }
     });
@@ -616,7 +620,7 @@ class Renderer {
     if (!this._overlayCanvas) {
       this._overlayCanvas = document.createElement('canvas');
       this._overlayCanvas.style.cssText =
-        'position:absolute;top:0;left:0;pointer-events:none;z-index:0';
+        'position:absolute;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:0';
       this._overlayCanvas.style.width  = this.canvas.style.width  || '100%';
       this._overlayCanvas.style.height = this.canvas.style.height || '100%';
       this._overlayCanvas.style.margin = this.canvas.style.margin || '';

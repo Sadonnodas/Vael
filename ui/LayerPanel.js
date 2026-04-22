@@ -710,6 +710,7 @@ const LayerPanel = (() => {
         applyUnifiedScale(pct);
       });
       scaleNum?.addEventListener('keydown', e => {
+        e.stopPropagation();
         if (e.key === 'Enter') scaleNum.blur();
       });
 
@@ -764,7 +765,7 @@ const LayerPanel = (() => {
         if (rotSl) rotSl.value = v;
         rotNum.value = v;
       });
-      rotNum?.addEventListener('keydown', e => { if (e.key === 'Enter') rotNum.blur(); });
+      rotNum?.addEventListener('keydown', e => { e.stopPropagation(); if (e.key === 'Enter') rotNum.blur(); });
 
       // Reset transform
       row.querySelector('.tr-reset').addEventListener('click', () => {
@@ -1153,6 +1154,7 @@ const LayerPanel = (() => {
     canvas.style.cursor = 'default';
 
     canvas.addEventListener('mousedown', e => {
+      if (window.vaelPerfActive) return;
       const layer = _getMovableLayer();
       if (!layer) return;
 
@@ -1222,6 +1224,7 @@ const LayerPanel = (() => {
 
     // Scroll to scale
     canvas.addEventListener('wheel', e => {
+      if (window.vaelPerfActive) return;
       const layer = _getMovableLayer();
       if (!layer) return;
       e.preventDefault();
@@ -1240,8 +1243,11 @@ const LayerPanel = (() => {
     // Guard: don't fire during performance mode (R isn't used there but be safe)
     document.addEventListener('keydown', e => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+      const _rActiveTag = document.activeElement?.tagName;
+      if (_rActiveTag === 'INPUT' || _rActiveTag === 'TEXTAREA') return;
       if (window.vaelPerfActive) return;
       if (e.key !== 'r' && e.key !== 'R') return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
       const layer = _getMovableLayer();
       if (!layer) return;
       e.preventDefault();

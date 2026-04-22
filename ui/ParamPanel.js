@@ -117,13 +117,7 @@ const ParamPanel = (() => {
         window.dispatchEvent(new CustomEvent('vael:open-video-picker', { detail: { layerId: layer.id } }));
       });
       container.appendChild(srcBtn);
-      // Metadata line
-      if (layer._videoEl?.readyState >= 1 && layer._videoEl.videoWidth) {
-        const meta = document.createElement('div');
-        meta.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:10px;line-height:1.8';
-        meta.textContent = `${layer._videoEl.videoWidth}×${layer._videoEl.videoHeight}  ·  ${layer._videoEl.duration ? layer._videoEl.duration.toFixed(1) + 's' : ''}`;
-        container.appendChild(meta);
-      }
+      _buildVideoTimeline(layer, container);
     }
 
     // Transform & Opacity — always shown for every layer
@@ -247,6 +241,240 @@ const ParamPanel = (() => {
       LayerFXPanel.render(layer, fSec.body);
       container.appendChild(fSec.el);
     }
+  }
+
+  // ── Video timeline bar ───────────────────────────────────────
+  // Canvas-based seek bar with draggable in/out markers, live playhead.
+  // Updates via rAF while the panel element is in the DOM.
+
+  function _buildVideoTimeline(layer, container) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-bottom:10px;user-select:none';
+
+    // ── Transport controls ──────────────────────────────────────────
+    const transport = document.createElement('div');
+    transport.style.cssText = 'display:flex;gap:4px;margin-bottom:7px';
+
+    const _armBtn = (label, action, onClick) => {
+      const btn = document.createElement('button');
+      btn.className = 'btn midi-armable';
+      btn.style.cssText = 'font-size:9px;padding:5px 0;flex:1';
+      btn.textContent = label;
+      btn.title = `${label}  (click in MIDI Learn to arm → ${action})`;
+      btn.addEventListener('click', e => {
+        if (window._vaelLearnMode && window._vaelMidi) {
+          e.stopPropagation();
+          window._vaelMidi.startLearnGlobal(action);
+          Toast.info(`Move a controller to map → ${action}`);
+          return;
+        }
+        onClick();
+      });
+      return btn;
+    };
+
+    const playPauseBtn = _armBtn('▶ Play', `layer:${layer.id}:toggle`, () => {
+      layer.isPlaying ? layer.pause() : layer.play();
+    });
+    const stopBtn = _armBtn('⏹ Stop', `layer:${layer.id}:stop`, () => {
+      layer.stop();
+    });
+    transport.append(playPauseBtn, stopBtn);
+    wrap.appendChild(transport);
+
+    const canvas = document.createElement('canvas');
+    canvas.height = 44;
+    canvas.style.cssText = 'width:100%;height:44px;display:block;cursor:pointer;border-radius:3px';
+    wrap.appendChild(canvas);
+
+    const timeRow = document.createElement('div');
+    timeRow.style.cssText = [
+      'display:flex;justify-content:space-between;align-items:center',
+      'font-family:var(--font-mono);font-size:7px;color:rgba(255,255,255,0.35)',
+      'margin-top:2px;padding:0 1px',
+    ].join(';');
+    const timePos  = document.createElement('span');
+    const timeDur  = document.createElement('span');
+    const timeMeta = document.createElement('span');  // dimensions centre
+    timeMeta.style.cssText = 'font-size:6.5px;color:rgba(255,255,255,0.2)';
+    timeRow.append(timePos, timeMeta, timeDur);
+    wrap.appendChild(timeRow);
+
+    container.appendChild(wrap);
+
+    // ── helpers ──────────────────────────────────────────────────
+    const fmt = s => {
+      if (!isFinite(s) || s < 0) return '0:00.0';
+      const m = Math.floor(s / 60);
+      return `${m}:${(s % 60).toFixed(1).padStart(4, '0')}`;
+    };
+
+    const getState = () => {
+      const vid   = layer._videoEl;
+      const dur   = (vid?.duration && isFinite(vid.duration)) ? vid.duration : 0;
+      const cur   = vid?.currentTime ?? 0;
+      const inPt  = Math.max(0, layer.params.inPoint  ?? 0);
+      const outPt = (layer.params.outPoint > 0) ? Math.min(layer.params.outPoint, dur || 999) : (dur || 0);
+      return { dur, cur, inPt, outPt, vid };
+    };
+
+    // ── draw ─────────────────────────────────────────────────────
+    const TRACK_Y = 20;
+    const TRACK_H = 4;
+    const HEAD_R  = 5;
+
+    const draw = () => {
+      const W = canvas.offsetWidth || 200;
+      if (canvas.width !== W) canvas.width = W;
+      const { dur, cur, inPt, outPt, vid } = getState();
+      const c = canvas.getContext('2d');
+
+      c.clearRect(0, 0, W, 44);
+
+      const toX = s => dur > 0 ? Math.round((s / dur) * W) : 0;
+
+      // Track bg
+      c.fillStyle = 'rgba(255,255,255,0.08)';
+      c.beginPath();
+      if (c.roundRect) c.roundRect(0, TRACK_Y, W, TRACK_H, 2);
+      else c.rect(0, TRACK_Y, W, TRACK_H);
+      c.fill();
+
+      if (dur > 0) {
+        // In/out region
+        const ix = toX(inPt), ox = toX(outPt);
+        c.fillStyle = 'rgba(255,255,255,0.1)';
+        c.fillRect(ix, TRACK_Y, Math.max(0, ox - ix), TRACK_H);
+
+        // Played portion (inPt → cur)
+        if (cur > inPt) {
+          c.fillStyle = '#00d4aa';
+          c.fillRect(ix, TRACK_Y, Math.max(0, toX(cur) - ix), TRACK_H);
+        }
+
+        // In-point marker: teal flag
+        c.fillStyle = '#00d4aa';
+        c.fillRect(ix, TRACK_Y - 10, 2, TRACK_H + 10);
+        c.beginPath();
+        c.moveTo(ix, TRACK_Y - 10);
+        c.lineTo(ix + 7, TRACK_Y - 6);
+        c.lineTo(ix, TRACK_Y - 2);
+        c.closePath();
+        c.fill();
+
+        // Out-point marker: amber flag (pointing left)
+        c.fillStyle = '#ff9f43';
+        c.fillRect(ox - 2, TRACK_Y - 10, 2, TRACK_H + 10);
+        c.beginPath();
+        c.moveTo(ox, TRACK_Y - 10);
+        c.lineTo(ox - 7, TRACK_Y - 6);
+        c.lineTo(ox, TRACK_Y - 2);
+        c.closePath();
+        c.fill();
+
+        // Playhead
+        const hx = toX(cur);
+        c.fillStyle = '#ffffff';
+        c.beginPath();
+        c.arc(hx, TRACK_Y + TRACK_H / 2, HEAD_R, 0, Math.PI * 2);
+        c.fill();
+        // Thin time label above playhead
+        c.fillStyle = 'rgba(255,255,255,0.5)';
+        c.font = '6px monospace';
+        c.textAlign = hx < W * 0.85 ? 'left' : 'right';
+        c.fillText(fmt(cur), hx + (hx < W * 0.85 ? 7 : -7), TRACK_Y - 2);
+
+        // In/out time labels on flags
+        c.font = '6px monospace';
+        c.fillStyle = 'rgba(0,212,170,0.7)';
+        c.textAlign = 'left';
+        c.fillText(fmt(inPt), Math.min(ix + 3, W - 28), TRACK_Y - 12);
+        c.fillStyle = 'rgba(255,159,67,0.7)';
+        c.textAlign = 'right';
+        c.fillText(fmt(outPt), Math.max(ox - 3, 28), TRACK_Y - 12);
+      }
+
+      // Bottom labels
+      timePos.textContent  = fmt(cur);
+      timeDur.textContent  = dur > 0 ? fmt(dur) : '';
+      if (vid?.videoWidth) {
+        timeMeta.textContent = `${vid.videoWidth}×${vid.videoHeight}`;
+      }
+
+      // Sync transport button to current playing state
+      const playing = layer.isPlaying;
+      playPauseBtn.textContent = playing ? '⏸ Pause' : '▶ Play';
+      playPauseBtn.style.color       = playing ? 'var(--accent)' : '';
+      playPauseBtn.style.borderColor = playing ? 'var(--accent)' : '';
+    };
+
+    // ── rAF loop (stops when wrap leaves DOM) ─────────────────────
+    let running = true;
+    const loop = () => {
+      if (!running || !document.contains(wrap)) { running = false; return; }
+      draw();
+      requestAnimationFrame(loop);
+    };
+    requestAnimationFrame(loop);
+
+    // ── mouse interaction ─────────────────────────────────────────
+    const HIT = 9;   // px hitbox radius for markers
+    let dragging = null;  // 'seek' | 'in' | 'out'
+
+    const xToTime = x => {
+      const { dur } = getState();
+      const W = canvas.offsetWidth || 200;
+      return Math.max(0, Math.min(dur, (x / W) * dur));
+    };
+
+    const hitTest = x => {
+      const { dur, inPt, outPt } = getState();
+      if (!dur) return 'seek';
+      const W  = canvas.offsetWidth || 200;
+      const ix = (inPt / dur) * W;
+      const ox = (outPt / dur) * W;
+      if (Math.abs(x - ix) <= HIT) return 'in';
+      if (Math.abs(x - ox) <= HIT) return 'out';
+      return 'seek';
+    };
+
+    const applyDrag = x => {
+      const t = xToTime(x);
+      const { dur, inPt, outPt } = getState();
+      if (dragging === 'seek') {
+        if (layer._videoEl) layer._videoEl.currentTime = t;
+      } else if (dragging === 'in') {
+        layer.params.inPoint  = Math.max(0, Math.min(t, outPt - 0.05));
+      } else if (dragging === 'out') {
+        layer.params.outPoint = Math.min(dur, Math.max(t, inPt + 0.05));
+      }
+    };
+
+    canvas.addEventListener('mousedown', e => {
+      const x = e.clientX - canvas.getBoundingClientRect().left;
+      dragging = hitTest(x);
+      applyDrag(x);
+      e.preventDefault();
+    });
+
+    const onMove = e => { if (dragging) applyDrag(e.clientX - canvas.getBoundingClientRect().left); };
+    const onUp   = () => { dragging = null; };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup',   onUp);
+
+    // Cursor hint
+    canvas.addEventListener('mousemove', e => {
+      if (dragging) return;
+      const x = e.clientX - canvas.getBoundingClientRect().left;
+      canvas.style.cursor = hitTest(x) !== 'seek' ? 'ew-resize' : 'pointer';
+    });
+
+    // Cleanup listeners when panel is replaced
+    wrap._destroyTimeline = () => {
+      running = false;
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup',   onUp);
+    };
   }
 
   // ── Collapsible section ──────────────────────────────────────
@@ -440,6 +668,22 @@ const ParamPanel = (() => {
           cs2.h ?? 0.5, layer, v => { if (layer.clipShape) { layer.clipShape.h = v; if (window._vaelTimeline?.isRecording) window._vaelTimeline.recordPoint(layer.id, 'clipShape.h', v, { label:'Clip Height', min:0.05, max:1.5 }); } }
         ));
         clipSizeContainer.appendChild(sizeRow);
+
+        const posRow = document.createElement('div');
+        posRow.style.cssText = 'display:grid;grid-template-columns:1fr 1fr;gap:8px';
+        posRow.appendChild(buildSlider(
+          { id: '_clipX', label: 'X', type: 'float', min: -1, max: 1, step: 0.01 },
+          cs2.x ?? 0, layer, v => { if (layer.clipShape) layer.clipShape.x = v; }
+        ));
+        posRow.appendChild(buildSlider(
+          { id: '_clipY', label: 'Y', type: 'float', min: -1, max: 1, step: 0.01 },
+          cs2.y ?? 0, layer, v => { if (layer.clipShape) layer.clipShape.y = v; }
+        ));
+        clipSizeContainer.appendChild(posRow);
+        clipSizeContainer.appendChild(buildSlider(
+          { id: '_clipFeather', label: 'Feather', type: 'float', min: 0, max: 120, step: 1 },
+          cs2.feather ?? 0, layer, v => { if (layer.clipShape) layer.clipShape.feather = v; }
+        ));
         if (cs2.type.includes('outline')) {
           clipSizeContainer.appendChild(buildSlider(
             { id: '_clipLW', label: 'Line width', type: 'float', min: 1, max: 30, step: 0.5, default: 3 },
@@ -488,7 +732,9 @@ const ParamPanel = (() => {
       btn.addEventListener('click', e => {
         e.stopPropagation();
         layer.clipShape = shape === 'none' ? null
-          : { type: shape, w: layer.clipShape?.w ?? 0.5, h: layer.clipShape?.h ?? 0.5, lineWidth: layer.clipShape?.lineWidth ?? 10 };
+          : { type: shape, w: layer.clipShape?.w ?? 0.5, h: layer.clipShape?.h ?? 0.5,
+              x: layer.clipShape?.x ?? 0, y: layer.clipShape?.y ?? 0,
+              lineWidth: layer.clipShape?.lineWidth ?? 10, feather: layer.clipShape?.feather ?? 0 };
         _refreshClip();
         // Record clip type as a numeric step value for automation
         if (window._vaelTimeline?.isRecording && layer.id) {
@@ -843,6 +1089,7 @@ const ParamPanel = (() => {
     const commitNum = () => { const v = parseFloat(numInput.value); if (!isNaN(v)) apply(v); };
     numInput.addEventListener('blur', commitNum);
     numInput.addEventListener('keydown', e => {
+      e.stopPropagation();
       if (e.key === 'Enter')  { e.preventDefault(); numInput.blur(); }
       if (e.key === 'Escape') { numInput.value = fmt(parseFloat(slider.value)); numInput.blur(); }
     });
@@ -1105,6 +1352,7 @@ const ParamPanel = (() => {
       };
       inp.addEventListener('blur', commit);
       inp.addEventListener('keydown', e => {
+        e.stopPropagation();
         if (e.key === 'Enter')  { e.preventDefault(); inp.blur(); }
         if (e.key === 'Escape') { inp.value = layer.name; inp.blur(); }
       });

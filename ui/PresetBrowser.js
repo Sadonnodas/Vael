@@ -12,8 +12,9 @@
 
 const PresetBrowser = (() => {
 
-  const LS_KEY  = 'vael-preset-library-v2';
-  const MAX_CAP = 40;   // max presets stored
+  const LS_KEY      = 'vael-preset-library-v2';
+  const MAX_CAP     = 40;   // max presets stored
+  const MAX_VERSIONS = 5;   // version history depth per scene
 
   let _layerStack   = null;
   let _layerFactory = null;
@@ -146,13 +147,26 @@ const PresetBrowser = (() => {
   }
 
   function save(layerStack, name, thumbnail = null) {
+    // Snapshot current version before overwriting
+    const all      = _getAll();
+    const previous = all.find(p => p.name === name);
+    const prevVersions = previous?.versions || [];
+
+    // Compress previous snapshot for version storage (strip its own versions to avoid nesting)
+    let versionEntry = null;
+    if (previous) {
+      const { versions: _v, ...snap } = previous;
+      versionEntry = snap;
+    }
+
     const preset = {
       vael:    '1.0',
       name,
       saved:   new Date().toISOString(),
       thumbnail,
-      layers:  layerStack.layers.map(layer => {
-        const base = {
+      ratio:   window._vaelCurrentRatio || null,
+      layers:  layerStack.layers.map(layer =>
+        typeof layer.toJSON === 'function' ? layer.toJSON() : {
           type:        layer.constructor.name,
           id:          layer.id,
           name:        layer.name,
@@ -162,16 +176,39 @@ const PresetBrowser = (() => {
           maskLayerId: layer.maskLayerId || null,
           transform:   { ...layer.transform },
           modMatrix:   layer.modMatrix?.toJSON() || [],
-        };
-        if (layer.params) base.params = { ...layer.params };
-        return base;
-      }),
-      postFX: typeof PostFXPanel !== 'undefined' ? PostFXPanel.serialize() : undefined,
+          params:      layer.params ? { ...layer.params } : {},
+        }
+      ),
+      postFX:   typeof PostFXPanel !== 'undefined' ? PostFXPanel.serialize() : undefined,
+      versions: versionEntry
+        ? [versionEntry, ...prevVersions].slice(0, MAX_VERSIONS)
+        : prevVersions.slice(0, MAX_VERSIONS),
     };
 
-    const existing = _getAll().filter(p => p.name !== name);
+    const existing = all.filter(p => p.name !== name);
     _setAll([preset, ...existing].slice(0, MAX_CAP));
     return preset;
+  }
+
+  function restoreVersion(name, versionIndex) {
+    const all    = _getAll();
+    const preset = all.find(p => p.name === name);
+    if (!preset?.versions?.[versionIndex]) return false;
+
+    const ver = preset.versions[versionIndex];
+    // The restored version becomes the current; current goes into history
+    const { versions: _v, ...currentSnap } = preset;
+    const newVersions = [currentSnap, ...preset.versions.filter((_, i) => i !== versionIndex)].slice(0, MAX_VERSIONS);
+
+    const restored = {
+      ...ver,
+      name,          // keep original name
+      versions: newVersions,
+    };
+
+    const rest = all.filter(p => p.name !== name);
+    _setAll([restored, ...rest].slice(0, MAX_CAP));
+    return restored;
   }
 
   function remove(name) {
@@ -188,30 +225,45 @@ const PresetBrowser = (() => {
 
   function _applyPreset(preset) {
     if (!preset?.layers) return;
-    [..._layerStack.layers].forEach(l => _layerStack.remove(l.id));
-    preset.layers.forEach(def => {
-      try {
-        const layer = _layerFactory(def.type, def.id);
-        if (!layer) return;
-        layer.name        = def.name      ?? layer.name;
-        layer.visible     = def.visible   ?? true;
-        layer.opacity     = def.opacity   ?? 1;
-        layer.blendMode   = def.blendMode ?? 'normal';
-        layer.maskLayerId = def.maskLayerId || null;
-        if (def.transform)  Object.assign(layer.transform, def.transform);
-        if (def.clipShape  !== undefined) layer.clipShape  = def.clipShape  ? { ...def.clipShape  } : null;
-        if (def.colorMask  !== undefined) layer.colorMask  = def.colorMask  ? { ...def.colorMask  } : null;
-        if (def.modMatrix)  layer.modMatrix?.fromJSON(def.modMatrix);
-        if (def.params && layer.params) Object.assign(layer.params, def.params);
-        if (Array.isArray(def.freeformPoints) && layer.freeformPoints !== undefined) {
-          layer.freeformPoints = def.freeformPoints.map(p => ({ ...p }));
-        }
-        // Pass shaderName + glsl so custom ShaderLayers restore correctly
-        if (typeof layer.init === 'function') layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
-        _layerStack.add(layer);
-      } catch (e) { console.warn('PresetBrowser: could not load layer', e); }
-    });
+
+    // Non-layer restores always happen immediately
     if (preset.postFX && typeof PostFXPanel !== 'undefined') PostFXPanel.restore(preset.postFX);
+    if (preset.ratio) window._vaelApplyRatioObj?.(preset.ratio);
+    window._vaelActiveScene = preset.name;
+
+    // Route layer transition through SetlistManager so SCENES tab also crossfades
+    const _setlist = window._vaelSetlist;
+    if (_setlist && _setlist.fadeDuration > 0 && _setlist.transitionType !== 'cut') {
+      _setlist.fadeToPreset(preset);
+    } else {
+      // Instant load
+      [..._layerStack.layers].forEach(l => _layerStack.remove(l.id));
+      preset.layers.forEach(def => {
+        try {
+          const layer = _layerFactory(def.type, def.id);
+          if (!layer) return;
+          layer.name        = def.name      ?? layer.name;
+          layer.visible     = def.visible   ?? true;
+          layer.opacity     = def.opacity   ?? 1;
+          layer.blendMode   = def.blendMode ?? 'normal';
+          layer.maskLayerId = def.maskLayerId || null;
+          if (def.maskMode   !== undefined) layer.maskMode   = def.maskMode;
+          if (def.softUpdate !== undefined) layer.softUpdate = def.softUpdate;
+          if (def.transform)  Object.assign(layer.transform, def.transform);
+          if (def.clipShape  !== undefined) layer.clipShape  = def.clipShape  ? { ...def.clipShape  } : null;
+          if (def.colorMask  !== undefined) layer.colorMask  = def.colorMask  ? { ...def.colorMask  } : null;
+          if (def.modMatrix)  layer.modMatrix?.fromJSON(def.modMatrix);
+          if (Array.isArray(def.fx) && layer.fx !== undefined) layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
+          if (def.params && layer.params) Object.assign(layer.params, def.params);
+          if (Array.isArray(def.freeformPoints) && layer.freeformPoints !== undefined) {
+            layer.freeformPoints = def.freeformPoints.map(p => ({ ...p }));
+          }
+          if (typeof layer.init === 'function') layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
+          _layerStack.add(layer);
+        } catch (e) { console.warn('PresetBrowser: could not load layer', e); }
+      });
+    }
+
     if (typeof _onLoad === 'function') _onLoad(preset);
     Toast.success(`Loaded: ${preset.name}`);
   }
@@ -280,7 +332,8 @@ const PresetBrowser = (() => {
                   flex-shrink:0;display:flex;gap:6px">
         <input type="text" id="pb-save-name" placeholder="Scene name…"
           style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:4px;
-                 color:var(--text);font-family:var(--font-mono);font-size:10px;padding:6px 10px"/>
+                 color:var(--text);font-family:var(--font-mono);font-size:10px;padding:6px 10px"
+          onkeydown="event.stopPropagation()"/>
         <button id="pb-save-btn" class="btn accent" style="flex-shrink:0;font-size:9px">
           ⊕ Save current
         </button>
@@ -341,6 +394,7 @@ const PresetBrowser = (() => {
         thumb = t.toDataURL('image/jpeg', 0.6);
       } catch {}
       save(_layerStack, name, thumb);
+      window._vaelActiveScene = name;
       nameEl.value = '';
       _renderGrid();
       Toast.success(`Scene "${name}" saved to library`);
@@ -437,10 +491,11 @@ const PresetBrowser = (() => {
   }
 
   function _buildGridCard(preset) {
-    const isSel = _selected.has(preset.name);
-    const card  = document.createElement('div');
+    const isSel    = _selected.has(preset.name);
+    const isActive = preset.name === window._vaelActiveScene;
+    const card     = document.createElement('div');
     card.style.cssText = `
-      background:var(--bg-card);border:1px solid ${isSel ? 'var(--accent)' : 'var(--border-dim)'};
+      background:var(--bg-card);border:1px solid ${isActive || isSel ? 'var(--accent)' : 'var(--border-dim)'};
       border-radius:6px;overflow:hidden;cursor:pointer;
       transition:border-color 0.15s,transform 0.1s;position:relative;
     `;
@@ -459,13 +514,19 @@ const PresetBrowser = (() => {
              display:flex;align-items:center;justify-content:center;
              font-size:20px;border-bottom:1px solid var(--border-dim)">◈</div>`
       }
-      <div style="padding:5px 8px">
-        <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);
-                    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-                    margin-bottom:1px">${preset.name}</div>
-        <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
-          ${preset.layers?.length ?? 0} layers
+      <div style="padding:5px 8px;display:flex;align-items:center;gap:4px">
+        <div style="flex:1;min-width:0">
+          <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);
+                      white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+                      margin-bottom:1px">${preset.name}</div>
+          <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
+            ${isActive ? '<span style="color:var(--accent)">◉ editing</span> · ' : ''}${preset.layers?.length ?? 0} layers
+          </div>
         </div>
+        <button class="pb-update" title="Overwrite with current scene"
+          style="flex-shrink:0;background:rgba(0,212,170,0.12);border:1px solid rgba(0,212,170,0.3);
+                 border-radius:3px;color:var(--accent);cursor:pointer;font-size:9px;
+                 padding:2px 6px;font-family:var(--font-mono)">↑ Update</button>
       </div>
       <div class="pb-card-actions" style="position:absolute;top:4px;right:4px;
         display:flex;gap:3px;opacity:0;transition:opacity 0.15s">
@@ -479,12 +540,12 @@ const PresetBrowser = (() => {
     `;
 
     card.addEventListener('mouseenter', () => {
-      if (!_selected.has(preset.name)) card.style.borderColor = 'var(--accent2)';
+      if (!isActive && !_selected.has(preset.name)) card.style.borderColor = 'var(--accent2)';
       card.style.transform = 'scale(1.02)';
       card.querySelector('.pb-card-actions').style.opacity = '1';
     });
     card.addEventListener('mouseleave', () => {
-      card.style.borderColor = _selected.has(preset.name) ? 'var(--accent)' : 'var(--border-dim)';
+      card.style.borderColor = isActive || _selected.has(preset.name) ? 'var(--accent)' : 'var(--border-dim)';
       card.style.transform = 'scale(1)';
       card.querySelector('.pb-card-actions').style.opacity = '0';
     });
@@ -499,6 +560,23 @@ const PresetBrowser = (() => {
       e.stopPropagation();
       _toggleSelect(preset.name);
       _renderGrid();
+    });
+    card.querySelector('.pb-update').addEventListener('click', e => {
+      e.stopPropagation();
+      const activeName = window._vaelActiveScene;
+      if (activeName && activeName !== preset.name) {
+        if (!confirm(`Are you sure you want to update "${preset.name}"?\n\nYou're currently editing "${activeName}".`)) return;
+      }
+      let thumb = null;
+      try {
+        const canvas = document.getElementById('main-canvas');
+        const t = document.createElement('canvas'); t.width = 120; t.height = 68;
+        t.getContext('2d').drawImage(canvas, 0, 0, 120, 68);
+        thumb = t.toDataURL('image/jpeg', 0.6);
+      } catch {}
+      save(_layerStack, preset.name, thumb);
+      _renderGrid();
+      Toast.success(`"${preset.name}" updated`);
     });
     card.querySelector('.pb-dl').addEventListener('click', e => {
       e.stopPropagation();
@@ -517,11 +595,12 @@ const PresetBrowser = (() => {
   }
 
   function _buildListRow(preset) {
-    const isSel = _selected.has(preset.name);
-    const row   = document.createElement('div');
+    const isSel    = _selected.has(preset.name);
+    const isActive = preset.name === window._vaelActiveScene;
+    const row      = document.createElement('div');
     row.style.cssText = `
       display:flex;align-items:center;gap:8px;padding:6px 8px;
-      background:var(--bg-card);border:1px solid ${isSel ? 'var(--accent)' : 'var(--border-dim)'};
+      background:var(--bg-card);border:1px solid ${isActive || isSel ? 'var(--accent)' : 'var(--border-dim)'};
       border-radius:5px;cursor:pointer;transition:border-color 0.15s;
     `;
 
@@ -553,13 +632,37 @@ const PresetBrowser = (() => {
     info.style.cssText = 'flex:1;min-width:0';
     info.innerHTML = `
       <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);
-                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${preset.name}</div>
+                  white-space:nowrap;overflow:hidden;text-overflow:ellipsis">
+        ${isActive ? '<span style="color:var(--accent)">◉</span> ' : ''}${preset.name}
+      </div>
       <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
         ${preset.layers?.length ?? 0} layers
       </div>
     `;
 
     // Actions
+    const updBtn = document.createElement('button');
+    updBtn.title = 'Overwrite with current scene';
+    updBtn.style.cssText = 'background:none;border:none;color:var(--accent);cursor:pointer;font-size:12px;padding:2px 4px;flex-shrink:0';
+    updBtn.textContent = '↑';
+    updBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      const activeName = window._vaelActiveScene;
+      if (activeName && activeName !== preset.name) {
+        if (!confirm(`Are you sure you want to update "${preset.name}"?\n\nYou're currently editing "${activeName}".`)) return;
+      }
+      let thumb = null;
+      try {
+        const canvas = document.getElementById('main-canvas');
+        const t = document.createElement('canvas'); t.width = 120; t.height = 68;
+        t.getContext('2d').drawImage(canvas, 0, 0, 120, 68);
+        thumb = t.toDataURL('image/jpeg', 0.6);
+      } catch {}
+      save(_layerStack, preset.name, thumb);
+      _renderGrid();
+      Toast.success(`"${preset.name}" updated`);
+    });
+
     const dlBtn = document.createElement('button');
     dlBtn.title = 'Download';
     dlBtn.style.cssText = 'background:none;border:none;color:#00d4aa;cursor:pointer;font-size:12px;padding:2px 4px;flex-shrink:0';
@@ -572,10 +675,10 @@ const PresetBrowser = (() => {
     delBtn.textContent = '✕';
     delBtn.addEventListener('click', e => { e.stopPropagation(); _selected.delete(preset.name); remove(preset.name); _updateBulkButtons(); _renderGrid(); Toast.info(`Deleted "${preset.name}"`); });
 
-    row.append(chk, thumb, info, dlBtn, delBtn);
+    row.append(chk, thumb, info, updBtn, dlBtn, delBtn);
 
-    row.addEventListener('mouseenter', () => { if (!isSel) row.style.borderColor = 'var(--accent2)'; });
-    row.addEventListener('mouseleave', () => { row.style.borderColor = _selected.has(preset.name) ? 'var(--accent)' : 'var(--border-dim)'; });
+    row.addEventListener('mouseenter', () => { if (!isActive && !isSel) row.style.borderColor = 'var(--accent2)'; });
+    row.addEventListener('mouseleave', () => { row.style.borderColor = isActive || _selected.has(preset.name) ? 'var(--accent)' : 'var(--border-dim)'; });
     row.addEventListener('click', () => { _applyPreset(preset); close(); });
 
     return row;
@@ -615,6 +718,6 @@ const PresetBrowser = (() => {
     _isOpen ? close() : open();
   }
 
-  return { init, save, remove, open, close, toggle, _getAll, _applyPreset };
+  return { init, save, remove, restoreVersion, open, close, toggle, _getAll, _applyPreset };
 
 })();

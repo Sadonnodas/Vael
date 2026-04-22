@@ -28,6 +28,7 @@ class VideoPlayerLayer extends BaseLayer {
       { id: 'fitMode',      label: 'Fit',             type: 'enum',  default: 'cover', options: ['cover','contain','stretch'] },
       { id: 'loop',         label: 'Loop',            type: 'bool',  default: true  },
       { id: 'muted',        label: 'Muted',           type: 'bool',  default: true  },
+      { id: 'playOnLoad',   label: 'Play on load',    type: 'bool',  default: true  },
     ],
   };
 
@@ -53,6 +54,9 @@ class VideoPlayerLayer extends BaseLayer {
     this._sourceUrl    = null;
     this._libraryId    = null;
     this._pingDir      = 1;    // +1 = forward, -1 = reverse (for pingpong)
+    this._playing      = true; // controlled by play()/pause()/stop()
+    this._frameCache   = null; // last successfully drawn frame (used during seeks)
+    this._frameCacheCtx = null;
     this._createOwnVideo();
   }
 
@@ -65,6 +69,17 @@ class VideoPlayerLayer extends BaseLayer {
     el.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px';
     document.body.appendChild(el);
     this._videoEl = el;
+
+    // When the browser fires 'ended', our update() loop would see a paused video
+    // with _playing=true and call play() again, restarting it. Handle it here instead.
+    el.addEventListener('ended', () => {
+      if (this.params.loop !== false) {
+        el.currentTime = this._inPoint();
+        el.play().catch(() => {});
+      } else {
+        this._playing = false;
+      }
+    });
   }
 
   init(params = {}) {
@@ -92,17 +107,42 @@ class VideoPlayerLayer extends BaseLayer {
   }
 
   _loadUrl(url, name) {
-    this._sourceUrl  = url;
-    this._sourceName = name;
+    this._sourceUrl    = url;
+    this._sourceName   = name;
+    this._frameCache   = null;   // discard stale cache from previous clip
+    this._frameCacheCtx = null;
     this._videoEl.src  = url;
     this._videoEl.muted = this.params.muted !== false;
     this._pingDir = 1;
-    this._videoEl.play().catch(() => {});
+    this._playing = this.params.playOnLoad !== false;
+    if (this._playing) this._videoEl.play().catch(() => {});
     // Jump to in point once metadata is ready
     this._videoEl.addEventListener('loadedmetadata', () => {
       const ip = this._inPoint();
       if (ip > 0) this._videoEl.currentTime = ip;
     }, { once: true });
+  }
+
+  get isPlaying() { return this._playing; }
+
+  play() {
+    this._playing = true;
+    if (this._videoEl && this.params.playMode === 'forward') {
+      this._videoEl.play().catch(() => {});
+    }
+  }
+
+  pause() {
+    this._playing = false;
+    if (this._videoEl && !this._videoEl.paused) this._videoEl.pause();
+  }
+
+  stop() {
+    this._playing = false;
+    if (this._videoEl) {
+      if (!this._videoEl.paused) this._videoEl.pause();
+      this._videoEl.currentTime = this._inPoint();
+    }
   }
 
   /** Called for backwards compat (ignored — we own our element) */
@@ -134,30 +174,36 @@ class VideoPlayerLayer extends BaseLayer {
     const op   = this._outPoint();
 
     if (mode === 'forward') {
-      // Normal playback — let the video element run, enforce in/out
-      if (this._videoEl.paused) this._videoEl.play().catch(() => {});
-      if (this._videoEl.playbackRate !== rate) this._videoEl.playbackRate = rate;
-      if (op > 0 && this._videoEl.currentTime >= op) {
-        if (this.params.loop !== false) {
-          this._videoEl.currentTime = ip;
-        } else {
-          this._videoEl.pause();
+      if (this._playing) {
+        if (this._videoEl.paused) this._videoEl.play().catch(() => {});
+        if (this._videoEl.playbackRate !== rate) this._videoEl.playbackRate = rate;
+        if (op > 0 && this._videoEl.currentTime >= op) {
+          if (this.params.loop !== false) {
+            this._videoEl.currentTime = ip;
+          } else {
+            this._videoEl.pause();
+            this._playing = false;
+          }
         }
+        if (this._videoEl.currentTime < ip) this._videoEl.currentTime = ip;
+      } else {
+        if (!this._videoEl.paused) this._videoEl.pause();
       }
-      if (this._videoEl.currentTime < ip) this._videoEl.currentTime = ip;
 
     } else if (mode === 'reverse') {
-      // Pause HTML5 playback; step backwards manually each frame
       if (!this._videoEl.paused) this._videoEl.pause();
+      if (!this._playing) return;
       const step = rate * dt;
       let t = this._videoEl.currentTime - step;
       if (t <= ip) {
         t = (this.params.loop !== false) ? op : ip;
+        if (this.params.loop === false) { this._playing = false; return; }
       }
       this._videoEl.currentTime = t;
 
     } else if (mode === 'pingpong') {
       if (!this._videoEl.paused) this._videoEl.pause();
+      if (!this._playing) return;
       const step = rate * dt;
       let t = this._videoEl.currentTime + this._pingDir * step;
       if (t >= op) {
@@ -172,23 +218,39 @@ class VideoPlayerLayer extends BaseLayer {
   }
 
   render(ctx, width, height) {
-    if (!this._videoEl || this._videoEl.readyState < 2) {
-      ctx.save();
-      ctx.fillStyle = 'rgba(255,255,255,0.04)';
-      ctx.fillRect(-width/2, -height/2, width, height);
-      ctx.fillStyle = 'rgba(255,255,255,0.15)';
-      ctx.font = '16px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(this._sourceName ? 'Loading...' : 'No video — click Change video in PARAMS', 0, 0);
-      ctx.restore();
+    const el = this._videoEl;
+
+    if (!el || el.readyState < 2) {
+      // Use the last good cached frame (e.g. mid-seek) to avoid a blank flash
+      if (this._frameCache) {
+        this._drawSource(ctx, this._frameCache, width, height);
+      }
+      // Render nothing while loading — no loading text in the visual output.
+      // The operator sees status in the LayerPanel; the audience sees a clean frame.
       return;
     }
 
-    const vw = this._videoEl.videoWidth  || width;
-    const vh = this._videoEl.videoHeight || height;
-    const aspect = vw / vh;
+    // Draw the live frame
+    this._drawSource(ctx, el, width, height);
 
-    let dw, dh, dx, dy;
+    // Cache a copy for use during seek-induced readyState drops
+    const vw = el.videoWidth || width;
+    const vh = el.videoHeight || height;
+    if (!this._frameCache || this._frameCache.width !== vw || this._frameCache.height !== vh) {
+      this._frameCache    = document.createElement('canvas');
+      this._frameCache.width  = vw;
+      this._frameCache.height = vh;
+      this._frameCacheCtx = this._frameCache.getContext('2d');
+    }
+    this._frameCacheCtx.drawImage(el, 0, 0, vw, vh);
+  }
+
+  /** Draw `source` (video element or canvas) fitted to the layer canvas. */
+  _drawSource(ctx, source, width, height) {
+    const vw = source.videoWidth || source.width  || width;
+    const vh = source.videoHeight || source.height || height;
+    const aspect = vw / vh;
+    let dw, dh;
     if (this.params.fitMode === 'cover') {
       if (width / height > aspect) { dw = width;  dh = width / aspect; }
       else                          { dh = height; dw = height * aspect; }
@@ -198,11 +260,9 @@ class VideoPlayerLayer extends BaseLayer {
     } else {
       dw = width; dh = height;
     }
-    dx = -dw / 2; dy = -dh / 2;
-
     ctx.save();
     if (this.params.flipH) ctx.scale(-1, 1);
-    ctx.drawImage(this._videoEl, dx, dy, dw, dh);
+    ctx.drawImage(source, -dw / 2, -dh / 2, dw, dh);
     ctx.restore();
   }
 

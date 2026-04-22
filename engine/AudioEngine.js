@@ -45,6 +45,10 @@ class AudioEngine {
     this.inputSpeed   = 0.05;     // lerp speed for smoothing
     this.bias         = { bass: 1, mid: 1, treble: 1 };
 
+    // Volume
+    this._gainNode     = null;
+    this._volume       = 1.0;
+
     // Callbacks
     this.onStateChange = null;    // called when play/pause/stop changes
     this.onBeat        = null;    // called when a beat is detected (future)
@@ -63,10 +67,20 @@ class AudioEngine {
     const analyser       = ctx.createAnalyser();
     analyser.fftSize     = this._fftSize;
     analyser.smoothingTimeConstant = 0;   // we do our own smoothing
-    analyser.connect(ctx.destination);
+    if (this._gainNode) { try { this._gainNode.disconnect(); } catch (_) {} }
+    this._gainNode = ctx.createGain();
+    this._gainNode.gain.value = this._volume;
+    analyser.connect(this._gainNode);
+    this._gainNode.connect(ctx.destination);
     this._analyser   = analyser;
     this._dataArray  = new Uint8Array(analyser.frequencyBinCount);
     return analyser;
+  }
+
+  get volume() { return this._volume; }
+  set volume(v) {
+    this._volume = Math.max(0, Math.min(2, v));
+    if (this._gainNode) this._gainNode.gain.value = this._volume;
   }
 
   // ── File loading ─────────────────────────────────────────────
@@ -366,6 +380,10 @@ class AudioEngine {
       try { this._source.stop(); } catch (_) {}
       this._source.onended = null;
       this._source = null;
+    }
+    if (this._gainNode) {
+      try { this._gainNode.disconnect(); } catch (_) {}
+      this._gainNode = null;
     }
     if (this._analyser) {
       try { this._analyser.disconnect(); } catch (_) {}

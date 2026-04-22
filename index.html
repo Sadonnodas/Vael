@@ -426,7 +426,13 @@
     }
 
     /* ── Performance mode ─────────────────────────────────────── */
-    body.performance #sidebar { display: none; }
+    body.performance #sidebar,
+    body.performance #status-strip,
+    body.performance #canvas-ratio-toolbar,
+    body.performance #canvas-fps-pill,
+    body.performance #output-window-btn { display: none; }
+    /* Block all pointer interaction on the main canvas in performance mode */
+    body.performance #main-canvas { pointer-events: none; cursor: default !important; }
 
     /* ── Pop-out floating panels ──────────────────────────────── */
     .vael-popout {
@@ -502,8 +508,6 @@
       color: var(--accent);
     }
 
-
-    body.performance #status-strip { display: none; }
 
     #perf-hud {
       display: none;

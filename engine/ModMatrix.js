@@ -107,17 +107,19 @@ class ModMatrix {
         }
 
       } else if (target === 'opacity') {
-        // Opacity: base is current layer.opacity.
-        // depth +1 = audio adds up to 1.0 of opacity range above base.
-        // depth -1 = audio subtracts up to 1.0 of opacity range below base.
-        // To get "bass reduces opacity": use negative depth.
-        // To get "bass pulses brightness": use positive depth with base < 1.
+        // Multiplicative opacity model:
+        //   positive depth → audio raises opacity toward base (dims at silence)
+        //   negative depth → audio lowers opacity (dims when loud)
+        // Formula: opacity = base × (1 − |depth| × (1 − s))
+        //   where s = signal for positive depth, (1 − signal) for negative.
+        // This works correctly regardless of base value — no clamping artefacts.
         if (!this._baseVals.has('opacity')) {
           this._baseVals.set('opacity', layer.opacity ?? 1);
         }
-        const base     = this._baseVals.get('opacity');
-        const modValue = base + route._smoothed * depth;
-        layer.opacity  = Math.max(0, Math.min(1, modValue));
+        const base  = this._baseVals.get('opacity');
+        const absD  = Math.abs(depth);
+        const s     = depth >= 0 ? route._smoothed : (1 - route._smoothed);
+        layer.opacity = Math.max(0, Math.min(1, base * (1 - absD * (1 - s))));
 
       } else if (target === 'clipShape.w' || target === 'clipShape.h') {
         if (!layer.clipShape) return;
@@ -145,7 +147,10 @@ class ModMatrix {
         const r        = pMax - pMin;
 
         const modValue = base + route._smoothed * depth * r;
-        layer.params[target] = Math.max(pMin, Math.min(pMax, modValue));
+        const clamped  = Math.max(pMin, Math.min(pMax, modValue));
+        // Integer params (e.g. particle count) must stay whole numbers to avoid
+        // triggering re-initialisation every frame from tiny float deltas.
+        layer.params[target] = (manifest?.type === 'int') ? Math.round(clamped) : clamped;
       }
     });
   }

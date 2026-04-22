@@ -192,19 +192,53 @@ class SetlistManager {
 
     preset.layers.forEach(def => {
       try {
-        const layer = this._layerFactory(def.type, `${def.id}-fade-${Date.now()}`);
+        const tempId = `${def.id}-fade-${Date.now()}`;
+        const layer  = this._layerFactory(def.type, tempId);
         if (!layer) return;
-        layer.name        = def.name      ?? layer.name;
-        layer.visible     = def.visible   ?? true;
-        layer.blendMode   = def.blendMode ?? 'normal';
-        layer._fadeTarget = def.opacity   ?? 1;
+
+        layer._originalId = def.id;  // restored in _finishFade so MIDI links stay valid
+        layer.name        = def.name        ?? layer.name;
+        layer.visible     = def.visible     ?? true;
+        layer.blendMode   = def.blendMode   ?? 'normal';
+        layer.maskLayerId = def.maskLayerId  || null;
+        layer.maskMode    = def.maskMode     || 'luminance';
+        layer._fadeTarget = def.opacity     ?? 1;
         layer.opacity     = 0;
-        if (def.params && layer.params) Object.assign(layer.params, def.params);
+
+        if (def.params    && layer.params)    Object.assign(layer.params, def.params);
         if (def.transform && layer.transform) Object.assign(layer.transform, def.transform);
+        if (def.modMatrix && layer.modMatrix) layer.modMatrix.fromJSON(def.modMatrix, layer);
+        if (def.fx)         layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
+        if (def.clipShape  !== undefined) layer.clipShape  = def.clipShape  ? { ...def.clipShape  } : null;
+        if (def.colorMask  !== undefined) layer.colorMask  = def.colorMask  ? { ...def.colorMask  } : null;
+        if (def.softUpdate !== undefined) layer.softUpdate = def.softUpdate;
+        if (Array.isArray(def.freeformPoints) && layer.freeformPoints !== undefined) {
+          layer.freeformPoints = def.freeformPoints.map(p => ({ ...p }));
+        }
         if (this._audioEngine && '_audioEngine' in layer) {
           layer._audioEngine = this._audioEngine;
         }
-        if (typeof layer.init === 'function') layer.init(layer.params || {});
+        if (typeof layer.init === 'function') {
+          layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
+        }
+
+        // Full video library lookup — same priority order as _loadPreset
+        if (layer instanceof VideoPlayerLayer && def.params) {
+          const p = def.params;
+          let restored = false;
+          if (p._libraryId && window.videoLibrary) {
+            const entry = window.videoLibrary.entries.find(e => e.id === p._libraryId);
+            if (entry) { layer.loadFromLibraryEntry(entry); restored = true; }
+          }
+          if (!restored && p._sourceName && window.videoLibrary) {
+            const entry = window.videoLibrary.entries.find(e => e.name === p._sourceName);
+            if (entry) { layer.loadFromLibraryEntry(entry); restored = true; }
+          }
+          if (!restored && p._sourceUrl) {
+            layer._loadUrl(p._sourceUrl, p._sourceName || 'video');
+          }
+        }
+
         this._layerStack.add(layer);
       } catch (e) {
         console.warn('SetlistManager crossfade: could not load layer', e);
@@ -257,11 +291,17 @@ class SetlistManager {
     // Remove old crossfade layers
     this._oldLayers.forEach(l => this._layerStack.remove(l.id));
 
-    // Snap new layers to target opacity
+    // Snap new layers to target opacity and restore their original IDs
+    // (IDs were made unique during the fade to avoid conflicts; restoring them
+    //  lets MIDI links and other systems find the layers by their preset IDs)
     this._layerStack.layers.forEach(layer => {
       if (layer._fadeTarget !== undefined) {
         layer.opacity = layer._fadeTarget;
         delete layer._fadeTarget;
+        if (layer._originalId) {
+          layer.id = layer._originalId;
+          delete layer._originalId;
+        }
       }
     });
 
@@ -281,6 +321,22 @@ class SetlistManager {
     }
   }
 
+  // ── Public preset transition API ─────────────────────────────
+
+  /**
+   * Transition to any preset using the current fade settings.
+   * Used by the SCENES tab (PresetBrowser) so preset switches also crossfade.
+   * Does not affect the setlist index or trigger onSceneChange.
+   */
+  fadeToPreset(preset) {
+    if (this._fading) this._cancelFade();
+    if (this.fadeDuration > 0 && this.transitionType !== 'cut') {
+      this._startFade(preset);
+    } else {
+      this._loadPreset(preset);
+    }
+  }
+
   // ── Direct load (no fade) ────────────────────────────────────
 
   _loadPreset(preset) {
@@ -288,7 +344,7 @@ class SetlistManager {
     [...this._layerStack.layers].forEach(l => this._layerStack.remove(l.id));
     preset.layers.forEach(def => {
       try {
-        const layer = this._layerFactory(def.type, def.id + '-sl');
+        const layer = this._layerFactory(def.type, def.id);
         if (!layer) return;
 
         layer.name        = def.name        ?? layer.name;

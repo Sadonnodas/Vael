@@ -33,10 +33,32 @@
       margin-bottom: 16px;
       opacity: 0.3;
     }
+    #fs-btn {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      background: rgba(0,0,0,0.55);
+      border: 1px solid rgba(255,255,255,0.18);
+      border-radius: 6px;
+      color: rgba(255,255,255,0.55);
+      font-family: monospace;
+      font-size: 11px;
+      letter-spacing: 1px;
+      padding: 6px 14px;
+      cursor: pointer;
+      z-index: 10;
+      transition: opacity 0.3s, color 0.2s, border-color 0.2s;
+    }
+    #fs-btn:hover {
+      color: #fff;
+      border-color: rgba(255,255,255,0.5);
+    }
+    #fs-btn.hidden { opacity: 0; pointer-events: none; }
   </style>
 </head>
 <body>
   <canvas id="output-canvas"></canvas>
+  <button id="fs-btn">⛶ Fullscreen</button>
   <div id="waiting">
     <div class="logo">✦ VAEL</div>
     <div>Waiting for output…</div>
@@ -94,9 +116,34 @@
       }
     });
 
-    // Keyboard: Escape closes this window
+    // Fullscreen button
+    const fsBtn = document.getElementById('fs-btn');
+
+    // In Electron, the main process already calls setFullScreen(true) — that's native
+    // fullscreen which doesn't set document.fullscreenElement, so the button would
+    // stay visible. Hide it immediately in Electron; show it only in browsers.
+    const isElectron = !!(window.electronAPI || navigator.userAgent.includes('Electron'));
+    if (isElectron) {
+      fsBtn.style.display = 'none';
+    } else {
+      fsBtn.addEventListener('click', () => {
+        document.documentElement.requestFullscreen().catch(() => {});
+      });
+      document.addEventListener('fullscreenchange', () => {
+        fsBtn.classList.toggle('hidden', !!document.fullscreenElement);
+      });
+      // Auto-hide after 4 s so it doesn't linger on the projector
+      setTimeout(() => fsBtn.classList.add('hidden'), 4000);
+      document.addEventListener('mousemove', () => {
+        fsBtn.classList.remove('hidden');
+        clearTimeout(fsBtn._hideTimer);
+        fsBtn._hideTimer = setTimeout(() => fsBtn.classList.add('hidden'), 3000);
+      });
+    }
+
+    // Keyboard: Escape closes this window (only when not fullscreen — browser handles Escape to exit fullscreen)
     document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') window.close();
+      if (e.key === 'Escape' && !document.fullscreenElement) window.close();
     });
   </script>
 </body>
