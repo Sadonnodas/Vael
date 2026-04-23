@@ -209,6 +209,7 @@ class SetlistManager {
         if (def.transform && layer.transform) Object.assign(layer.transform, def.transform);
         if (def.modMatrix && layer.modMatrix) layer.modMatrix.fromJSON(def.modMatrix, layer);
         if (def.fx)         layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
+        if (Array.isArray(def.automation)) layer.automation = def.automation.map(r => ({ ...r }));
         if (def.clipShape  !== undefined) layer.clipShape  = def.clipShape  ? { ...def.clipShape  } : null;
         if (def.colorMask  !== undefined) layer.colorMask  = def.colorMask  ? { ...def.colorMask  } : null;
         if (def.softUpdate !== undefined) layer.softUpdate = def.softUpdate;
@@ -358,6 +359,7 @@ class SetlistManager {
         if (def.transform && layer.transform) Object.assign(layer.transform, def.transform);
         if (def.modMatrix && layer.modMatrix) layer.modMatrix.fromJSON(def.modMatrix, layer);
         if (def.fx)         layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
+        if (Array.isArray(def.automation)) layer.automation = def.automation.map(r => ({ ...r }));
         if (def.clipShape  !== undefined) layer.clipShape  = def.clipShape  ? { ...def.clipShape  } : null;
         if (def.colorMask  !== undefined) layer.colorMask  = def.colorMask  ? { ...def.colorMask  } : null;
         if (def.softUpdate !== undefined) layer.softUpdate = def.softUpdate;

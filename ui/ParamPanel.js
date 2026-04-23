@@ -50,7 +50,7 @@ const ParamPanel = (() => {
 
   // ── Main render ──────────────────────────────────────────────
 
-  function render(layer, container, audioEngine) {
+  function render(layer, container, audioEngine, layerStack) {
     _liveTrackers.clear();
     _trackedLayer = layer;
     container.innerHTML = '';
@@ -58,7 +58,7 @@ const ParamPanel = (() => {
     const manifest = layer.constructor.manifest;
     const typeKey  = layer.constructor.name;
     if (!_sectionState[typeKey]) {
-      _sectionState[typeKey] = { transform: false, params: true, mod: false, fx: false };
+      _sectionState[typeKey] = { transform: false, params: true, mod: false, fx: false, automation: false };
     }
     const sec = _sectionState[typeKey];
 
@@ -241,6 +241,9 @@ const ParamPanel = (() => {
       LayerFXPanel.render(layer, fSec.body);
       container.appendChild(fSec.el);
     }
+
+    // Automation ramps
+    container.appendChild(_buildAutomationSection(layer, layerStack));
   }
 
   // ── Video timeline bar ───────────────────────────────────────
@@ -1452,6 +1455,181 @@ const ParamPanel = (() => {
       empty.textContent   = 'No modulation routes in this scene.';
       container.appendChild(empty);
     }
+  }
+
+  // ── Automation ramp section ──────────────────────────────────
+  function _buildAutomationSection(layer, layerStack) {
+    if (!layer.automation) layer.automation = [];
+    const allLayers = layerStack?.layers || [];
+
+    const EXTRA_PARAMS = [
+      { id: 'opacity',             label: 'Opacity',    min: 0,    max: 1,    step: 0.01 },
+      { id: 'transform.x',        label: 'Position X', min: -1,   max: 1,    step: 0.01 },
+      { id: 'transform.y',        label: 'Position Y', min: -1,   max: 1,    step: 0.01 },
+      { id: 'transform.scaleX',   label: 'Scale X',    min: 0.1,  max: 4,    step: 0.01 },
+      { id: 'transform.scaleY',   label: 'Scale Y',    min: 0.1,  max: 4,    step: 0.01 },
+      { id: 'transform.rotation', label: 'Rotation',   min: -180, max: 180,  step: 0.5  },
+    ];
+    const manifParams = (layer.constructor.manifest?.params || [])
+      .filter(p => p.type === 'float' || p.type === 'int')
+      .map(p => ({ id: p.id, label: p.label, min: p.min ?? 0, max: p.max ?? 1, step: p.step ?? 0.01 }));
+    const ALL_PARAMS = [...EXTRA_PARAMS, ...manifParams];
+
+    const TIME_SOURCES = [
+      { id: 'clock', label: 'Global clock' },
+      { id: 'audio', label: 'Audio playback' },
+      ...allLayers
+        .filter(l => l.constructor.name === 'VideoPlayerLayer')
+        .map(l => ({ id: `video:${l.id}`, label: `Video: ${l.name}` })),
+    ];
+
+    const CURVES     = Object.keys(AutomationEngine.CURVES);
+    const CRV_LABELS = AutomationEngine.CURVE_LABELS;
+
+    function _uid() { return Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6); }
+    function _fmt(s) { const m = Math.floor(s / 60); return `${m}:${(s % 60).toFixed(1).padStart(4, '0')}`; }
+
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'margin-top:10px;border-top:1px solid var(--border-dim);padding-top:8px';
+
+    const hdr = document.createElement('div');
+    hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px';
+    const title = document.createElement('span');
+    title.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px';
+    title.textContent = 'Automation';
+    const addBtn = document.createElement('button');
+    addBtn.style.cssText = 'background:none;border:1px solid var(--accent);border-radius:3px;color:var(--accent);font-family:var(--font-mono);font-size:8px;padding:2px 8px;cursor:pointer';
+    addBtn.textContent = '+ Add ramp';
+    hdr.append(title, addBtn);
+    wrap.appendChild(hdr);
+
+    const list    = document.createElement('div');
+    const formBox = document.createElement('div');
+    wrap.appendChild(list);
+    wrap.appendChild(formBox);
+
+    function _renderList() {
+      list.innerHTML = '';
+      if (!layer.automation.length) {
+        const empty = document.createElement('div');
+        empty.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);padding:6px 0;opacity:0.6';
+        empty.textContent = 'No ramps yet';
+        list.appendChild(empty);
+        return;
+      }
+      layer.automation.forEach((ramp, i) => {
+        const pInfo = ALL_PARAMS.find(p => p.id === ramp.paramId) || { label: ramp.paramId };
+        const row = document.createElement('div');
+        row.style.cssText = `display:flex;align-items:center;gap:5px;padding:5px 6px;margin-bottom:4px;
+          background:${ramp.enabled ? 'color-mix(in srgb,var(--accent) 8%,var(--bg-card))' : 'var(--bg-card)'};
+          border:1px solid ${ramp.enabled ? 'color-mix(in srgb,var(--accent) 30%,var(--border-dim))' : 'var(--border-dim)'};
+          border-radius:4px`;
+
+        const tog = document.createElement('button');
+        tog.style.cssText = `background:none;border:none;color:${ramp.enabled ? 'var(--accent)' : 'var(--text-dim)'};font-size:11px;cursor:pointer;padding:0;flex-shrink:0;line-height:1`;
+        tog.textContent = ramp.enabled ? '●' : '○';
+        tog.title = ramp.enabled ? 'Disable' : 'Enable';
+        tog.addEventListener('click', e => { e.stopPropagation(); ramp.enabled = !ramp.enabled; _renderList(); });
+
+        const info = document.createElement('span');
+        info.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text);flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis';
+        info.textContent = `${pInfo.label}  ${ramp.startValue}→${ramp.endValue}  ${_fmt(ramp.startTime)}–${_fmt(ramp.endTime)}  ${CRV_LABELS[ramp.curve] || ramp.curve}`;
+
+        const editBtn = document.createElement('button');
+        editBtn.style.cssText = 'background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:7px;padding:2px 5px;cursor:pointer;flex-shrink:0';
+        editBtn.textContent = '✎'; editBtn.title = 'Edit';
+        editBtn.addEventListener('click', e => { e.stopPropagation(); _openForm(ramp, i); });
+
+        const delBtn = document.createElement('button');
+        delBtn.style.cssText = 'background:none;border:1px solid var(--border-dim);border-radius:3px;color:#ff4444;font-family:var(--font-mono);font-size:7px;padding:2px 5px;cursor:pointer;flex-shrink:0';
+        delBtn.textContent = '✕'; delBtn.title = 'Delete';
+        delBtn.addEventListener('click', e => { e.stopPropagation(); layer.automation.splice(i, 1); _renderList(); });
+
+        row.append(tog, info, editBtn, delBtn);
+        list.appendChild(row);
+      });
+    }
+
+    function _openForm(ramp, editIdx) {
+      formBox.innerHTML = '';
+      const isEdit = editIdx !== undefined && editIdx >= 0;
+
+      const form = document.createElement('div');
+      form.style.cssText = 'background:var(--bg-card);border:1px solid var(--border-dim);border-radius:5px;padding:10px;margin-top:4px';
+
+      const _sel = (opts, val) => {
+        const s = document.createElement('select');
+        s.style.cssText = 'flex:1;background:var(--bg);border:1px solid var(--border-dim);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px';
+        opts.forEach(({ id, label }) => { const o = document.createElement('option'); o.value = id; o.textContent = label; if (id === val) o.selected = true; s.appendChild(o); });
+        s.addEventListener('keydown', e => e.stopPropagation());
+        return s;
+      };
+      const _num = (val, step, min, max) => {
+        const n = document.createElement('input');
+        n.type = 'number'; n.value = val ?? 0; n.step = step ?? 0.01;
+        if (min !== undefined) n.min = min;
+        if (max !== undefined) n.max = max;
+        n.style.cssText = 'flex:1;background:var(--bg);border:1px solid var(--border-dim);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px;min-width:0';
+        n.addEventListener('keydown', e => e.stopPropagation());
+        return n;
+      };
+      const _row = (label, ...els) => {
+        const r = document.createElement('div');
+        r.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:7px';
+        const lb = document.createElement('span');
+        lb.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:68px;flex-shrink:0';
+        lb.textContent = label;
+        r.append(lb, ...els);
+        return r;
+      };
+      const _arrow = () => { const s = document.createElement('span'); s.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);flex-shrink:0'; s.textContent = '→'; return s; };
+
+      const paramSel = _sel(ALL_PARAMS.map(p => ({ id: p.id, label: p.label })), ramp?.paramId || 'opacity');
+      const srcSel   = _sel(TIME_SOURCES, ramp?.timeSource || 'clock');
+      const startT   = _num(ramp?.startTime  ?? 0,   0.1, 0);
+      const endT     = _num(ramp?.endTime    ?? 10,  0.1, 0);
+      const startV   = _num(ramp?.startValue ?? 0,   0.01);
+      const endV     = _num(ramp?.endValue   ?? 1,   0.01);
+      const curveSel = _sel(CURVES.map(c => ({ id: c, label: CRV_LABELS[c] || c })), ramp?.curve || 'linear');
+
+      form.appendChild(_row('Param', paramSel));
+      form.appendChild(_row('Time source', srcSel));
+      form.appendChild(_row('Time (s)', startT, _arrow(), endT));
+      form.appendChild(_row('Value', startV, _arrow(), endV));
+      form.appendChild(_row('Curve', curveSel));
+
+      const btnRow = document.createElement('div');
+      btnRow.style.cssText = 'display:flex;gap:6px;margin-top:4px';
+      const cancelBtn = document.createElement('button');
+      cancelBtn.className = 'btn'; cancelBtn.style.cssText = 'flex:1;font-size:9px'; cancelBtn.textContent = 'Cancel';
+      cancelBtn.addEventListener('click', () => { formBox.innerHTML = ''; });
+      const saveBtn = document.createElement('button');
+      saveBtn.className = 'btn accent'; saveBtn.style.cssText = 'flex:1;font-size:9px'; saveBtn.textContent = isEdit ? 'Save' : 'Add ramp';
+      saveBtn.addEventListener('click', () => {
+        const newRamp = {
+          id:         ramp?.id || _uid(),
+          paramId:    paramSel.value,
+          timeSource: srcSel.value,
+          startTime:  parseFloat(startT.value) || 0,
+          endTime:    parseFloat(endT.value)   || 10,
+          startValue: parseFloat(startV.value) || 0,
+          endValue:   parseFloat(endV.value)   ?? 1,
+          curve:      curveSel.value,
+          enabled:    ramp?.enabled !== false,
+        };
+        if (isEdit) layer.automation[editIdx] = newRamp;
+        else        layer.automation.push(newRamp);
+        formBox.innerHTML = '';
+        _renderList();
+      });
+      btnRow.append(cancelBtn, saveBtn);
+      form.appendChild(btnRow);
+      formBox.appendChild(form);
+    }
+
+    addBtn.addEventListener('click', () => _openForm(null, -1));
+    _renderList();
+    return wrap;
   }
 
   return {

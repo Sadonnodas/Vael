@@ -44,6 +44,9 @@ class BaseLayer {
     // Per-layer FX chain
     this.fx = [];
 
+    // Per-layer automation ramps
+    this.automation = [];
+
     // Modulation matrix — routes signal sources to layer params
     this.modMatrix = new ModMatrix();
 
@@ -84,6 +87,7 @@ class BaseLayer {
       softUpdate:  this.softUpdate,
       fx:          this.fx ? this.fx.map(f => ({ ...f, params: { ...f.params } })) : [],
       modMatrix:   this.modMatrix?.toJSON() || [],
+      automation:  this.automation ? this.automation.map(r => ({ ...r })) : [],
     };
   }
 }

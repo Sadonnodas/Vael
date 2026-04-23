@@ -113,6 +113,9 @@ class LayerStack {
         layer.modMatrix.apply(layer, signals);
       }
 
+      // Apply time-based automation ramps (overrides manual params)
+      if (layer.automation?.length) AutomationEngine.apply(layer, this.layers);
+
       if (typeof layer.update === 'function') {
         layer.update(audioData, videoData, dt);
       }

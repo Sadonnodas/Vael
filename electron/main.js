@@ -17,6 +17,10 @@ const os     = require('os');
 let mainWindow   = null;  // control window (your laptop screen)
 let outputWindow = null;  // canvas-only output (projector / second display)
 
+// ── App identity ────────────────────────────────────────────────
+app.setName('Vael');
+if (app.dock) app.dock.setIcon(path.join(__dirname, '..', 'Vael-icon.png'));
+
 // ── App ready ───────────────────────────────────────────────────
 
 app.whenReady().then(() => {

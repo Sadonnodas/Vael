@@ -76,7 +76,7 @@
     tip.style.cssText = 'font-size:9px;color:var(--text-dim);line-height:1.6;margin-bottom:14px;margin-top:4px';
     tip.innerHTML = 'Use a PNG with transparency as a <strong style="color:var(--accent2)">mask</strong> on another layer, or any image as a visual with blend modes.';
     container.appendChild(tip);
-    ParamPanel.render(layer, container, audio);
+    ParamPanel.render(layer, container, audio, layers);
   }
 
   // ── Image upload events ───────────────────────────────────────
@@ -129,7 +129,7 @@
     else if (layer instanceof ShaderLayer)      ShaderPanel.render(layer, paramsContent);
     else if (layer instanceof LyricsLayer)      LyricsPanel.render(layer, paramsContent);
     else if (layer instanceof VideoPlayerLayer) _renderVideoLayerPanel(layer, paramsContent);
-    else ParamPanel.render(layer, paramsContent, audio);
+    else ParamPanel.render(layer, paramsContent, audio, layers);
   });
 
   function _showVideoPickerForLayer(layer) {
@@ -229,7 +229,7 @@
     }
 
     // Regular params (playback speed, flip, fit, loop, muted)
-    ParamPanel.render(layer, container, audio);
+    ParamPanel.render(layer, container, audio, layers);
   }
 
   // Searches top-level layers AND group children
@@ -258,6 +258,9 @@
     if (modDivider) container.insertBefore(restartBtn, modDivider);
     else            container.appendChild(restartBtn);
   }
+
+  // Restore active scene highlight across restarts
+  window._vaelActiveScene = localStorage.getItem('vael-active-scene') || null;
 
   // ── Preset browser — inline grid in SCENES tab ──────────────
   // Initialise the engine (IndexedDB storage, save/load logic)
@@ -526,7 +529,7 @@
         row.append(chk, thumb, info, updBtn, dlBtn, delBtn);
         row.addEventListener('mouseenter',()=>{if(!isActive&&!_pbSelected.has(preset.name))row.style.borderColor='var(--accent2)';});
         row.addEventListener('mouseleave',()=>{row.style.borderColor=isActive||_pbSelected.has(preset.name)?'var(--accent)':'var(--border-dim)';});
-        row.addEventListener('click',()=>{window._vaelActiveScene=preset.name;PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();});
+        row.addEventListener('click',()=>{window._vaelActiveScene=preset.name;localStorage.setItem('vael-active-scene',preset.name);PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();});
 
         grid.appendChild(row);
 
@@ -572,7 +575,7 @@
         card.addEventListener('mouseleave',()=>{card.style.borderColor=isActive||_pbSelected.has(preset.name)?'var(--accent)':'var(--border-dim)';card.style.transform='scale(1)';card.querySelector('.pb-card-acts').style.opacity='0';});
         card.addEventListener('click',e=>{
           if(e.target.closest('.pb-card-acts')||e.target.closest('.pb-sel'))return;
-          window._vaelActiveScene=preset.name;PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();
+          window._vaelActiveScene=preset.name;localStorage.setItem('vael-active-scene',preset.name);PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();
         });
         card.querySelector('.pb-sel').addEventListener('click',e=>{
           e.stopPropagation();
@@ -640,6 +643,22 @@
     _pbSelected.clear(); _pbUpdateBulkBtns(); _renderInlinePresetGrid();
     Toast.info(`Deleted ${names.length} scene${names.length!==1?'s':''}`);
   });
+
+  // Collapsible preset library
+  (function() {
+    const header  = document.getElementById('pb-inline-header');
+    const body    = document.getElementById('pb-inline-body');
+    const chevron = document.getElementById('pb-inline-chevron');
+    if (!header || !body || !chevron) return;
+    const collapsed = localStorage.getItem('vael-preset-lib-collapsed') === '1';
+    if (collapsed) { body.style.display = 'none'; chevron.style.transform = 'rotate(-90deg)'; }
+    header.addEventListener('click', () => {
+      const isNowHidden = body.style.display === 'none';
+      body.style.display = isNowHidden ? '' : 'none';
+      chevron.style.transform = isNowHidden ? '' : 'rotate(-90deg)';
+      localStorage.setItem('vael-preset-lib-collapsed', isNowHidden ? '0' : '1');
+    });
+  })();
 
   // Initial render
   _renderInlinePresetGrid();
@@ -1208,13 +1227,14 @@
 
   // ── Preset save / load ────────────────────────────────────────
   document.getElementById('btn-preset-save').addEventListener('click', () => {
-    const name = document.getElementById('preset-name').value.trim() || 'scene';
+    const name = (window._vaelActiveScene || document.getElementById('preset-name')?.value || '').trim();
+    if (!name) { Toast.warn('No active scene — create one with + New scene first'); return; }
     let thumb = null;
-    try {
-      // canvas is WebGL — toDataURL works with preserveDrawingBuffer:true
-      thumb = canvas.toDataURL('image/jpeg', 0.6);
-    } catch {}
+    try { thumb = canvas.toDataURL('image/jpeg', 0.6); } catch {}
     PresetBrowser.save(layers, name, thumb);
+    window._vaelActiveScene = name;
+    localStorage.setItem('vael-active-scene', name);
+    document.getElementById('preset-name').value = name;
     setTimeout(_renderInlinePresetGrid, 100);
     const preset = PresetManager.save(layers, name);
     PresetManager.storeRecent(preset);
@@ -1239,13 +1259,45 @@
 
 
   document.getElementById('btn-scene-new')?.addEventListener('click', () => {
+    const row = document.getElementById('new-scene-row');
+    if (!row) return;
+    const visible = row.style.display !== 'none';
+    row.style.display = visible ? 'none' : 'flex';
+    if (!visible) {
+      const inp = document.getElementById('new-scene-name');
+      inp.value = '';
+      inp.focus();
+    }
+  });
+
+  function _confirmNewScene() {
+    const inp  = document.getElementById('new-scene-name');
+    const name = inp?.value.trim();
+    if (!name) return;
     _autoSave();
     [...layers.layers].forEach(l => layers.remove(l.id));
     _selectedLayerId = null; LayerPanel.setSelectedId(null);
     paramsContent.innerHTML   = '';
     paramsEmpty.style.display = 'block';
-    document.getElementById('preset-name').value = 'my-scene';
-    Toast.info('New scene — previous work auto-saved');
+    // Save an empty scene to the library immediately
+    let thumb = null;
+    try { thumb = canvas.toDataURL('image/jpeg', 0.6); } catch {}
+    PresetBrowser.save(layers, name, thumb);
+    window._vaelActiveScene = name;
+    localStorage.setItem('vael-active-scene', name);
+    document.getElementById('preset-name').value = name;
+    document.getElementById('new-scene-row').style.display = 'none';
+    setTimeout(_renderInlinePresetGrid, 100);
+    Toast.success(`Scene "${name}" created`);
+  }
+
+  document.getElementById('btn-new-scene-ok')?.addEventListener('click', _confirmNewScene);
+  document.getElementById('new-scene-name')?.addEventListener('keydown', e => {
+    e.stopPropagation();
+    if (e.key === 'Enter') _confirmNewScene();
+    if (e.key === 'Escape') {
+      document.getElementById('new-scene-row').style.display = 'none';
+    }
   });
 
   document.getElementById('btn-preset-load').addEventListener('click', () => {
@@ -1606,7 +1658,7 @@
     try {
       const preset = {
         vael:   '1.0',
-        name:   document.getElementById('preset-name')?.value || 'autosave',
+        name:   window._vaelActiveScene || document.getElementById('preset-name')?.value || 'autosave',
         saved:  new Date().toISOString(),
         layers: layers.layers.map(layer =>
           typeof layer.toJSON === 'function' ? layer.toJSON() : {

@@ -254,6 +254,7 @@ const PresetBrowser = (() => {
           if (def.colorMask  !== undefined) layer.colorMask  = def.colorMask  ? { ...def.colorMask  } : null;
           if (def.modMatrix)  layer.modMatrix?.fromJSON(def.modMatrix);
           if (Array.isArray(def.fx) && layer.fx !== undefined) layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
+          if (Array.isArray(def.automation)) layer.automation = def.automation.map(r => ({ ...r }));
           if (def.params && layer.params) Object.assign(layer.params, def.params);
           if (Array.isArray(def.freeformPoints) && layer.freeformPoints !== undefined) {
             layer.freeformPoints = def.freeformPoints.map(p => ({ ...p }));

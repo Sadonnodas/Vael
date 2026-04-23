@@ -96,7 +96,7 @@ const PlaylistPanel = (() => {
     if(!part)return;
     if(part.sceneName&&typeof PresetBrowser!=='undefined'){
       const preset=(PresetBrowser._getAll?PresetBrowser._getAll():[]).find(p=>p.name===part.sceneName);
-      if(preset&&_setlist)_setlist._loadPreset(preset.data||preset);
+      if(preset&&_setlist)_setlist.fadeToPreset(preset.data||preset);
     }
     if(part.audioUrl&&part.audioAutoPlay!==false&&_audio){
       if(_audioWatchTimer){clearInterval(_audioWatchTimer);_audioWatchTimer=null;}
@@ -355,51 +355,58 @@ const PlaylistPanel = (() => {
   function _renderPerfGrid(container,flat,activeIdx){
     // Progress bar
     if(flat.length>0){
-      const prog=document.createElement('div'); prog.style.cssText='height:3px;background:var(--border-dim);border-radius:2px;margin-bottom:10px;overflow:hidden';
+      const prog=document.createElement('div'); prog.style.cssText='height:2px;background:var(--border-dim);border-radius:2px;margin-bottom:8px;overflow:hidden';
       const fill=document.createElement('div'); const pct=activeIdx>=0?Math.round(((activeIdx+1)/flat.length)*100):0;
       fill.style.cssText=`height:100%;width:${pct}%;background:var(--accent);border-radius:2px;transition:width 0.3s`; prog.appendChild(fill); container.appendChild(prog);
     }
 
-    // Group parts by song and render as sections
-    _playlist.songs.forEach(song=>{
-      const songParts=flat.filter(p=>p.songId===song.id);
-      if(!songParts.length)return;
+    // Flat numbered setlist — color strip · number · name
+    const list=document.createElement('div');
+    list.style.cssText='display:flex;flex-direction:column;gap:1px';
 
-      const songHdr=document.createElement('div');
-      songHdr.style.cssText=`font-family:var(--font-mono);font-size:8px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin:8px 0 5px;padding:0 2px${song.color?`;border-left:3px solid ${song.color};padding-left:6px`:''}`;
-      songHdr.textContent=song.name;
-      container.appendChild(songHdr);
+    flat.forEach((p,i)=>{
+      const isAct=p.id===_activePartId;
+      const song=_playlist.songs.find(s=>s.id===p.songId);
+      const clr=song?.color||null;
 
-      const grid=document.createElement('div');
-      grid.style.cssText='display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:5px;margin-bottom:4px';
+      const row=document.createElement('div');
+      row.style.cssText=`display:flex;align-items:center;gap:0;border-radius:4px;overflow:hidden;cursor:pointer;background:${isAct?'color-mix(in srgb,var(--accent) 12%,var(--bg-card))':'transparent'};transition:background 0.1s`;
 
-      songParts.forEach(p=>{
-        const isAct=p.id===_activePartId;
-        const chip=document.createElement('button');
-        chip.style.cssText=`
-          font-family:var(--font-mono);font-size:8px;padding:7px 8px;
-          background:${isAct?'color-mix(in srgb,var(--accent) 20%,var(--bg-card))':'var(--bg-card)'};
-          border:1px solid ${isAct?'var(--accent)':'var(--border-dim)'};
-          border-radius:5px;color:${isAct?'var(--accent)':'var(--text)'};
-          cursor:pointer;text-align:left;line-height:1.4;transition:border-color 0.1s;
-          overflow:hidden;
-        `;
-        chip.innerHTML=`
-          <div style="font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.name}</div>
-          ${p.sceneName?`<div style="font-size:7px;color:${isAct?'var(--accent)':'var(--text-dim)'};margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">✦ ${p.sceneName}</div>`:''}
-          ${p.audioName?`<div style="font-size:7px;color:var(--accent2);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">♪ ${p.audioName}</div>`:''}
-        `;
-        chip.addEventListener('click',()=>_selectPart(p.id));
-        chip.addEventListener('mouseenter',()=>{ if(!isAct) chip.style.borderColor='var(--text-dim)'; });
-        chip.addEventListener('mouseleave',()=>{ if(!isAct) chip.style.borderColor='var(--border-dim)'; });
-        grid.appendChild(chip);
-      });
-      container.appendChild(grid);
+      // Color strip
+      const strip=document.createElement('div');
+      strip.style.cssText=`width:3px;align-self:stretch;flex-shrink:0;background:${clr||'transparent'}`;
+
+      // Number
+      const num=document.createElement('span');
+      num.style.cssText=`font-family:var(--font-mono);font-size:8px;color:${isAct?'var(--accent)':'var(--text-dim)'};min-width:26px;text-align:right;padding:6px 6px 6px 5px;flex-shrink:0`;
+      num.textContent=i+1;
+
+      // Play arrow — visible only on active
+      const arrow=document.createElement('span');
+      arrow.style.cssText=`font-size:7px;color:var(--accent);flex-shrink:0;width:10px;opacity:${isAct?1:0}`;
+      arrow.textContent='▶';
+
+      // Name — show song name when part is the default "Full song"
+      const displayName=p.name==='Full song'?p.songName:`${p.songName} · ${p.name}`;
+      const name=document.createElement('span');
+      name.style.cssText=`font-family:var(--font-mono);font-size:9px;flex:1;padding:6px 8px 6px 2px;color:${isAct?'var(--accent)':'var(--text)'};font-weight:${isAct?600:400};white-space:nowrap;overflow:hidden;text-overflow:ellipsis`;
+      name.textContent=displayName;
+
+      row.append(strip,num,arrow,name);
+      row.addEventListener('click',()=>_selectPart(p.id));
+      row.addEventListener('mouseenter',()=>{if(!isAct)row.style.background='var(--bg-card)';});
+      row.addEventListener('mouseleave',()=>{if(!isAct)row.style.background='transparent';});
+      list.appendChild(row);
+
+      // Scroll active item into view after render
+      if(isAct) requestAnimationFrame(()=>row.scrollIntoView({block:'nearest',behavior:'smooth'}));
     });
 
-    // Nav controls still available in perf view
+    container.appendChild(list);
+
+    // Nav controls
     if(flat.length>0){
-      const t=document.createElement('div'); t.style.cssText='display:flex;gap:6px;margin-top:12px';
+      const t=document.createElement('div'); t.style.cssText='display:flex;gap:6px;margin-top:10px';
       function _armableClick(action,fallback){return function(e){if(window._vaelLearnMode&&window._vaelMidi){e.stopPropagation();window._vaelMidi.startLearnGlobal(action);Toast.info(`Move a controller to map → ${action.replace('scene:','')}`);return;}fallback();};}
       const pb=document.createElement('button'); pb.className='btn midi-armable'; pb.style.cssText='flex:1;font-size:9px'; pb.textContent='← Prev'; pb.disabled=(!window._vaelLearnMode&&activeIdx<=0); pb.addEventListener('click',_armableClick('scene:prev',_prevPart));
       const nb=document.createElement('button'); nb.className='btn accent midi-armable'; nb.style.cssText='flex:1;font-size:9px'; nb.textContent='Next →'; nb.disabled=(!window._vaelLearnMode&&activeIdx>=flat.length-1); nb.addEventListener('click',_armableClick('scene:next',_nextPart));

@@ -86,8 +86,36 @@ const AudioPanel = (() => {
       e.target.value = '';
     });
 
-    // Mic
-    document.getElementById('btn-audio-mic')?.addEventListener('click', async () => {
+    // Mic — with device picker
+    const micBtn        = document.getElementById('btn-audio-mic');
+    const micDeviceRow  = document.getElementById('audio-mic-device-row');
+    const micDeviceSel  = document.getElementById('audio-mic-device');
+
+    // Populate device list when the row becomes visible
+    async function _populateMicDevices() {
+      if (!micDeviceSel) return;
+      const devices = await _audio.getInputDevices();
+      micDeviceSel.innerHTML = '';
+      devices.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value       = d.deviceId;
+        opt.textContent = d.label;
+        micDeviceSel.appendChild(opt);
+      });
+      if (!devices.length) {
+        const opt = document.createElement('option');
+        opt.value = ''; opt.textContent = 'No devices found';
+        micDeviceSel.appendChild(opt);
+      }
+    }
+
+    micBtn?.addEventListener('click', async () => {
+      if (micDeviceRow) {
+        micDeviceRow.style.display = micDeviceRow.style.display === 'none' ? 'flex' : 'none';
+        if (micDeviceRow.style.display === 'flex') await _populateMicDevices();
+        return;
+      }
+      // Fallback if no device row in HTML
       try {
         await _audio.startMic();
         transport.style.display   = 'none';
@@ -99,24 +127,24 @@ const AudioPanel = (() => {
       } catch { Toast.error('Microphone access denied'); }
     });
 
-    // System audio (Spotify, Cubase, YouTube etc via getDisplayMedia)
-    document.getElementById('btn-audio-system')?.addEventListener('click', async () => {
+    document.getElementById('btn-audio-mic-start')?.addEventListener('click', async () => {
+      const deviceId = micDeviceSel?.value || null;
+      const label    = micDeviceSel?.options[micDeviceSel.selectedIndex]?.text || 'Microphone';
       try {
-        Toast.info('Select a tab or window — check "Share tab audio" in the browser prompt');
-        await _audio.startSystemAudio();
+        await _audio.startMic(deviceId);
+        if (micDeviceRow) micDeviceRow.style.display = 'none';
         transport.style.display   = 'none';
         micActiveEl.style.display = 'block';
         levelsEl.style.display    = 'block';
         _statusDot.classList.remove('inactive');
-        _statusLabel.textContent  = 'System audio';
-        document.getElementById('mic-active-label')?.textContent && (
-          document.getElementById('mic-active-label').textContent = '● System audio active'
-        );
-        Toast.success('System audio captured — Vael is now listening to your app');
-      } catch (e) {
-        Toast.error(e.message || 'System audio capture failed');
-      }
+        _statusLabel.textContent  = label;
+        if (document.getElementById('mic-active-label')) {
+          document.getElementById('mic-active-label').textContent = `● ${label} active`;
+        }
+        Toast.success(`Input active: ${label}`);
+      } catch { Toast.error('Could not open audio input — check permissions'); }
     });
+
 
     // Play/pause
     btnPlay?.addEventListener('click', () => {
