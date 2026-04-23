@@ -14,8 +14,8 @@ class VideoLibrary {
     this.onChanged = null;
   }
 
-  async add(file) {
-    const id  = `vid-${++this._counter}-${Date.now()}`;
+  async add(file, reuseId = null) {
+    const id  = reuseId || `vid-${++this._counter}-${Date.now()}`;
     const url = URL.createObjectURL(file);
 
     const el = document.createElement('video');
@@ -43,6 +43,11 @@ class VideoLibrary {
       duration: isFinite(el.duration) ? el.duration : 0,
     };
 
+    // Persist new uploads to IndexedDB using the same ID so scene restore can match them
+    if (!reuseId && typeof AssetStore !== 'undefined') {
+      AssetStore.saveWithId('video', file, id).catch(() => {});
+    }
+
     this._videos.set(id, entry);
     this._notify();
     return id;
@@ -54,6 +59,7 @@ class VideoLibrary {
     entry.element.pause();
     entry.element.src = '';
     URL.revokeObjectURL(entry.url);
+    if (typeof AssetStore !== 'undefined') AssetStore.remove(id).catch(() => {});
     this._videos.delete(id);
     this._notify();
   }

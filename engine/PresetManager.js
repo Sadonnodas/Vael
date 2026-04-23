@@ -131,6 +131,7 @@ const PresetManager = (() => {
 
         if (typeof layer.init === 'function') layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
         _restoreVideoSource(layer, def);
+        _restoreImageSource(layer, def);
         layerStack.add(layer);
       } catch (e) {
         errors.push(`Error loading layer "${def.type}": ${e.message}`);
@@ -248,30 +249,45 @@ const PresetManager = (() => {
         }
         if (typeof layer.init === 'function') layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
         _restoreVideoSource(layer, def);
+        _restoreImageSource(layer, def);
         layerStack.add(layer);
       } catch {}
     });
   }
 
   /**
-   * After init(), restore video source from library (by ID then by name fallback)
-   * or from a direct URL stored in params._sourceUrl.
+   * After init(), restore video source from library (by ID then by name fallback).
+   * If not found yet (library still restoring from IndexedDB), registers a retry
+   * on vael:library-ready. VideoPlayerLayer.init() also handles this, so in
+   * practice the retry fires from whichever is registered first.
    */
   function _restoreVideoSource(layer, def) {
     if (!(layer instanceof VideoPlayerLayer)) return;
+    // VideoPlayerLayer.init() already handled the lookup and registered the retry —
+    // nothing extra needed here. This function is kept for callers that don't go
+    // through init() or that need the explicit post-init check.
     const p = def.params || {};
-    if (p._libraryId && window.videoLibrary) {
-      const entry = window.videoLibrary.entries.find(e => e.id === p._libraryId);
-      if (entry) { layer.loadFromLibraryEntry(entry); return; }
+    if (!layer._sourceUrl && !layer._sourceName) {
+      // init() didn't load anything — explicit attempt (e.g. init was skipped)
+      if (!layer._tryLoadFromLibrary(p)) {
+        layer._retryLoadFromLibrary(p);
+      }
     }
-    // Fallback: match by source name in library
-    if (p._sourceName && window.videoLibrary) {
-      const entry = window.videoLibrary.entries.find(e => e.name === p._sourceName);
-      if (entry) { layer.loadFromLibraryEntry(entry); return; }
-    }
-    // Fallback: direct URL (uploaded file — blob URLs don't survive reload, so this is best-effort)
-    if (p._sourceUrl) {
-      layer._loadUrl(p._sourceUrl, p._sourceName || 'video');
+  }
+
+  /**
+   * After init(), restore an ImageLayer's image from the library by filename.
+   * The fileName is stored in def.params.fileName (via ImageLayer.toJSON).
+   * ImageLayer.init() already handles this via _tryLoadFromLibrary/_retryLoadFromLibrary,
+   * so this is a safety net for restore paths that pass a custom params object.
+   */
+  function _restoreImageSource(layer, def) {
+    if (!(layer instanceof ImageLayer)) return;
+    if (layer._loaded) return;
+    const fileName = (def.params?.fileName) || def.fileName;
+    if (!fileName) return;
+    if (!layer._tryLoadFromLibrary(fileName)) {
+      layer._retryLoadFromLibrary(fileName);
     }
   }
 

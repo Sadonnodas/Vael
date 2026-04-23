@@ -223,20 +223,16 @@ class SetlistManager {
           layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
         }
 
-        // Full video library lookup — same priority order as _loadPreset
+        // VideoPlayerLayer: library lookup; retry handled by init() via vael:library-ready
         if (layer instanceof VideoPlayerLayer && def.params) {
-          const p = def.params;
-          let restored = false;
-          if (p._libraryId && window.videoLibrary) {
-            const entry = window.videoLibrary.entries.find(e => e.id === p._libraryId);
-            if (entry) { layer.loadFromLibraryEntry(entry); restored = true; }
-          }
-          if (!restored && p._sourceName && window.videoLibrary) {
-            const entry = window.videoLibrary.entries.find(e => e.name === p._sourceName);
-            if (entry) { layer.loadFromLibraryEntry(entry); restored = true; }
-          }
-          if (!restored && p._sourceUrl) {
-            layer._loadUrl(p._sourceUrl, p._sourceName || 'video');
+          layer._tryLoadFromLibrary(def.params);
+        }
+
+        // ImageLayer: library lookup by filename; retry handled by init() via vael:library-ready
+        if (layer instanceof ImageLayer && !layer._loaded) {
+          const fileName = def.params?.fileName || def.fileName;
+          if (fileName && !layer._tryLoadFromLibrary(fileName)) {
+            layer._retryLoadFromLibrary(fileName);
           }
         }
 
@@ -377,20 +373,21 @@ class SetlistManager {
           layer.init({ shaderName: def.shaderName, glsl: def.glsl, ...layer.params });
         }
 
-        // VideoPlayerLayer: reload from in-memory library (by ID, then by name), else direct URL
+        // VideoPlayerLayer: reload from in-memory library (by ID, then by name), else direct URL.
+        // If library not ready yet, VideoPlayerLayer.init() already registered a retry.
         if (layer instanceof VideoPlayerLayer && def.params) {
           const p = def.params;
-          let restored = false;
-          if (p._libraryId && window.videoLibrary) {
-            const entry = window.videoLibrary.entries.find(e => e.id === p._libraryId);
-            if (entry) { layer.loadFromLibraryEntry(entry); restored = true; }
+          if (!layer._tryLoadFromLibrary(p)) {
+            // init() already registered vael:library-ready retry — nothing else needed
           }
-          if (!restored && p._sourceName && window.videoLibrary) {
-            const entry = window.videoLibrary.entries.find(e => e.name === p._sourceName);
-            if (entry) { layer.loadFromLibraryEntry(entry); restored = true; }
-          }
-          if (!restored && p._sourceUrl) {
-            layer._loadUrl(p._sourceUrl, p._sourceName || 'video');
+        }
+
+        // ImageLayer: reload image from library by filename.
+        // ImageLayer.init() handles this when params.fileName is present.
+        if (layer instanceof ImageLayer && !layer._loaded) {
+          const fileName = def.params?.fileName || def.fileName;
+          if (fileName && !layer._tryLoadFromLibrary(fileName)) {
+            layer._retryLoadFromLibrary(fileName);
           }
         }
 

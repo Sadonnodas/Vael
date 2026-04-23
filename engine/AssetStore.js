@@ -93,6 +93,23 @@ const AssetStore = (() => {
     });
   }
 
+  // ── Save with explicit ID ─────────────────────────────────────
+
+  /**
+   * Save a File or Blob with a caller-specified ID.
+   * Used by VideoLibrary so the stored ID matches the in-memory entry ID.
+   */
+  async function saveWithId(type, file, id) {
+    const db = await _open();
+    const entry = { id, name: file.name, type, blob: file, savedAt: Date.now() };
+    return new Promise((resolve, reject) => {
+      const tx  = db.transaction(STORE_NAME, 'readwrite');
+      const req = tx.objectStore(STORE_NAME).put(entry);
+      req.onsuccess = () => resolve(id);
+      req.onerror   = () => reject(req.error);
+    });
+  }
+
   // ── Remove ────────────────────────────────────────────────────
 
   async function remove(id) {
@@ -132,6 +149,6 @@ const AssetStore = (() => {
     } catch { return null; }
   }
 
-  return { save, list, remove, clear, estimateSize };
+  return { save, saveWithId, list, remove, clear, estimateSize };
 
 })();

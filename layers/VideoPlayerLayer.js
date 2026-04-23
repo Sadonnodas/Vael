@@ -84,8 +84,38 @@ class VideoPlayerLayer extends BaseLayer {
 
   init(params = {}) {
     Object.assign(this.params, params);
-    if (params._sourceUrl) this._loadUrl(params._sourceUrl, params._sourceName || 'video');
     if (params._libraryId) this._libraryId = params._libraryId;
+    if (params._sourceName) this._sourceName = params._sourceName;
+    // Prefer library lookup; fall back to URL if no library reference
+    if (params._libraryId || params._sourceName) {
+      if (!this._tryLoadFromLibrary(params)) {
+        this._retryLoadFromLibrary(params);
+      }
+    } else if (params._sourceUrl) {
+      this._loadUrl(params._sourceUrl, params._sourceName || 'video');
+    }
+  }
+
+  _tryLoadFromLibrary(p) {
+    const lib = window.videoLibrary;
+    if (!lib) return false;
+    if (p._libraryId) {
+      const entry = lib.entries.find(e => e.id === p._libraryId);
+      if (entry) { this.loadFromLibraryEntry(entry); return true; }
+    }
+    if (p._sourceName) {
+      const entry = lib.entries.find(e => e.name === p._sourceName);
+      if (entry) { this.loadFromLibraryEntry(entry); return true; }
+    }
+    return false;
+  }
+
+  _retryLoadFromLibrary(p) {
+    window.addEventListener('vael:library-ready', () => {
+      if (this._tryLoadFromLibrary(p)) return;
+      // Library ready but video still not found — fall back to URL
+      if (p._sourceUrl) this._loadUrl(p._sourceUrl, p._sourceName || 'video');
+    }, { once: true });
   }
 
   /** Load a video from a File object (upload) */

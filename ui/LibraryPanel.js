@@ -43,6 +43,7 @@ const LibraryPanel = (() => {
   let _audioSort       = 'name-asc';
   let _expandedAudioId = null;
   let _previewAudioEl  = null;
+  let _libraryRestored = false;
 
   // ── Init ─────────────────────────────────────────────────────
 
@@ -128,6 +129,10 @@ const LibraryPanel = (() => {
       const url = URL.createObjectURL(file);
       _images.set(id, { id, name: file.name, url, file });
       e.target.value = '';
+      // Persist to IndexedDB
+      if (typeof AssetStore !== 'undefined') {
+        AssetStore.save('image', file).catch(() => {});
+      }
       _render();
       // Dispatch so App.js can load it into the pending ImageLayer
       window.dispatchEvent(new CustomEvent('vael:image-single-added', {
@@ -705,6 +710,9 @@ const LibraryPanel = (() => {
       }
     } catch (e) {
       console.warn('AssetStore restore failed:', e);
+    } finally {
+      _libraryRestored = true;
+      window.dispatchEvent(new CustomEvent('vael:library-ready'));
     }
   }
 
@@ -945,6 +953,15 @@ const LibraryPanel = (() => {
 
   function getImages() { return [..._images.values()]; }
 
+  function findImageByName(name) {
+    for (const entry of _images.values()) {
+      if (entry.name === name) return entry;
+    }
+    return null;
+  }
+
+  function isLibraryRestored() { return _libraryRestored; }
+
   /**
    * Add a shader to the library and persist it.
    * Called from ShaderPanel's "Save to library" button.
@@ -998,6 +1015,8 @@ const LibraryPanel = (() => {
     promptImageForLayer,
     showAddImagePrompt,
     getImages,
+    findImageByName,
+    isLibraryRestored,
     addAudioFile,
     findAudioByName,
     addShader,

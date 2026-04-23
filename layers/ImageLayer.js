@@ -58,7 +58,27 @@ class ImageLayer extends BaseLayer {
 
   init(params = {}) {
     Object.assign(this.params, params);
-    if (params.src) this._loadUrl(params.src);
+    if (params.src) {
+      this._loadUrl(params.src);
+    } else if (params.fileName) {
+      if (!this._tryLoadFromLibrary(params.fileName)) {
+        this._retryLoadFromLibrary(params.fileName);
+      }
+    }
+  }
+
+  _tryLoadFromLibrary(fileName) {
+    if (typeof LibraryPanel === 'undefined') return false;
+    const entry = LibraryPanel.findImageByName(fileName);
+    if (entry) { this.loadFile(entry.file); return true; }
+    return false;
+  }
+
+  _retryLoadFromLibrary(fileName) {
+    window.addEventListener('vael:library-ready', () => {
+      if (this._loaded) return;
+      this._tryLoadFromLibrary(fileName);
+    }, { once: true });
   }
 
   // ── Load ─────────────────────────────────────────────────────
@@ -195,9 +215,7 @@ class ImageLayer extends BaseLayer {
     return {
       ...super.toJSON(),
       fileName: this._fileName,
-      params:   { ...this.params },
-      // Note: image data is NOT serialised — user must reload on next session
-      // A future version could store as data URL (but could be large)
+      params:   { ...this.params, fileName: this._fileName },
     };
   }
 }
