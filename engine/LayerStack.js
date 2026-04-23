@@ -110,7 +110,7 @@ class LayerStack {
           ['brightness','motion','edgeDensity'].forEach(k => { signals[k] = 0; });
         }
 
-        layer.modMatrix.apply(layer, signals);
+        layer.modMatrix.apply(layer, signals, this.layers);
       }
 
       // Apply time-based automation ramps (overrides manual params)

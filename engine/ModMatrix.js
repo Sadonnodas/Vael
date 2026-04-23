@@ -16,17 +16,20 @@
 class ModRoute {
   constructor({ source, target, depth = 0.5, smooth = 0.1,
                 min = null, max = null, invert = false, curve = 'linear',
-                linked = false }) {
-    this.id      = `mod-${Date.now()}-${Math.random().toString(36).slice(2,5)}`;
-    this.source  = source;
-    this.target  = target;
-    this.depth   = depth;   // -2 to +2 — negative inverts, >1 = extra range
-    this.smooth  = smooth;  // 0.01 (slow) – 1.0 (instant)
-    this.min     = min;
-    this.max     = max;
-    this.invert  = invert;  // legacy — use negative depth instead
-    this.curve   = curve;   // 'linear' | 'exp' | 'log' | 'scurve' | 'step' | 'invert'
-    this.linked  = linked;  // when true on scaleX or scaleY route, drives both axes
+                linked = false, timeGate = null }) {
+    this.id       = `mod-${Date.now()}-${Math.random().toString(36).slice(2,5)}`;
+    this.source   = source;
+    this.target   = target;
+    this.depth    = depth;    // -2 to +2 — negative inverts, >1 = extra range
+    this.smooth   = smooth;   // 0.01 (slow) – 1.0 (instant)
+    this.min      = min;
+    this.max      = max;
+    this.invert   = invert;   // legacy — use negative depth instead
+    this.curve    = curve;    // 'linear' | 'exp' | 'log' | 'scurve' | 'step' | 'invert'
+    this.linked   = linked;   // when true on scaleX or scaleY route, drives both axes
+    // timeGate: { source:'clock'|'audio'|'video:<id>', startAt:0, stopAt:0 }
+    // stopAt=0 means run forever once started.
+    this.timeGate = timeGate ? { ...timeGate } : null;
 
     this._smoothed = 0;
   }
@@ -34,7 +37,8 @@ class ModRoute {
   toJSON() {
     return { source: this.source, target: this.target, depth: this.depth,
              smooth: this.smooth, min: this.min, max: this.max,
-             invert: this.invert, curve: this.curve, linked: this.linked };
+             invert: this.invert, curve: this.curve, linked: this.linked,
+             timeGate: this.timeGate ? { ...this.timeGate } : null };
   }
 }
 
@@ -62,11 +66,20 @@ class ModMatrix {
   /**
    * Apply all routes to layer.params and layer.transform.
    * Called every frame by LayerStack.update().
+   * allLayers is needed to resolve video: time sources for time gates.
    */
-  apply(layer, signals) {
+  apply(layer, signals, allLayers = []) {
     if (!this.routes.length) return;
 
     this.routes.forEach(route => {
+      // Time gate: skip this route if outside its active window
+      if (route.timeGate) {
+        const gt = route.timeGate;
+        const t  = _getGateTime(gt.source, allLayers);
+        if (t < (gt.startAt ?? 0)) return;
+        if ((gt.stopAt ?? 0) > 0 && t > gt.stopAt) return;
+      }
+
       const { source, target, depth, smooth, invert, min, max } = route;
 
       // Get raw signal (0–1)
@@ -133,6 +146,25 @@ class ModMatrix {
         const modValue = base + route._smoothed * depth * (pMax - pMin);
         layer.clipShape[key] = Math.max(pMin, Math.min(pMax, modValue));
 
+      } else if (target.startsWith('fx:')) {
+        // FX param target — format: fx:<index>.<paramId>
+        const dotIdx  = target.indexOf('.', 3);
+        if (dotIdx < 0) return;
+        const fxIndex = parseInt(target.slice(3, dotIdx), 10);
+        const paramId = target.slice(dotIdx + 1);
+        const fx      = layer.fx?.[fxIndex];
+        if (!fx?.params || !(paramId in fx.params)) return;
+
+        const baseKey = target;
+        if (!this._baseVals.has(baseKey)) {
+          this._baseVals.set(baseKey, fx.params[paramId] ?? 0);
+        }
+        const base     = this._baseVals.get(baseKey);
+        const pMin     = min ?? 0;
+        const pMax     = max ?? 1;
+        const modValue = base + route._smoothed * depth * (pMax - pMin);
+        fx.params[paramId] = Math.max(pMin, Math.min(pMax, modValue));
+
       } else {
         // Standard param target
         if (!layer.params) return;
@@ -170,6 +202,19 @@ class ModMatrix {
   fromJSON(data) {
     this.routes = (data || []).map(d => new ModRoute(d));
   }
+}
+
+// ── Time gate helper ──────────────────────────────────────────────────────
+
+function _getGateTime(source, allLayers) {
+  if (!source || source === 'clock') return performance.now() / 1000;
+  if (source === 'audio') return window._vaelAudio?.currentTime ?? 0;
+  if (source.startsWith('video:')) {
+    const id = source.slice(6);
+    const vl = allLayers.find(l => l.id === id);
+    return vl?._videoEl?.currentTime ?? 0;
+  }
+  return performance.now() / 1000;
 }
 
 // ── Curve shaping ──────────────────────────────────────────────────────────

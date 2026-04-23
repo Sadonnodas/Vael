@@ -66,10 +66,17 @@ const AutomationEngine = (() => {
       const dur = ramp.endTime - ramp.startTime;
       if (dur <= 0) continue;
       const t = _getTime(ramp, allLayers);
-      if (t < ramp.startTime || t > ramp.endTime) continue;
-      const norm   = (t - ramp.startTime) / dur;
-      const curved = (CURVES[ramp.curve] || CURVES.linear)(Math.max(0, Math.min(1, norm)));
-      const value  = ramp.startValue + (ramp.endValue - ramp.startValue) * curved;
+      if (t < ramp.startTime) continue;
+
+      let value;
+      if (t > ramp.endTime) {
+        if (!ramp.holdEnd) continue;
+        value = ramp.endValue;
+      } else {
+        const norm   = (t - ramp.startTime) / dur;
+        const curved = (CURVES[ramp.curve] || CURVES.linear)(Math.max(0, Math.min(1, norm)));
+        value = ramp.startValue + (ramp.endValue - ramp.startValue) * curved;
+      }
       _setParam(layer, ramp.paramId, value);
     }
   }

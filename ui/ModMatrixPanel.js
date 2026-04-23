@@ -219,11 +219,20 @@ const ModMatrixPanel = (() => {
       const body = document.createElement('div');
       body.style.cssText = `display:${isOpen?'block':'none'};padding:10px 12px;border-top:1px solid var(--border-dim);background:var(--bg)`;
 
-      // Target selector
+      // Target selector — layer params + transform + opacity + FX params
+      const fxTargets = (layer.fx || []).flatMap((fx, i) => {
+        const catalog = typeof LayerFX !== 'undefined' ? LayerFX.CATALOG?.find(e => e.type === fx.type) : null;
+        const fxLabel = catalog?.label || fx.type;
+        return Object.keys(fx.params || {}).map(paramId => ({
+          id: `fx:${i}.${paramId}`,
+          label: `FX ${i + 1} ${fxLabel} – ${paramId}`,
+        }));
+      });
       const allTargets = [
         ...(layer.constructor?.manifest?.params || []).filter(p => p.type === 'float' || p.type === 'int').map(p => ({ id: p.id, label: p.label })),
         ...TRANSFORM_TARGETS,
         ...LAYER_TARGETS,
+        ...fxTargets,
       ];
       const tgtRow = document.createElement('div');
       tgtRow.style.cssText = 'display:flex;align-items:center;gap:8px;margin-bottom:8px';
@@ -366,6 +375,84 @@ const ModMatrixPanel = (() => {
       lfoWrap.appendChild(lfoRateRow);
       body.appendChild(lfoWrap);
 
+      // ── Time gate ────────────────────────────────────────────
+      const hasGate   = !!route.timeGate;
+      const gateWrap  = document.createElement('div');
+      gateWrap.style.cssText = 'margin-top:8px;padding-top:8px;border-top:1px solid var(--border-dim)';
+
+      const gateTogRow = document.createElement('label');
+      gateTogRow.style.cssText = 'display:flex;align-items:center;gap:6px;cursor:pointer;font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:6px';
+      const gateChk = document.createElement('input');
+      gateChk.type    = 'checkbox';
+      gateChk.checked = hasGate;
+      gateChk.style.cssText = 'accent-color:var(--accent)';
+      gateTogRow.append(gateChk, 'Time gate (only active between two times)');
+      gateWrap.appendChild(gateTogRow);
+
+      const gateFields = document.createElement('div');
+      gateFields.style.cssText = `display:${hasGate ? 'block' : 'none'}`;
+
+      // Time source for gate
+      const allLayersList = [];  // will be filled dynamically via window.layers
+      const videoLayersForGate = (() => {
+        try { return (window._vaelLayers?.layers || []).filter(l => l.constructor.name === 'VideoPlayerLayer'); } catch { return []; }
+      })();
+      const gateSrcOpts = [
+        { id: 'clock', label: 'Global clock' },
+        { id: 'audio', label: 'Audio playback' },
+        ...videoLayersForGate.map(l => ({ id: `video:${l.id}`, label: `Video: ${l.name}` })),
+      ];
+      const curGateSrc = route.timeGate?.source || 'clock';
+      const curStart   = route.timeGate?.startAt ?? 0;
+      const curStop    = route.timeGate?.stopAt  ?? 0;
+
+      gateFields.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:44px">Source</span>
+          <select class="gate-src" style="flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px">
+            ${gateSrcOpts.map(o => `<option value="${o.id}" ${o.id===curGateSrc?'selected':''}>${o.label}</option>`).join('')}
+          </select>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:44px">Start (s)</span>
+          <input class="gate-start" type="number" value="${curStart}" min="0" step="0.1"
+            style="flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px">
+        </div>
+        <div style="display:flex;align-items:center;gap:8px">
+          <span style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);min-width:44px">Stop (s)</span>
+          <input class="gate-stop" type="number" value="${curStop}" min="0" step="0.1"
+            style="flex:1;background:var(--bg-card);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px">
+          <span style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim)">0=never</span>
+        </div>
+      `;
+      gateWrap.appendChild(gateFields);
+      body.appendChild(gateWrap);
+
+      gateChk.addEventListener('change', () => {
+        if (gateChk.checked) {
+          route.timeGate = {
+            source:  gateFields.querySelector('.gate-src').value,
+            startAt: parseFloat(gateFields.querySelector('.gate-start').value) || 0,
+            stopAt:  parseFloat(gateFields.querySelector('.gate-stop').value)  || 0,
+          };
+          gateFields.style.display = 'block';
+        } else {
+          route.timeGate = null;
+          gateFields.style.display = 'none';
+        }
+      });
+
+      const _syncGate = () => {
+        if (!route.timeGate) return;
+        route.timeGate.source  = gateFields.querySelector('.gate-src').value;
+        route.timeGate.startAt = parseFloat(gateFields.querySelector('.gate-start').value) || 0;
+        route.timeGate.stopAt  = parseFloat(gateFields.querySelector('.gate-stop').value)  || 0;
+      };
+      gateFields.querySelector('.gate-src')?.addEventListener('change', _syncGate);
+      gateFields.querySelector('.gate-start')?.addEventListener('input', _syncGate);
+      gateFields.querySelector('.gate-stop')?.addEventListener('input', _syncGate);
+      gateFields.querySelectorAll('input[type=number]').forEach(n => n.addEventListener('keydown', e => e.stopPropagation()));
+
       // ── Wire events ──────────────────────────────────────────
       header.querySelector('.mod-del').addEventListener('click', e => {
         e.stopPropagation();
@@ -448,12 +535,21 @@ const ModMatrixPanel = (() => {
       `<option value="${t.id}">${t.label}</option>`
     ).join('');
 
+    const fxTargetOptions = (layer.fx || []).flatMap((fx, i) => {
+      const catalog = typeof LayerFX !== 'undefined' ? LayerFX.CATALOG?.find(e => e.type === fx.type) : null;
+      const fxLabel = catalog?.label || fx.type;
+      return Object.keys(fx.params || {}).map(paramId =>
+        `<option value="fx:${i}.${paramId}">FX ${i + 1} ${fxLabel} – ${paramId}</option>`
+      );
+    }).join('');
+
     const targetOptions = [
       `<optgroup label="Layer">${LAYER_TARGETS.map(t =>
         `<option value="${t.id}">${t.label}</option>`
       ).join('')}</optgroup>`,
       paramTargetOptions ? `<optgroup label="Parameters">${paramTargetOptions}</optgroup>` : '',
       `<optgroup label="Transform">${transformTargetOptions}</optgroup>`,
+      fxTargetOptions ? `<optgroup label="FX Parameters">${fxTargetOptions}</optgroup>` : '',
     ].join('');
 
     if (!paramTargetOptions && !transformTargetOptions) {

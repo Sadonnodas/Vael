@@ -1533,7 +1533,7 @@ const ParamPanel = (() => {
 
         const info = document.createElement('span');
         info.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text);flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis';
-        info.textContent = `${pInfo.label}  ${ramp.startValue}→${ramp.endValue}  ${_fmt(ramp.startTime)}–${_fmt(ramp.endTime)}  ${CRV_LABELS[ramp.curve] || ramp.curve}`;
+        info.textContent = `${pInfo.label}  ${ramp.startValue}→${ramp.endValue}${ramp.holdEnd ? '⊣' : ''}  ${_fmt(ramp.startTime)}–${_fmt(ramp.endTime)}  ${CRV_LABELS[ramp.curve] || ramp.curve}`;
 
         const editBtn = document.createElement('button');
         editBtn.style.cssText = 'background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:7px;padding:2px 5px;cursor:pointer;flex-shrink:0';
@@ -1584,19 +1584,117 @@ const ParamPanel = (() => {
       };
       const _arrow = () => { const s = document.createElement('span'); s.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);flex-shrink:0'; s.textContent = '→'; return s; };
 
-      const paramSel = _sel(ALL_PARAMS.map(p => ({ id: p.id, label: p.label })), ramp?.paramId || 'opacity');
-      const srcSel   = _sel(TIME_SOURCES, ramp?.timeSource || 'clock');
-      const startT   = _num(ramp?.startTime  ?? 0,   0.1, 0);
-      const endT     = _num(ramp?.endTime    ?? 10,  0.1, 0);
-      const startV   = _num(ramp?.startValue ?? 0,   0.01);
-      const endV     = _num(ramp?.endValue   ?? 1,   0.01);
-      const curveSel = _sel(CURVES.map(c => ({ id: c, label: CRV_LABELS[c] || c })), ramp?.curve || 'linear');
+      const paramSel  = _sel(ALL_PARAMS.map(p => ({ id: p.id, label: p.label })), ramp?.paramId || 'opacity');
+      const srcSel    = _sel(TIME_SOURCES, ramp?.timeSource || 'clock');
+      const startT    = _num(ramp?.startTime  ?? 0,   0.1, 0);
+      const endT      = _num(ramp?.endTime    ?? 10,  0.1, 0);
+      const startV    = _num(ramp?.startValue ?? 0,   0.01);
+      const endV      = _num(ramp?.endValue   ?? 1,   0.01);
+      const curveSel  = _sel(CURVES.map(c => ({ id: c, label: CRV_LABELS[c] || c })), ramp?.curve || 'linear');
+
+      // Hold-end checkbox
+      const holdLabel = document.createElement('label');
+      holdLabel.style.cssText = 'display:flex;align-items:center;gap:5px;cursor:pointer;font-family:var(--font-mono);font-size:8px;color:var(--text-dim)';
+      const holdChk = document.createElement('input');
+      holdChk.type    = 'checkbox';
+      holdChk.checked = !!ramp?.holdEnd;
+      holdChk.style.cssText = 'accent-color:var(--accent)';
+      holdLabel.append(holdChk, 'Hold end value (don\'t reset after ramp ends)');
 
       form.appendChild(_row('Param', paramSel));
       form.appendChild(_row('Time source', srcSel));
       form.appendChild(_row('Time (s)', startT, _arrow(), endT));
+
+      // ── Timeline scrubber ────────────────────────────────────
+      const scrubWrap = document.createElement('div');
+      scrubWrap.style.cssText = 'margin-bottom:7px';
+
+      const _getDuration = (src) => {
+        if (src === 'audio') return window._vaelAudio?.duration ?? 0;
+        if (src?.startsWith('video:')) {
+          const vid = allLayers.find(l => l.id === src.slice(6));
+          return vid?._videoEl?.duration ?? 0;
+        }
+        return 0;
+      };
+
+      const _buildScrubber = (src) => {
+        scrubWrap.innerHTML = '';
+        const dur = _getDuration(src);
+        if (!(dur > 0)) return;
+
+        const track = document.createElement('div');
+        track.style.cssText = 'position:relative;height:20px;background:var(--bg);border:1px solid var(--border-dim);border-radius:4px;cursor:pointer;margin:0 2px 4px';
+
+        const fill = document.createElement('div');
+        fill.style.cssText = 'position:absolute;top:0;bottom:0;background:color-mix(in srgb,var(--accent) 25%,transparent);pointer-events:none';
+
+        const mkHandle = (cls, color) => {
+          const h = document.createElement('div');
+          h.style.cssText = `position:absolute;top:-2px;bottom:-2px;width:6px;margin-left:-3px;background:${color};border-radius:3px;cursor:ew-resize;z-index:2`;
+          h.className = cls;
+          return h;
+        };
+        const hStart = mkHandle('tl-hs', 'var(--accent)');
+        const hEnd   = mkHandle('tl-he', 'var(--accent2)');
+        track.append(fill, hStart, hEnd);
+
+        const durLabel = document.createElement('div');
+        durLabel.style.cssText = 'font-family:var(--font-mono);font-size:7px;color:var(--text-dim);text-align:right;margin-bottom:2px';
+        durLabel.textContent = `duration: ${_fmt(dur)}`;
+
+        const _update = () => {
+          const s = Math.max(0, Math.min(dur, parseFloat(startT.value) || 0));
+          const e = Math.max(0, Math.min(dur, parseFloat(endT.value) || dur));
+          const sl = (s / dur) * 100;
+          const el = (e / dur) * 100;
+          hStart.style.left = `${sl}%`;
+          hEnd.style.left   = `${el}%`;
+          fill.style.left   = `${sl}%`;
+          fill.style.right  = `${100 - el}%`;
+        };
+        _update();
+        startT.addEventListener('input', _update);
+        endT.addEventListener('input', _update);
+
+        const _drag = (handle, isStart) => {
+          handle.addEventListener('mousedown', e => {
+            e.preventDefault();
+            const rect   = track.getBoundingClientRect();
+            const onMove = ev => {
+              const pct  = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+              const secs = (pct * dur).toFixed(1);
+              if (isStart) { startT.value = secs; }
+              else         { endT.value   = secs; }
+              _update();
+            };
+            const onUp = () => {
+              document.removeEventListener('mousemove', onMove);
+              document.removeEventListener('mouseup', onUp);
+            };
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+          });
+        };
+        _drag(hStart, true);
+        _drag(hEnd, false);
+
+        scrubWrap.appendChild(durLabel);
+        scrubWrap.appendChild(track);
+      };
+
+      _buildScrubber(srcSel.value);
+      srcSel.addEventListener('change', () => _buildScrubber(srcSel.value));
+      form.appendChild(scrubWrap);
+      // ── End timeline scrubber ────────────────────────────────
+
       form.appendChild(_row('Value', startV, _arrow(), endV));
       form.appendChild(_row('Curve', curveSel));
+
+      const holdRow = document.createElement('div');
+      holdRow.style.cssText = 'margin-bottom:7px;padding-left:74px';
+      holdRow.appendChild(holdLabel);
+      form.appendChild(holdRow);
 
       const btnRow = document.createElement('div');
       btnRow.style.cssText = 'display:flex;gap:6px;margin-top:4px';
@@ -1615,6 +1713,7 @@ const ParamPanel = (() => {
           startValue: parseFloat(startV.value) || 0,
           endValue:   parseFloat(endV.value)   ?? 1,
           curve:      curveSel.value,
+          holdEnd:    holdChk.checked,
           enabled:    ramp?.enabled !== false,
         };
         if (isEdit) layer.automation[editIdx] = newRamp;
