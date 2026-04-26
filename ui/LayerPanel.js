@@ -134,7 +134,7 @@ const LayerPanel = (() => {
     } else if (layer instanceof ImageLayer) {
       _renderImageFn && _renderImageFn(layer, _paramsContentEl);
     } else {
-      ParamPanel.render(layer, _paramsContentEl, _audio);
+      ParamPanel.render(layer, _paramsContentEl, _audio, _layers);
     }
 
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
@@ -476,7 +476,7 @@ const LayerPanel = (() => {
           } else if (layer instanceof ImageLayer) {
             _renderImageFn && _renderImageFn(layer, _paramsContentEl);
           } else {
-            ParamPanel.render(layer, _paramsContentEl, _audio);
+            ParamPanel.render(layer, _paramsContentEl, _audio, _layers);
           }
         }
       });

@@ -373,14 +373,34 @@ const MidiPanel = (() => {
     section.appendChild(desc);
 
     const ACTIONS = [
-      { action: 'scene:next',  label: '→ Next scene'            },
-      { action: 'scene:prev',  label: '← Prev scene'            },
-      { action: 'scene:play',  label: '▶ Play / trigger'        },
-      { action: 'scene:stop',  label: '⏹ Stop'                  },
-      { action: 'scene:jump',  label: '⬇ PC → Jump to scene'   },
+      { group: 'Scene' },
+      { action: 'scene:next',        label: '→ Next scene'               },
+      { action: 'scene:prev',        label: '← Prev scene'               },
+      { action: 'scene:play',        label: '▶ Play / trigger scene'     },
+      { action: 'scene:stop',        label: '⏹ Stop scene'               },
+      { action: 'scene:jump',        label: '⬇ PC → Jump to scene'      },
+      { group: 'Video layers (all in scene)' },
+      { action: 'video:play',        label: '▶ Play all video layers'    },
+      { action: 'video:stop',        label: '⏹ Stop all video layers'    },
+      { action: 'video:toggle',      label: '⏯ Toggle all video layers'  },
+      { group: 'Audio' },
+      { action: 'audio:play',        label: '▶ Play audio'               },
+      { action: 'audio:stop',        label: '⏹ Stop audio'               },
+      { action: 'audio:toggle',      label: '⏯ Toggle audio'             },
+      { group: 'Transport (video + audio)' },
+      { action: 'transport:play',    label: '▶ Play video + audio'       },
+      { action: 'transport:stop',    label: '⏹ Stop video + audio'       },
+      { action: 'transport:toggle',  label: '⏯ Toggle video + audio'    },
     ];
 
-    ACTIONS.forEach(({ action, label }) => {
+    ACTIONS.forEach(({ action, label, group }) => {
+      if (group) {
+        const hdr = document.createElement('div');
+        hdr.style.cssText = 'font-family:var(--font-mono);font-size:7px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin:10px 0 5px;padding-top:8px;border-top:1px solid var(--border-dim)';
+        hdr.textContent = group;
+        section.appendChild(hdr);
+        return;
+      }
       const existing = _midi.getGlobalLinks().find(l => l.action === action ||
         (action === 'scene:jump' && l.action === 'scene:jump'));
       const isArmed  = _midi.isLearning && _midi._learnAction === action;

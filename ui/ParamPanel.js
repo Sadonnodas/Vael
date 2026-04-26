@@ -58,9 +58,14 @@ const ParamPanel = (() => {
     const manifest = layer.constructor.manifest;
     const typeKey  = layer.constructor.name;
     if (!_sectionState[typeKey]) {
-      _sectionState[typeKey] = { transform: false, params: true, mod: false, fx: false, automation: false };
+      _sectionState[typeKey] = { transform: false, params: true, mod: false, lfo: false, fx: false, automation: false };
     }
     const sec = _sectionState[typeKey];
+
+    // Layer navigation picker
+    if (layerStack?.layers?.length > 1) {
+      container.appendChild(_buildLayerPicker(layer, layerStack));
+    }
 
     // Name header
     container.appendChild(_buildNameHeader(layer, manifest?.name || typeKey));
@@ -243,7 +248,10 @@ const ParamPanel = (() => {
     }
 
     // Automation ramps
-    container.appendChild(_buildAutomationSection(layer, layerStack));
+    const autoLabel = `Automation (${(layer.automation || []).length})`;
+    const autoSec   = _buildCollapsible(autoLabel, sec.automation, o => { sec.automation = o; });
+    autoSec.body.appendChild(_buildAutomationSection(layer, layerStack));
+    container.appendChild(autoSec.el);
   }
 
   // ── Video timeline bar ───────────────────────────────────────
@@ -478,6 +486,56 @@ const ParamPanel = (() => {
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup',   onUp);
     };
+  }
+
+  // ── Layer navigation picker ──────────────────────────────────
+
+  function _buildLayerPicker(currentLayer, layerStack) {
+    const wrap = document.createElement('div');
+    wrap.style.cssText = 'display:flex;align-items:center;gap:4px;margin-bottom:8px';
+
+    const prev = document.createElement('button');
+    prev.style.cssText = 'background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-size:10px;width:22px;height:22px;cursor:pointer;flex-shrink:0;display:flex;align-items:center;justify-content:center';
+    prev.textContent = '‹';
+    prev.title = 'Previous layer';
+
+    const next = document.createElement('button');
+    next.style.cssText = prev.style.cssText;
+    next.textContent = '›';
+    next.title = 'Next layer';
+
+    const sel = document.createElement('select');
+    sel.style.cssText = 'flex:1;background:var(--bg-card);border:1px solid var(--border-dim);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:3px 6px;cursor:pointer';
+
+    const allLayers = layerStack.layers;
+    allLayers.forEach(l => {
+      const o = document.createElement('option');
+      o.value = l.id;
+      o.textContent = l.name || l.id;
+      o.selected = l.id === currentLayer.id;
+      sel.appendChild(o);
+    });
+
+    const _selectLayer = (id) => {
+      window.dispatchEvent(new CustomEvent('vael:select-layer', { detail: { id } }));
+    };
+
+    const curIdx = allLayers.findIndex(l => l.id === currentLayer.id);
+    prev.disabled = curIdx <= 0;
+    next.disabled = curIdx >= allLayers.length - 1;
+    prev.style.opacity = prev.disabled ? '0.3' : '1';
+    next.style.opacity = next.disabled ? '0.3' : '1';
+
+    prev.addEventListener('click', () => {
+      if (curIdx > 0) _selectLayer(allLayers[curIdx - 1].id);
+    });
+    next.addEventListener('click', () => {
+      if (curIdx < allLayers.length - 1) _selectLayer(allLayers[curIdx + 1].id);
+    });
+    sel.addEventListener('change', () => _selectLayer(sel.value));
+
+    wrap.append(prev, sel, next);
+    return wrap;
   }
 
   // ── Collapsible section ──────────────────────────────────────
@@ -1490,17 +1548,13 @@ const ParamPanel = (() => {
     function _fmt(s) { const m = Math.floor(s / 60); return `${m}:${(s % 60).toFixed(1).padStart(4, '0')}`; }
 
     const wrap = document.createElement('div');
-    wrap.style.cssText = 'margin-top:10px;border-top:1px solid var(--border-dim);padding-top:8px';
 
     const hdr = document.createElement('div');
-    hdr.style.cssText = 'display:flex;align-items:center;justify-content:space-between;margin-bottom:6px';
-    const title = document.createElement('span');
-    title.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px';
-    title.textContent = 'Automation';
+    hdr.style.cssText = 'display:flex;justify-content:flex-end;margin-bottom:6px';
     const addBtn = document.createElement('button');
     addBtn.style.cssText = 'background:none;border:1px solid var(--accent);border-radius:3px;color:var(--accent);font-family:var(--font-mono);font-size:8px;padding:2px 8px;cursor:pointer';
     addBtn.textContent = '+ Add ramp';
-    hdr.append(title, addBtn);
+    hdr.append(addBtn);
     wrap.appendChild(hdr);
 
     const list    = document.createElement('div');
@@ -1533,7 +1587,7 @@ const ParamPanel = (() => {
 
         const info = document.createElement('span');
         info.style.cssText = 'font-family:var(--font-mono);font-size:8px;color:var(--text);flex:1;min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis';
-        info.textContent = `${pInfo.label}  ${ramp.startValue}→${ramp.endValue}${ramp.holdEnd ? '⊣' : ''}  ${_fmt(ramp.startTime)}–${_fmt(ramp.endTime)}  ${CRV_LABELS[ramp.curve] || ramp.curve}`;
+        info.textContent = `${pInfo.label}  ${ramp.holdStart ? '⊢' : ''}${ramp.startValue}→${ramp.endValue}${ramp.holdEnd ? '⊣' : ''}  ${_fmt(ramp.startTime)}–${_fmt(ramp.endTime)}  ${CRV_LABELS[ramp.curve] || ramp.curve}`;
 
         const editBtn = document.createElement('button');
         editBtn.style.cssText = 'background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:7px;padding:2px 5px;cursor:pointer;flex-shrink:0';
@@ -1592,14 +1646,22 @@ const ParamPanel = (() => {
       const endV      = _num(ramp?.endValue   ?? 1,   0.01);
       const curveSel  = _sel(CURVES.map(c => ({ id: c, label: CRV_LABELS[c] || c })), ramp?.curve || 'linear');
 
-      // Hold-end checkbox
+      // Hold start/end checkboxes
+      const holdStartLabel = document.createElement('label');
+      holdStartLabel.style.cssText = 'display:flex;align-items:center;gap:5px;cursor:pointer;font-family:var(--font-mono);font-size:8px;color:var(--text-dim)';
+      const holdStartChk = document.createElement('input');
+      holdStartChk.type    = 'checkbox';
+      holdStartChk.checked = !!ramp?.holdStart;
+      holdStartChk.style.cssText = 'accent-color:var(--accent)';
+      holdStartLabel.append(holdStartChk, 'Apply start value before ramp begins');
+
       const holdLabel = document.createElement('label');
       holdLabel.style.cssText = 'display:flex;align-items:center;gap:5px;cursor:pointer;font-family:var(--font-mono);font-size:8px;color:var(--text-dim)';
       const holdChk = document.createElement('input');
       holdChk.type    = 'checkbox';
       holdChk.checked = !!ramp?.holdEnd;
       holdChk.style.cssText = 'accent-color:var(--accent)';
-      holdLabel.append(holdChk, 'Hold end value (don\'t reset after ramp ends)');
+      holdLabel.append(holdChk, 'Hold end value after ramp finishes');
 
       form.appendChild(_row('Param', paramSel));
       form.appendChild(_row('Time source', srcSel));
@@ -1664,8 +1726,8 @@ const ParamPanel = (() => {
             const onMove = ev => {
               const pct  = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
               const secs = (pct * dur).toFixed(1);
-              if (isStart) { startT.value = secs; }
-              else         { endT.value   = secs; }
+              if (isStart) { startT.value = secs; startT.dispatchEvent(new Event('input')); }
+              else         { endT.value   = secs; endT.dispatchEvent(new Event('input')); }
               _update();
             };
             const onUp = () => {
@@ -1684,15 +1746,110 @@ const ParamPanel = (() => {
       };
 
       _buildScrubber(srcSel.value);
-      srcSel.addEventListener('change', () => _buildScrubber(srcSel.value));
+
+      // ── Video thumbnail preview — in point + out point ───────────
+      const thumbWrap = document.createElement('div');
+      thumbWrap.style.cssText = 'margin-bottom:7px;display:none';
+
+      const thumbRow = document.createElement('div');
+      thumbRow.style.cssText = 'display:flex;gap:6px';
+
+      const _mkThumbCell = () => {
+        const cell = document.createElement('div');
+        cell.style.cssText = 'flex:1;min-width:0';
+        const cv = document.createElement('canvas');
+        cv.width = 160; cv.height = 90;
+        cv.style.cssText = 'width:100%;border-radius:3px;border:1px solid var(--border-dim);display:block;background:#000';
+        const lbl = document.createElement('div');
+        lbl.style.cssText = 'font-family:var(--font-mono);font-size:7px;color:var(--text-dim);text-align:center;margin-top:2px';
+        cell.append(cv, lbl);
+        return { cell, cv, ctx: cv.getContext('2d'), lbl };
+      };
+      const inCell  = _mkThumbCell();
+      const outCell = _mkThumbCell();
+      thumbRow.append(inCell.cell, outCell.cell);
+      thumbWrap.appendChild(thumbRow);
+
+      // Seek a dedicated hidden video to `time` and paint to canvas when ready.
+      // Using { once: true } prevents listener accumulation on rapid drags.
+      const _seekDraw = (seekVid, cell, time, prefix) => {
+        if (!seekVid || !thumbWrap.isConnected) return;
+        const t = Math.max(0, isFinite(time) ? time : 0);
+        cell.lbl.textContent = prefix + _fmt(t);
+        seekVid.addEventListener('seeked', () => {
+          if (cell.cv.isConnected) cell.ctx.drawImage(seekVid, 0, 0, 160, 90);
+        }, { once: true });
+        seekVid.currentTime = t;
+      };
+
+      let _seekVidIn = null, _seekVidOut = null;
+      let _seekDebounce;
+
+      const _refreshThumbs = () => {
+        if (!_seekVidIn || !_seekVidOut) return;
+        clearTimeout(_seekDebounce);
+        _seekDebounce = setTimeout(() => {
+          _seekDraw(_seekVidIn,  inCell,  parseFloat(startT.value) || 0, 'In  ');
+          _seekDraw(_seekVidOut, outCell, parseFloat(endT.value)   || 0, 'Out ');
+        }, 120);
+      };
+
+      const _destroySeekVids = () => {
+        [_seekVidIn, _seekVidOut].forEach(v => {
+          if (!v) return;
+          v.src = '';
+          if (v.parentNode) v.parentNode.removeChild(v);
+        });
+        _seekVidIn = _seekVidOut = null;
+      };
+
+      const _makeSeekVid = (src) => {
+        const v = document.createElement('video');
+        v.muted = true; v.preload = 'metadata';
+        v.style.cssText = 'position:absolute;left:-9999px;width:1px;height:1px';
+        v.src = src;
+        document.body.appendChild(v);
+        return v;
+      };
+
+      let _activeVideoLayer = null;
+      const _updateThumb = (src) => {
+        _destroySeekVids();
+        if (src?.startsWith('video:')) {
+          const vid = allLayers.find(l => l.id === src.slice(6));
+          const videoSrc = vid?._videoEl?.currentSrc || vid?._sourceUrl;
+          if (vid && videoSrc) {
+            _activeVideoLayer = vid;
+            thumbWrap.style.display = 'block';
+            _seekVidIn  = _makeSeekVid(videoSrc);
+            _seekVidOut = _makeSeekVid(videoSrc);
+            // Wait for metadata before first seek
+            let ready = 0;
+            const onReady = () => { if (++ready === 2) _refreshThumbs(); };
+            _seekVidIn.addEventListener('loadedmetadata',  onReady, { once: true });
+            _seekVidOut.addEventListener('loadedmetadata', onReady, { once: true });
+            return;
+          }
+        }
+        _activeVideoLayer = null;
+        thumbWrap.style.display = 'none';
+      };
+
+      startT.addEventListener('input', _refreshThumbs);
+      endT.addEventListener('input',   _refreshThumbs);
+      srcSel.addEventListener('change', () => { _buildScrubber(srcSel.value); _updateThumb(srcSel.value); });
+      _updateThumb(srcSel.value);
+
       form.appendChild(scrubWrap);
+      form.appendChild(thumbWrap);
       // ── End timeline scrubber ────────────────────────────────
 
       form.appendChild(_row('Value', startV, _arrow(), endV));
       form.appendChild(_row('Curve', curveSel));
 
       const holdRow = document.createElement('div');
-      holdRow.style.cssText = 'margin-bottom:7px;padding-left:74px';
+      holdRow.style.cssText = 'display:flex;flex-direction:column;gap:5px;margin-bottom:7px;padding-left:74px';
+      holdRow.appendChild(holdStartLabel);
       holdRow.appendChild(holdLabel);
       form.appendChild(holdRow);
 
@@ -1700,7 +1857,7 @@ const ParamPanel = (() => {
       btnRow.style.cssText = 'display:flex;gap:6px;margin-top:4px';
       const cancelBtn = document.createElement('button');
       cancelBtn.className = 'btn'; cancelBtn.style.cssText = 'flex:1;font-size:9px'; cancelBtn.textContent = 'Cancel';
-      cancelBtn.addEventListener('click', () => { formBox.innerHTML = ''; });
+      cancelBtn.addEventListener('click', () => { _destroySeekVids(); formBox.innerHTML = ''; });
       const saveBtn = document.createElement('button');
       saveBtn.className = 'btn accent'; saveBtn.style.cssText = 'flex:1;font-size:9px'; saveBtn.textContent = isEdit ? 'Save' : 'Add ramp';
       saveBtn.addEventListener('click', () => {
@@ -1713,11 +1870,13 @@ const ParamPanel = (() => {
           startValue: parseFloat(startV.value) || 0,
           endValue:   parseFloat(endV.value)   ?? 1,
           curve:      curveSel.value,
+          holdStart:  holdStartChk.checked,
           holdEnd:    holdChk.checked,
           enabled:    ramp?.enabled !== false,
         };
         if (isEdit) layer.automation[editIdx] = newRamp;
         else        layer.automation.push(newRamp);
+        _destroySeekVids();
         formBox.innerHTML = '';
         _renderList();
       });

@@ -63,6 +63,9 @@ class Renderer {
   // ── Resize ───────────────────────────────────────────────────
 
   _resize() {
+    const dpr = Math.min(window.devicePixelRatio, 2);
+    this._renderer.setPixelRatio(dpr);
+
     // If a fixed ratio is locked, constrain the canvas element before reading dimensions
     if (this._lockedRatio) {
       const area = this.canvas.parentElement;
@@ -93,9 +96,10 @@ class Renderer {
 
     const w = this.canvas.clientWidth  || window.innerWidth;
     const h = this.canvas.clientHeight || window.innerHeight;
-    if (w === this._cssW && h === this._cssH) return;
+    if (w === this._cssW && h === this._cssH && dpr === this._dpr) return;
     this._cssW = w;
     this._cssH = h;
+    this._dpr  = dpr;
     this._renderer.setSize(w, h, false);
 
     // Keep overlay canvas exactly on top of the WebGL canvas.
@@ -315,7 +319,7 @@ class Renderer {
         LayerFX.apply(layer, quad.offscreen, quad.offCtx, W, H, this.audioData);
       }
 
-      const opacity   = VaelMath.clamp(layer.opacity ?? 1, 0, 1);
+      const opacity   = VaelMath.clamp((layer.opacity ?? 1) * (layer._fadeMultiplier ?? 1), 0, 1);
       const blendMode = layer.blendMode || 'normal';
 
       // Modes that need canvas 2D compositing (WebGL can't do them natively):
@@ -607,9 +611,10 @@ class Renderer {
     }
   }
 
-  get fps()    { return Math.round(this._fpsSmoothed); }
-  get width()  { return this._cssW; }
-  get height() { return this._cssH; }
+  get fps()           { return Math.round(this._fpsSmoothed); }
+  get width()         { return this._cssW; }
+  get height()        { return this._cssH; }
+  get overlayCanvas() { return this._overlayCanvas || null; }
 
   /**
    * Composite canvas-only blend mode layers (overlay, softlight, etc.)

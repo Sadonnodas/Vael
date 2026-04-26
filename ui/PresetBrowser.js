@@ -221,6 +221,19 @@ const PresetBrowser = (() => {
     if (item) { item.name = newName; _setAll(list); }
   }
 
+  function duplicate(name) {
+    const all      = _getAll();
+    const original = all.find(p => p.name === name);
+    if (!original) return null;
+    let copyName = name + ' copy';
+    let i = 2;
+    while (all.find(p => p.name === copyName)) copyName = name + ' copy ' + i++;
+    const { versions: _v, ...snap } = original;
+    const copy = { ...snap, name: copyName, saved: new Date().toISOString(), versions: [] };
+    _setAll([copy, ...all].slice(0, MAX_CAP));
+    return copy;
+  }
+
   // ── Load into scene ──────────────────────────────────────────
 
   function _applyPreset(preset) {
@@ -255,6 +268,10 @@ const PresetBrowser = (() => {
           if (def.modMatrix)  layer.modMatrix?.fromJSON(def.modMatrix);
           if (Array.isArray(def.fx) && layer.fx !== undefined) layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
           if (Array.isArray(def.automation)) layer.automation = def.automation.map(r => ({ ...r }));
+          if (Array.isArray(def.lfos)) layer._lfos = def.lfos.map(l => ({
+            ...l, _phase: 0, _value: 0,
+            targets: (l.targets || []).map(t => ({ paramId: t.paramId, depth: t.depth })),
+          }));
           if (def.params && layer.params) Object.assign(layer.params, def.params);
           if (Array.isArray(def.freeformPoints) && layer.freeformPoints !== undefined) {
             layer.freeformPoints = def.freeformPoints.map(p => ({ ...p }));
@@ -267,6 +284,7 @@ const PresetBrowser = (() => {
 
     if (typeof _onLoad === 'function') _onLoad(preset);
     Toast.success(`Loaded: ${preset.name}`);
+    if (typeof SceneDirtyGuard !== 'undefined') SceneDirtyGuard.setClean(preset.name);
   }
 
   // ── UI state ─────────────────────────────────────────────────
@@ -491,6 +509,49 @@ const PresetBrowser = (() => {
     }
   }
 
+  function _startInlineRename(nameEl, oldName) {
+    const input = document.createElement('input');
+    input.value = oldName;
+    input.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text);' +
+      'background:var(--bg-mid);border:1px solid var(--accent);border-radius:3px;' +
+      'padding:1px 4px;width:100%;box-sizing:border-box;outline:none';
+
+    let done = false;
+    const finish = (doSave) => {
+      if (done) return;
+      done = true;
+      if (doSave) {
+        const newName = input.value.trim();
+        if (newName && newName !== oldName) {
+          if (_getAll().find(p => p.name === newName)) {
+            Toast.warn(`"${newName}" already exists`);
+            done = false;
+            setTimeout(() => { input.focus(); input.select(); }, 0);
+            return;
+          }
+          rename(oldName, newName);
+          if (window._vaelActiveScene === oldName) window._vaelActiveScene = newName;
+          if (typeof PlaylistPanel !== 'undefined') PlaylistPanel.renameScene(oldName, newName);
+          Toast.success(`Renamed to "${newName}"`);
+        }
+      }
+      _renderGrid();
+    };
+
+    input.addEventListener('click',     e => e.stopPropagation());
+    input.addEventListener('mousedown', e => e.stopPropagation());
+    input.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+
+    nameEl.textContent = '';
+    nameEl.appendChild(input);
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+  }
+
   function _buildGridCard(preset) {
     const isSel    = _selected.has(preset.name);
     const isActive = preset.name === window._vaelActiveScene;
@@ -517,7 +578,7 @@ const PresetBrowser = (() => {
       }
       <div style="padding:5px 8px;display:flex;align-items:center;gap:4px">
         <div style="flex:1;min-width:0">
-          <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);
+          <div class="pb-name-label" style="font-family:var(--font-mono);font-size:9px;color:var(--text);
                       white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
                       margin-bottom:1px">${preset.name}</div>
           <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim)">
@@ -531,6 +592,12 @@ const PresetBrowser = (() => {
       </div>
       <div class="pb-card-actions" style="position:absolute;top:4px;right:4px;
         display:flex;gap:3px;opacity:0;transition:opacity 0.15s">
+        <button class="pb-rename" title="Rename scene"
+          style="background:rgba(0,0,0,0.7);border:none;border-radius:3px;
+                 color:#ffcc44;cursor:pointer;font-size:10px;padding:2px 5px">✎</button>
+        <button class="pb-dup" title="Duplicate scene"
+          style="background:rgba(0,0,0,0.7);border:none;border-radius:3px;
+                 color:#aaaaff;cursor:pointer;font-size:10px;padding:2px 5px">⧉</button>
         <button class="pb-dl" title="Download"
           style="background:rgba(0,0,0,0.7);border:none;border-radius:3px;
                  color:#00d4aa;cursor:pointer;font-size:10px;padding:2px 5px">↓</button>
@@ -554,8 +621,11 @@ const PresetBrowser = (() => {
     // Click body = load; click checkbox = select toggle
     card.addEventListener('click', e => {
       if (e.target.closest('.pb-card-actions') || e.target.closest('.pb-sel-chk')) return;
-      _applyPreset(preset);
-      close();
+      if (typeof SceneDirtyGuard !== 'undefined') {
+        SceneDirtyGuard.confirmSwitch(preset.name, () => { _applyPreset(preset); close(); });
+      } else {
+        _applyPreset(preset); close();
+      }
     });
     card.querySelector('.pb-sel-chk').addEventListener('click', e => {
       e.stopPropagation();
@@ -576,8 +646,18 @@ const PresetBrowser = (() => {
         thumb = t.toDataURL('image/jpeg', 0.6);
       } catch {}
       save(_layerStack, preset.name, thumb);
+      if (typeof SceneDirtyGuard !== 'undefined') SceneDirtyGuard.markSaved();
       _renderGrid();
       Toast.success(`"${preset.name}" updated`);
+    });
+    card.querySelector('.pb-rename').addEventListener('click', e => {
+      e.stopPropagation();
+      _startInlineRename(card.querySelector('.pb-name-label'), preset.name);
+    });
+    card.querySelector('.pb-dup').addEventListener('click', e => {
+      e.stopPropagation();
+      const copy = duplicate(preset.name);
+      if (copy) { _renderGrid(); Toast.success(`Duplicated as "${copy.name}"`); }
     });
     card.querySelector('.pb-dl').addEventListener('click', e => {
       e.stopPropagation();
@@ -660,8 +740,18 @@ const PresetBrowser = (() => {
         thumb = t.toDataURL('image/jpeg', 0.6);
       } catch {}
       save(_layerStack, preset.name, thumb);
+      if (typeof SceneDirtyGuard !== 'undefined') SceneDirtyGuard.markSaved();
       _renderGrid();
       Toast.success(`"${preset.name}" updated`);
+    });
+
+    const renBtn = document.createElement('button');
+    renBtn.title = 'Rename';
+    renBtn.style.cssText = 'background:none;border:none;color:#ffcc44;cursor:pointer;font-size:12px;padding:2px 4px;flex-shrink:0';
+    renBtn.textContent = '✎';
+    renBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      _startInlineRename(info.firstElementChild, preset.name);
     });
 
     const dlBtn = document.createElement('button');
@@ -676,11 +766,17 @@ const PresetBrowser = (() => {
     delBtn.textContent = '✕';
     delBtn.addEventListener('click', e => { e.stopPropagation(); _selected.delete(preset.name); remove(preset.name); _updateBulkButtons(); _renderGrid(); Toast.info(`Deleted "${preset.name}"`); });
 
-    row.append(chk, thumb, info, updBtn, dlBtn, delBtn);
+    row.append(chk, thumb, info, renBtn, updBtn, dlBtn, delBtn);
 
     row.addEventListener('mouseenter', () => { if (!isActive && !isSel) row.style.borderColor = 'var(--accent2)'; });
     row.addEventListener('mouseleave', () => { row.style.borderColor = isActive || _selected.has(preset.name) ? 'var(--accent)' : 'var(--border-dim)'; });
-    row.addEventListener('click', () => { _applyPreset(preset); close(); });
+    row.addEventListener('click', () => {
+      if (typeof SceneDirtyGuard !== 'undefined') {
+        SceneDirtyGuard.confirmSwitch(preset.name, () => { _applyPreset(preset); close(); });
+      } else {
+        _applyPreset(preset); close();
+      }
+    });
 
     return row;
   }
@@ -719,6 +815,6 @@ const PresetBrowser = (() => {
     _isOpen ? close() : open();
   }
 
-  return { init, save, remove, restoreVersion, open, close, toggle, _getAll, _applyPreset };
+  return { init, save, remove, rename, duplicate, restoreVersion, open, close, toggle, _getAll, _applyPreset };
 
 })();

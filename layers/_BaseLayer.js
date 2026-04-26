@@ -88,6 +88,11 @@ class BaseLayer {
       fx:          this.fx ? this.fx.map(f => ({ ...f, params: { ...f.params } })) : [],
       modMatrix:   this.modMatrix?.toJSON() || [],
       automation:  this.automation ? this.automation.map(r => ({ ...r })) : [],
+      lfos:        (this._lfos || []).map(lfo => ({
+        id: lfo.id, shape: lfo.shape, rate: lfo.rate,
+        syncBpm: lfo.syncBpm, division: lfo.division,
+        targets: (lfo.targets || []).map(t => ({ paramId: t.paramId, depth: t.depth })),
+      })),
     };
   }
 }

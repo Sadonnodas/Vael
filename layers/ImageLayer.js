@@ -58,6 +58,7 @@ class ImageLayer extends BaseLayer {
 
   init(params = {}) {
     Object.assign(this.params, params);
+    if (params.fileName) this._fileName = params.fileName;
     if (params.src) {
       this._loadUrl(params.src);
     } else if (params.fileName) {

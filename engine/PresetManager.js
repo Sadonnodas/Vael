@@ -101,6 +101,11 @@ const PresetManager = (() => {
         if (def.softUpdate !== undefined) layer.softUpdate = def.softUpdate;
         if (def.modMatrix)  layer.modMatrix?.fromJSON(def.modMatrix, layer);
         if (def.fx)         layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
+        if (Array.isArray(def.automation)) layer.automation = def.automation.map(r => ({ ...r }));
+        if (Array.isArray(def.lfos)) layer._lfos = def.lfos.map(l => ({
+          ...l, _phase: 0, _value: 0,
+          targets: (l.targets || []).map(t => ({ paramId: t.paramId, depth: t.depth })),
+        }));
         if (Array.isArray(def.freeformPoints) && layer.freeformPoints !== undefined) {
           layer.freeformPoints = def.freeformPoints.map(p => ({ ...p }));
         }
@@ -122,6 +127,11 @@ const PresetManager = (() => {
               if (childDef.transform) Object.assign(child.transform, childDef.transform);
               if (childDef.modMatrix) child.modMatrix?.fromJSON(childDef.modMatrix, child);
               if (childDef.params && child.params) Object.assign(child.params, childDef.params);
+              if (Array.isArray(childDef.automation)) child.automation = childDef.automation.map(r => ({ ...r }));
+              if (Array.isArray(childDef.lfos)) child._lfos = childDef.lfos.map(l => ({
+                ...l, _phase: 0, _value: 0,
+                targets: (l.targets || []).map(t => ({ paramId: t.paramId, depth: t.depth })),
+              }));
               if (typeof child.init === 'function') child.init({ shaderName: childDef.shaderName, glsl: childDef.glsl, ...child.params });
               layer.addChild(child);
             } catch (e) { errors.push(`Error loading group child: ${e.message}`); }
@@ -228,6 +238,11 @@ const PresetManager = (() => {
         if (def.softUpdate !== undefined) layer.softUpdate = def.softUpdate;
         if (def.modMatrix) layer.modMatrix?.fromJSON(def.modMatrix, layer);
         if (def.params && layer.params) Object.assign(layer.params, def.params);
+        if (Array.isArray(def.automation)) layer.automation = def.automation.map(r => ({ ...r }));
+        if (Array.isArray(def.lfos)) layer._lfos = def.lfos.map(l => ({
+          ...l, _phase: 0, _value: 0,
+          targets: (l.targets || []).map(t => ({ paramId: t.paramId, depth: t.depth })),
+        }));
         if (Array.isArray(def.freeformPoints) && layer.freeformPoints !== undefined) {
           layer.freeformPoints = def.freeformPoints.map(p => ({ ...p }));
         }
@@ -242,6 +257,11 @@ const PresetManager = (() => {
             if (cd.transform) Object.assign(child.transform, cd.transform);
             if (cd.modMatrix) child.modMatrix?.fromJSON(cd.modMatrix, child);
             if (cd.params && child.params) Object.assign(child.params, cd.params);
+            if (Array.isArray(cd.automation)) child.automation = cd.automation.map(r => ({ ...r }));
+            if (Array.isArray(cd.lfos)) child._lfos = cd.lfos.map(l => ({
+              ...l, _phase: 0, _value: 0,
+              targets: (l.targets || []).map(t => ({ paramId: t.paramId, depth: t.depth })),
+            }));
             if (typeof child.init === 'function') child.init({ shaderName: cd.shaderName, glsl: cd.glsl, ...child.params });
             layer.addChild(child);
           });

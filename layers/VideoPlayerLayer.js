@@ -29,6 +29,8 @@ class VideoPlayerLayer extends BaseLayer {
       { id: 'loop',         label: 'Loop',            type: 'bool',  default: true  },
       { id: 'muted',        label: 'Muted',           type: 'bool',  default: true  },
       { id: 'playOnLoad',   label: 'Play on load',    type: 'bool',  default: true  },
+      { id: 'fadeIn',       label: 'Fade in (s)',     type: 'float', default: 0,    min: 0, max: 30, step: 0.1 },
+      { id: 'fadeOut',      label: 'Fade out (s)',    type: 'float', default: 0,    min: 0, max: 30, step: 0.1 },
     ],
   };
 
@@ -47,7 +49,10 @@ class VideoPlayerLayer extends BaseLayer {
       fitMode:      'cover',
       loop:         true,
       muted:        true,
+      fadeIn:       0,
+      fadeOut:      0,
     };
+    this._fadeMultiplier = 1;
     this._audioSmooth  = 0;
     this._videoEl      = null;
     this._sourceName   = null;
@@ -195,13 +200,22 @@ class VideoPlayerLayer extends BaseLayer {
 
     if (!this._videoEl || this._videoEl.readyState < 1) return;
 
+    // Compute fade-in / fade-out opacity multiplier
+    const ct  = this._videoEl.currentTime;
+    const ip  = this._inPoint();
+    const op  = this._outPoint();
+    let fade  = 1;
+    const fi  = this.params.fadeIn  ?? 0;
+    const fo  = this.params.fadeOut ?? 0;
+    if (fi > 0) fade = Math.min(fade, Math.max(0, Math.min(1, (ct - ip) / fi)));
+    if (fo > 0 && op > 0) fade = Math.min(fade, Math.max(0, Math.min(1, (op - ct) / fo)));
+    this._fadeMultiplier = fade;
+
     const muted = this.params.muted !== false;
     if (this._videoEl.muted !== muted) this._videoEl.muted = muted;
 
     const rate = this.params.playbackRate ?? 1.0;
     const mode = this.params.playMode ?? 'forward';
-    const ip   = this._inPoint();
-    const op   = this._outPoint();
 
     if (mode === 'forward') {
       if (this._playing) {

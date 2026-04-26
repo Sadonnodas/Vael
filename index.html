@@ -117,6 +117,13 @@
       padding: 16px 18px 12px;
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
+      -webkit-app-region: drag;  /* Electron: drag this area to move window */
+    }
+    /* Interactive elements inside the drag region must opt out */
+    #sidebar-header button,
+    #sidebar-header a,
+    #sidebar-header input {
+      -webkit-app-region: no-drag;
     }
 
     #sidebar-title {
@@ -1224,6 +1231,7 @@
 
 <!-- UI -->
 <script src="ui/Toast.js"></script>
+<script src="ui/SceneDirtyGuard.js"></script>
 <script src="ui/PresetBrowser.js"></script>
 <script src="ui/LayerPanel.js"></script>
 <script src="ui/AudioPanel.js"></script>
@@ -1427,11 +1435,29 @@
   // Default positions cascade diagonally
   let _popoutOffset = 0;
 
+  // Track separate OS windows opened for certain tabs (like SCENES)
+  const _osWindows = {};
+
   document.querySelectorAll('.tab-popout-btn').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
       const tabId = btn.dataset.popout;
       if (!tabId) return;
+
+      // SCENES tab → open the dedicated setlist monitor as a real OS window
+      // so it can be moved to a different display independently of the main window.
+      if (tabId === 'scenes') {
+        if (_osWindows[tabId] && !_osWindows[tabId].closed) {
+          _osWindows[tabId].focus();
+        } else {
+          const mon = window.open(
+            'setlist-monitor.html', 'vael-setlist-monitor',
+            'width=420,height=600,resizable=yes'
+          );
+          _osWindows[tabId] = mon;
+        }
+        return;
+      }
 
       // If already popped out, just focus it
       if (_popouts[tabId]) {

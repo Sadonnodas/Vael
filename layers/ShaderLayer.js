@@ -725,4 +725,87 @@ void main(){
   gl_FragColor=vec4(col,1.);
 }`,
 
+  // Param 1: count · Param 2: size · Param 3: rotation speed
+  triangles: `
+float _th(float n){return fract(sin(n)*43758.5453);}
+
+float _triSDF(vec2 p,vec2 a,vec2 b,vec2 c){
+  vec2 e0=b-a,e1=c-b,e2=a-c;
+  vec2 v0=p-a,v1=p-b,v2=p-c;
+  vec2 q0=v0-e0*clamp(dot(v0,e0)/dot(e0,e0),0.,1.);
+  vec2 q1=v1-e1*clamp(dot(v1,e1)/dot(e1,e1),0.,1.);
+  vec2 q2=v2-e2*clamp(dot(v2,e2)/dot(e2,e2),0.,1.);
+  float s=sign(e0.x*e2.y-e0.y*e2.x);
+  vec2 d=min(min(vec2(dot(q0,q0),s*(v0.x*e0.y-v0.y*e0.x)),
+                 vec2(dot(q1,q1),s*(v1.x*e1.y-v1.y*e1.x))),
+                 vec2(dot(q2,q2),s*(v2.x*e2.y-v2.y*e2.x)));
+  return -sqrt(d.x)*sign(d.y);
+}
+
+void main(){
+  float ar=iResolution.x/iResolution.y;
+  // Aspect-correct UV: x in [0,ar*iScale], y in [0,iScale]
+  vec2 uv=vec2(vUv.x*ar,vUv.y)*iScale;
+  float W=ar*iScale, H=iScale;
+  float t=iTime*iSpeed*0.25;
+  float beat=1.0+iBeat*0.14+iBass*0.07;
+
+  // Twinkling starfield
+  vec3 col=vec3(0.0);
+  vec2 sg=floor(vUv*vec2(220.,130.));
+  float sh=fract(sin(dot(sg,vec2(127.1,311.7)))*43758.5);
+  float sb=fract(sin(dot(sg,vec2(269.5,183.3)))*43758.5);
+  float twinkle=sin(iTime*(0.5+sh*2.5)+sh*6.2832)*0.35+0.65;
+  col+=step(0.974,sh)*(0.12+sb*0.32)*twinkle;
+
+  int N=int(mix(5.,18.,iParam1)+0.5);
+  float baseSz=mix(0.025,0.14,iParam2)*beat;
+  float rotSpd=mix(0.12,1.8,iParam3);
+
+  for(int i=0;i<18;i++){
+    if(i>=N) break;
+    float f=float(i)*1.6180339;
+
+    float vx=(_th(f     )-0.5)*0.5;
+    float vy=(_th(f+1.1 )-0.5)*0.5-0.03;
+    float ph=_th(f+2.3)*80.0;
+    float ox=_th(f+3.7)*W;
+    float oy=_th(f+4.9)*H;
+    float sz=baseSz*(0.5+_th(f+5.5)*0.8);
+    float rspd=(_th(f+6.1)-0.5)*2.0*rotSpd;
+    float roff=_th(f+7.3)*6.2832;
+    float ct=_th(f+8.7);
+    float dp=_th(f+9.1);
+    bool solid=_th(f+10.3)<0.45;
+
+    float cx=mod(ox+vx*(t+ph),W);
+    float cy=mod(oy+vy*(t+ph),H);
+
+    float angle=roff+t*rspd;
+    float ca=cos(angle),sa=sin(angle);
+    vec2 p0=vec2(0.,sz),p1=vec2(-sz*.866,-sz*.5),p2=vec2(sz*.866,-sz*.5);
+    vec2 va=vec2(ca*p0.x-sa*p0.y,sa*p0.x+ca*p0.y)+vec2(cx,cy);
+    vec2 vb=vec2(ca*p1.x-sa*p1.y,sa*p1.x+ca*p1.y)+vec2(cx,cy);
+    vec2 vc=vec2(ca*p2.x-sa*p2.y,sa*p2.x+ca*p2.y)+vec2(cx,cy);
+
+    float d=_triSDF(uv,va,vb,vc);
+    vec3 tc=mix(iColorA,iColorB,ct)*iIntensity;
+    float op=0.25+dp*0.65;
+    float ew=0.003*iScale;
+
+    // Translucent fill for half the triangles
+    if(solid && d<0.0){
+      col=mix(col,tc*0.3,op*0.45);
+    }
+    // Edge glow for all
+    float ed=abs(d);
+    if(ed<ew*3.0){
+      float eg=1.0-smoothstep(0.0,ew*3.0,ed);
+      col+=tc*pow(eg,1.5)*(0.5+dp*0.9)*op;
+    }
+  }
+
+  gl_FragColor=vec4(col,1.0);
+}`,
+
 };

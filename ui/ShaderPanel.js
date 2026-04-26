@@ -95,7 +95,7 @@ const ShaderPanel = (() => {
     const presets = [
       'plasma','ripple','distort','bloom','chromatic',
       'kaleidoscope','tunnel','voronoi','turing',
-      'fbm','rings','aurora','julia','lissajous','newton',
+      'fbm','rings','aurora','julia','lissajous','newton','triangles',
     ];
     const presetRow = document.createElement('div');
     presetRow.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;margin-bottom:14px';

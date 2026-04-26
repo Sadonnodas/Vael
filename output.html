@@ -82,8 +82,13 @@
     let   started = false;
 
     function resize() {
-      canvas.width  = window.innerWidth;
-      canvas.height = window.innerHeight;
+      const dpr = window.devicePixelRatio || 1;
+      canvas.width  = window.innerWidth  * dpr;
+      canvas.height = window.innerHeight * dpr;
+      canvas.style.width  = window.innerWidth  + 'px';
+      canvas.style.height = window.innerHeight + 'px';
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
     }
     resize();
     window.addEventListener('resize', resize);
@@ -108,6 +113,8 @@
         const drawW = srcW * scale, drawH = srcH * scale;
         const dx = (dstW - drawW) / 2, dy = (dstH - drawH) / 2;
 
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
         ctx.drawImage(bmp, dx, dy, drawW, drawH);
         bmp.close();
       } else if (e.data.type === 'ping') {

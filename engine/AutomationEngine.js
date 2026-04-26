@@ -66,10 +66,11 @@ const AutomationEngine = (() => {
       const dur = ramp.endTime - ramp.startTime;
       if (dur <= 0) continue;
       const t = _getTime(ramp, allLayers);
-      if (t < ramp.startTime) continue;
-
       let value;
-      if (t > ramp.endTime) {
+      if (t < ramp.startTime) {
+        if (!ramp.holdStart) continue;
+        value = ramp.startValue;
+      } else if (t > ramp.endTime) {
         if (!ramp.holdEnd) continue;
         value = ramp.endValue;
       } else {

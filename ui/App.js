@@ -57,12 +57,12 @@
       container.appendChild(ParamPanel._buildNameHeader(layer, 'Image'));
     }
 
-    // If image already loaded, show Change button instead of full picker
-    if (layer._sourceName || layer._imageUrl) {
+    // If image already loaded (or known to be loading), show Change button instead of full picker
+    if (layer._fileName || layer._sourceName || layer._imageUrl) {
       const changeBtn = document.createElement('button');
       changeBtn.className = 'btn accent';
       changeBtn.style.cssText = 'width:100%;font-size:9px;margin-bottom:10px';
-      changeBtn.textContent = '🖼 ' + (layer._sourceName || 'Image') + ' — Change image';
+      changeBtn.textContent = '🖼 ' + (layer._fileName || layer._sourceName || 'Image') + ' — Change image';
       changeBtn.addEventListener('click', () => {
         LibraryPanel.promptImageForLayer(layer, container);
         setTimeout(() => _renderImageLayerPanel(layer, container), 50);
@@ -392,6 +392,49 @@
     setTimeout(() => document.addEventListener('mousedown', _outside, true), 0);
   }
 
+  function _pbStartInlineRename(nameEl, oldName) {
+    const input = document.createElement('input');
+    input.value = oldName;
+    input.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text);' +
+      'background:var(--bg-mid);border:1px solid var(--accent);border-radius:3px;' +
+      'padding:1px 4px;width:100%;box-sizing:border-box;outline:none';
+    let done = false;
+    const finish = (doSave) => {
+      if (done) return;
+      done = true;
+      if (doSave) {
+        const newName = input.value.trim();
+        if (newName && newName !== oldName) {
+          if (PresetBrowser._getAll().find(p => p.name === newName)) {
+            Toast.warn(`"${newName}" already exists`);
+            done = false;
+            setTimeout(() => { input.focus(); input.select(); }, 0);
+            return;
+          }
+          PresetBrowser.rename(oldName, newName);
+          if (window._vaelActiveScene === oldName) {
+            window._vaelActiveScene = newName;
+            localStorage.setItem('vael-active-scene', newName);
+          }
+          if (typeof PlaylistPanel !== 'undefined') PlaylistPanel.renameScene(oldName, newName);
+          Toast.success(`Renamed to "${newName}"`);
+        }
+      }
+      _renderInlinePresetGrid();
+    };
+    input.addEventListener('click',     e => e.stopPropagation());
+    input.addEventListener('mousedown', e => e.stopPropagation());
+    input.addEventListener('keydown', e => {
+      e.stopPropagation();
+      if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+      else if (e.key === 'Escape') { finish(false); }
+    });
+    input.addEventListener('blur', () => finish(true));
+    nameEl.textContent = '';
+    nameEl.appendChild(input);
+    setTimeout(() => { input.focus(); input.select(); }, 0);
+  }
+
   // Render inline preset grid in the SCENES tab
   function _renderInlinePresetGrid() {
     const grid    = document.getElementById('pb-inline-grid');
@@ -514,9 +557,18 @@
             thumb = t.toDataURL('image/jpeg', 0.6);
           } catch {}
           PresetBrowser.save(layers, preset.name, thumb);
+          if(typeof SceneDirtyGuard!=='undefined') SceneDirtyGuard.markSaved();
           _renderInlinePresetGrid();
           Toast.success(`"${preset.name}" updated`);
         });
+
+        const renBtn = document.createElement('button');
+        renBtn.title='Rename'; renBtn.style.cssText='background:none;border:none;color:#ffcc44;cursor:pointer;font-size:11px;padding:1px 3px;flex-shrink:0';
+        renBtn.textContent='✎'; renBtn.addEventListener('click',e=>{e.stopPropagation();_pbStartInlineRename(info.firstElementChild,preset.name);});
+
+        const dupBtn = document.createElement('button');
+        dupBtn.title='Duplicate scene'; dupBtn.style.cssText='background:none;border:none;color:#aaaaff;cursor:pointer;font-size:11px;padding:1px 3px;flex-shrink:0';
+        dupBtn.textContent='⧉'; dupBtn.addEventListener('click',e=>{e.stopPropagation();const copy=PresetBrowser.duplicate(preset.name);if(copy){_renderInlinePresetGrid();Toast.success(`Duplicated as "${copy.name}"`); }});
 
         const dlBtn = document.createElement('button');
         dlBtn.title='Download'; dlBtn.style.cssText='background:none;border:none;color:#00d4aa;cursor:pointer;font-size:11px;padding:1px 3px;flex-shrink:0';
@@ -526,10 +578,13 @@
         delBtn.title='Delete'; delBtn.style.cssText='background:none;border:none;color:#ff4444;cursor:pointer;font-size:11px;padding:1px 3px;flex-shrink:0';
         delBtn.textContent='✕'; delBtn.addEventListener('click',e=>{e.stopPropagation();_pbSelected.delete(preset.name);PresetBrowser.remove(preset.name);_pbUpdateBulkBtns();_renderInlinePresetGrid();Toast.info(`Deleted "${preset.name}"`);});
 
-        row.append(chk, thumb, info, updBtn, dlBtn, delBtn);
+        row.append(chk, thumb, info, renBtn, updBtn, dupBtn, dlBtn, delBtn);
         row.addEventListener('mouseenter',()=>{if(!isActive&&!_pbSelected.has(preset.name))row.style.borderColor='var(--accent2)';});
         row.addEventListener('mouseleave',()=>{row.style.borderColor=isActive||_pbSelected.has(preset.name)?'var(--accent)':'var(--border-dim)';});
-        row.addEventListener('click',()=>{window._vaelActiveScene=preset.name;localStorage.setItem('vael-active-scene',preset.name);PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();});
+        row.addEventListener('click',()=>{
+          const _load=()=>{window._vaelActiveScene=preset.name;localStorage.setItem('vael-active-scene',preset.name);PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();};
+          if(typeof SceneDirtyGuard!=='undefined'){SceneDirtyGuard.confirmSwitch(preset.name,_load);}else{_load();}
+        });
 
         grid.appendChild(row);
 
@@ -552,7 +607,7 @@
             : `<div style="width:100%;aspect-ratio:16/9;background:var(--bg);display:flex;align-items:center;justify-content:center;font-size:18px;border-bottom:1px solid var(--border-dim);color:var(--text-dim)">◈</div>`
           }
           <div style="padding:5px 7px">
-            <div style="font-family:var(--font-mono);font-size:9px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px">${preset.name}</div>
+            <div class="pb-name-lbl" style="font-family:var(--font-mono);font-size:9px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-bottom:3px">${preset.name}</div>
             <div style="display:flex;gap:3px;flex-wrap:wrap;margin-bottom:3px">
               ${layerTypes.map(t=>`<span style="font-family:var(--font-mono);font-size:7px;background:rgba(255,255,255,0.06);border-radius:2px;padding:1px 3px;color:var(--text-dim)">${t}</span>`).join('')}
             </div>
@@ -566,6 +621,8 @@
             </div>
           </div>
           <div class="pb-card-acts" style="position:absolute;top:3px;right:3px;display:flex;gap:2px;opacity:0;transition:opacity 0.15s">
+            <button class="pb-ren-btn" title="Rename scene" style="background:rgba(0,0,0,0.7);border:none;border-radius:2px;color:#ffcc44;cursor:pointer;font-size:9px;padding:1px 4px">✎</button>
+            <button class="pb-dup-btn" title="Duplicate scene" style="background:rgba(0,0,0,0.7);border:none;border-radius:2px;color:#aaaaff;cursor:pointer;font-size:9px;padding:1px 4px">⧉</button>
             <button class="pb-dl-btn" title="Download" style="background:rgba(0,0,0,0.7);border:none;border-radius:2px;color:#00d4aa;cursor:pointer;font-size:9px;padding:1px 4px">↓</button>
             <button class="pb-inline-del" title="Delete" style="background:rgba(0,0,0,0.7);border:none;border-radius:2px;color:#ff4444;cursor:pointer;font-size:9px;padding:1px 4px">✕</button>
           </div>
@@ -575,7 +632,8 @@
         card.addEventListener('mouseleave',()=>{card.style.borderColor=isActive||_pbSelected.has(preset.name)?'var(--accent)':'var(--border-dim)';card.style.transform='scale(1)';card.querySelector('.pb-card-acts').style.opacity='0';});
         card.addEventListener('click',e=>{
           if(e.target.closest('.pb-card-acts')||e.target.closest('.pb-sel'))return;
-          window._vaelActiveScene=preset.name;localStorage.setItem('vael-active-scene',preset.name);PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();
+          const _load=()=>{window._vaelActiveScene=preset.name;localStorage.setItem('vael-active-scene',preset.name);PresetBrowser._applyPreset(preset);Toast.success(`Loaded: ${preset.name}`);_renderInlinePresetGrid();};
+          if(typeof SceneDirtyGuard!=='undefined'){SceneDirtyGuard.confirmSwitch(preset.name,_load);}else{_load();}
         });
         card.querySelector('.pb-sel').addEventListener('click',e=>{
           e.stopPropagation();
@@ -596,6 +654,7 @@
             thumb = t.toDataURL('image/jpeg', 0.6);
           } catch {}
           PresetBrowser.save(layers, preset.name, thumb);
+          if(typeof SceneDirtyGuard!=='undefined') SceneDirtyGuard.markSaved();
           _renderInlinePresetGrid();
           Toast.success(`"${preset.name}" updated`);
         });
@@ -603,6 +662,8 @@
           e.stopPropagation();
           _showVersionPanel(preset.name, card);
         });
+        card.querySelector('.pb-ren-btn').addEventListener('click',e=>{e.stopPropagation();_pbStartInlineRename(card.querySelector('.pb-name-lbl'),preset.name);});
+        card.querySelector('.pb-dup-btn').addEventListener('click',e=>{e.stopPropagation();const copy=PresetBrowser.duplicate(preset.name);if(copy){_renderInlinePresetGrid();Toast.success(`Duplicated as "${copy.name}"`);}});
         card.querySelector('.pb-dl-btn').addEventListener('click',e=>{e.stopPropagation();_pbDownload(preset);});
         card.querySelector('.pb-inline-del').addEventListener('click',e=>{
           e.stopPropagation();_pbSelected.delete(preset.name);
@@ -671,6 +732,11 @@
   document.addEventListener('vael:fade-duration',   e => { setlist.fadeDuration   = e.detail; });
   document.addEventListener('vael:transition-type', e => { setlist.transitionType = e.detail; });
 
+  window.addEventListener('vael:active-scene-changed', e => {
+    if (e.detail?.name) localStorage.setItem('vael-active-scene', e.detail.name);
+    setTimeout(_renderInlinePresetGrid, 50);
+  });
+
   const flashOverlay = document.createElement('div');
   flashOverlay.id = 'vael-transition-overlay';
   flashOverlay.style.cssText = 'position:fixed;inset:0;background:white;opacity:0;pointer-events:none;z-index:99;transition:opacity 0.05s';
@@ -701,6 +767,45 @@
   // scene:next / scene:prev for the concert setlist. Other actions fall
   // through via the `orig` callback chain PlaylistPanel sets up.
   midi.onGlobalAction = (action) => {
+    // ── Global video transport (all VideoPlayerLayers in current stack) ───
+    if (action === 'video:play' || action === 'video:stop' || action === 'video:pause' || action === 'video:toggle') {
+      const vids = layers.layers.filter(l => l instanceof VideoPlayerLayer);
+      vids.forEach(l => {
+        const n = l._sourceName || 'Video';
+        if (action === 'video:play')   { l.play();  Toast.info(`▶ ${n}`); }
+        if (action === 'video:pause')  { l.pause(); Toast.info(`⏸ ${n}`); }
+        if (action === 'video:stop')   { l.stop();  Toast.info(`⏹ ${n}`); }
+        if (action === 'video:toggle') {
+          if (l.isPlaying) { l.pause(); Toast.info(`⏸ ${n}`); }
+          else             { l.play();  Toast.info(`▶ ${n}`); }
+        }
+      });
+      return;
+    }
+    // ── Global audio transport ────────────────────────────────
+    if (action === 'audio:play' || action === 'audio:stop' || action === 'audio:toggle') {
+      if (action === 'audio:play')   { audio.play?.(); Toast.info('▶ Audio'); }
+      if (action === 'audio:stop')   { audio.pause?.() || audio.stop?.(); Toast.info('⏹ Audio'); }
+      if (action === 'audio:toggle') {
+        if (audio.isPlaying?.()) { audio.pause?.(); Toast.info('⏸ Audio'); }
+        else                     { audio.play?.();  Toast.info('▶ Audio'); }
+      }
+      return;
+    }
+    // ── Transport: video + audio together ─────────────────────
+    if (action === 'transport:play' || action === 'transport:stop' || action === 'transport:toggle') {
+      const vids = layers.layers.filter(l => l instanceof VideoPlayerLayer);
+      if (action === 'transport:play') {
+        vids.forEach(l => l.play()); audio.play?.(); Toast.info('▶ Transport');
+      } else if (action === 'transport:stop') {
+        vids.forEach(l => l.stop()); audio.pause?.() || audio.stop?.(); Toast.info('⏹ Transport');
+      } else {
+        const anyPlaying = vids.some(l => l.isPlaying);
+        if (anyPlaying) { vids.forEach(l => l.pause()); audio.pause?.(); Toast.info('⏸ Transport'); }
+        else            { vids.forEach(l => l.play());  audio.play?.();  Toast.info('▶ Transport'); }
+      }
+      return;
+    }
     // ── Layer transport actions ────────────────────────────────
     if (action.startsWith('layer:')) {
       const parts   = action.split(':');
@@ -1032,6 +1137,15 @@
   // ── TileLayer freeform crop drawing mode ─────────────────────
   // Triggered by the "✏ Draw crop shape" button in ParamPanel
   // when a TileLayer has shape='freeform' selected.
+  window.addEventListener('vael:select-layer', e => {
+    const id = e.detail?.id;
+    if (!id) return;
+    _selectedLayerId = id;
+    LayerPanel.setSelectedId(id);
+    if (canvas._onLayerSelect) canvas._onLayerSelect(id);
+    window.dispatchEvent(new CustomEvent('vael:refresh-params'));
+  });
+
   window.addEventListener('vael:tilelayer-draw', e => {
     const layerId = e.detail?.layerId;
     const layer   = _findLayerAnywhere(layerId);
@@ -1149,10 +1263,14 @@
   layers.add = (layer) => {
     _origLayersAdd(layer);
     if (layer instanceof ImageLayer) {
-      setTimeout(() => LibraryPanel.showAddImagePrompt(layer), 100);
+      setTimeout(() => {
+        if (!layer._loaded && !layer._fileName) LibraryPanel.showAddImagePrompt(layer);
+      }, 100);
     }
     if (layer instanceof VideoPlayerLayer) {
-      setTimeout(() => _showVideoPickerForLayer(layer), 100);
+      setTimeout(() => {
+        if (!layer._sourceUrl) _showVideoPickerForLayer(layer);
+      }, 100);
     }
     // Log to history (skip default startup layers which fire before history is ready)
     if (window._vaelHistory) {
@@ -1636,9 +1754,24 @@
     if (_outputOpen) {
       _outputFrameCounter++;
       if (_outputFrameCounter % 2 === 0) {
-        const mainCanvas = renderer.canvas;
+        const mainCanvas    = renderer.canvas;
+        const overlayCanvas = renderer.overlayCanvas;
         if (mainCanvas) {
-          createImageBitmap(mainCanvas).then(bmp => {
+          let srcPromise;
+          if (overlayCanvas) {
+            // Composite the WebGL canvas and the 2D overlay canvas (canvas-blend layers)
+            // into a single bitmap before broadcasting to the output window.
+            const tmp    = document.createElement('canvas');
+            tmp.width    = mainCanvas.width;
+            tmp.height   = mainCanvas.height;
+            const tmpCtx = tmp.getContext('2d');
+            tmpCtx.drawImage(mainCanvas, 0, 0);
+            tmpCtx.drawImage(overlayCanvas, 0, 0, tmp.width, tmp.height);
+            srcPromise = createImageBitmap(tmp);
+          } else {
+            srcPromise = createImageBitmap(mainCanvas);
+          }
+          srcPromise.then(bmp => {
             _outputChannel.postMessage({ type: 'frame', bitmap: bmp }, [bmp]);
           }).catch(() => {});
         }

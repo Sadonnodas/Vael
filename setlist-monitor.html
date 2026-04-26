@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Vael — Setlist Monitor</title>
+  <style>
+    :root {
+      --bg:        #0f0f12;
+      --bg-mid:    #16161c;
+      --bg-card:   #1c1c24;
+      --accent:    #00d4aa;
+      --accent2:   #a67cff;
+      --text:      #e0e0e8;
+      --text-dim:  #7a7a8c;
+      --text-muted:#3e3e50;
+      --border:    #2a2a35;
+      --border-dim:#1e1e28;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'JetBrains Mono', 'SF Mono', ui-monospace, monospace;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      user-select: none;
+    }
+
+    /* ── Header ───────────────────────────────────────────────── */
+    #hdr {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+      -webkit-app-region: drag;
+      background: var(--bg-mid);
+    }
+    #hdr-title {
+      font-size: 9px;
+      letter-spacing: 2px;
+      color: var(--accent);
+      text-transform: uppercase;
+    }
+    #hdr-setlist-name {
+      font-size: 9px;
+      color: var(--text-dim);
+      flex: 1;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    #btn-toggle-view {
+      -webkit-app-region: no-drag;
+      padding: 4px 10px;
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      color: var(--text-dim);
+      font-family: inherit;
+      font-size: 8px;
+      letter-spacing: 0.5px;
+      cursor: pointer;
+      transition: color 0.12s, border-color 0.12s;
+      flex-shrink: 0;
+    }
+    #btn-toggle-view:hover { color: var(--accent); border-color: var(--accent); }
+    #btn-toggle-view.perf  { color: var(--accent); border-color: var(--accent); background: rgba(0,212,170,0.08); }
+
+    /* ── Progress bar ─────────────────────────────────────────── */
+    #progress-bar {
+      height: 2px;
+      background: var(--border-dim);
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    #progress-fill {
+      height: 100%;
+      background: var(--accent);
+      transition: width 0.35s;
+    }
+
+    /* ── Current song label (perf view only) ──────────────────── */
+    #now-label {
+      display: none;
+      padding: 8px 14px 6px;
+      font-size: 10px;
+      color: var(--accent);
+      background: var(--bg-mid);
+      border-bottom: 1px solid var(--border-dim);
+      flex-shrink: 0;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* ── Scroll area ──────────────────────────────────────────── */
+    #list {
+      flex: 1;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+
+    /* ── Normal view: song/part hierarchy ─────────────────────── */
+    #list.normal { padding: 8px 6px; }
+    .song { margin-bottom: 4px; }
+    .song-hdr {
+      font-size: 9px;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      padding: 5px 10px 4px;
+    }
+    .part {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 9px 12px 9px 22px;
+      border-radius: 6px;
+      cursor: pointer;
+      margin-bottom: 2px;
+      border: 1px solid transparent;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .part:hover { background: rgba(255,255,255,0.04); }
+    .part.active {
+      background: rgba(0,212,170,0.10);
+      border-color: rgba(0,212,170,0.35);
+    }
+    .part-idx { font-size: 8px; color: var(--text-muted); min-width: 18px; flex-shrink: 0; }
+    .part.active .part-idx { color: rgba(0,212,170,0.6); }
+    .part-name { flex: 1; font-size: 11px; }
+    .part.active .part-name { color: var(--accent); font-weight: 600; }
+    .part-scene { font-size: 8px; color: var(--text-muted); flex-shrink: 0; }
+    .part.active .part-scene { color: rgba(0,212,170,0.5); }
+
+    /* ── Performance view: flat numbered list ─────────────────── */
+    #list.perf { padding: 0; }
+    .pf-row {
+      display: flex;
+      align-items: center;
+      gap: 0;
+      cursor: pointer;
+      transition: background 0.1s;
+      border-bottom: 1px solid var(--border-dim);
+    }
+    .pf-row:hover { background: var(--bg-card); }
+    .pf-row.active { background: rgba(0,212,170,0.1); }
+    .pf-strip { width: 4px; align-self: stretch; flex-shrink: 0; }
+    .pf-num {
+      font-size: 10px;
+      color: var(--text-dim);
+      min-width: 34px;
+      text-align: right;
+      padding: 10px 7px 10px 6px;
+      flex-shrink: 0;
+    }
+    .pf-row.active .pf-num { color: var(--accent); }
+    .pf-arrow {
+      font-size: 8px;
+      color: var(--accent);
+      width: 12px;
+      flex-shrink: 0;
+    }
+    .pf-name {
+      flex: 1;
+      font-size: 12px;
+      padding: 10px 10px 10px 2px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .pf-row.active .pf-name { color: var(--accent); font-weight: 600; }
+
+    /* ── Nav bar ──────────────────────────────────────────────── */
+    #nav {
+      display: flex;
+      gap: 6px;
+      padding: 8px 10px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-mid);
+      flex-shrink: 0;
+      -webkit-app-region: drag;
+    }
+    #nav button {
+      flex: 1;
+      padding: 8px 0;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text-dim);
+      font-family: inherit;
+      font-size: 10px;
+      cursor: pointer;
+      transition: color 0.12s, border-color 0.12s;
+      -webkit-app-region: no-drag;
+    }
+    #nav button:hover { color: var(--accent); border-color: var(--accent); }
+    #nav button:disabled { opacity: 0.3; pointer-events: none; }
+
+    /* ── Waiting ──────────────────────────────────────────────── */
+    #waiting {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      gap: 8px;
+      color: var(--text-muted);
+      font-size: 9px;
+    }
+    .dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      background: var(--accent); opacity: 0.3;
+      animation: pulse 1.4s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%,100% { opacity: 0.2; transform: scale(0.9); }
+      50%      { opacity: 0.7; transform: scale(1.1); }
+    }
+  </style>
+</head>
+<body>
+
+<div id="hdr">
+  <span id="hdr-title">Setlist</span>
+  <span id="hdr-setlist-name"></span>
+  <button id="btn-toggle-view" title="Toggle performance view">⚡ Perf view</button>
+</div>
+
+<div id="progress-bar"><div id="progress-fill" style="width:0%"></div></div>
+<div id="now-label">—</div>
+<div id="list" class="normal">
+  <div id="waiting"><div class="dot"></div>Waiting for Vael…</div>
+</div>
+<div id="nav">
+  <button id="btn-prev">◀ Prev</button>
+  <button id="btn-next">Next ▶</button>
+</div>
+
+<script>
+  const ch = new BroadcastChannel('vael-setlist');
+  let _playlist     = null;
+  let _activePartId = null;
+  let _perfView     = false;
+
+  // ── Toggle view ───────────────────────────────────────────────
+  const btnToggle = document.getElementById('btn-toggle-view');
+  btnToggle.addEventListener('click', () => {
+    _perfView = !_perfView;
+    btnToggle.textContent = _perfView ? '✕ Normal view' : '⚡ Perf view';
+    btnToggle.classList.toggle('perf', _perfView);
+    render();
+  });
+
+  // ── Receive state ─────────────────────────────────────────────
+  ch.onmessage = (e) => {
+    const msg = e.data;
+    if (msg.type === 'state') {
+      _playlist     = msg.playlist;
+      _activePartId = msg.activePartId;
+      render();
+    }
+  };
+
+  // ── Send commands ─────────────────────────────────────────────
+  document.getElementById('btn-prev').addEventListener('click', () => ch.postMessage({ type: 'prev' }));
+  document.getElementById('btn-next').addEventListener('click', () => ch.postMessage({ type: 'next' }));
+
+  // ── Flat parts helper ─────────────────────────────────────────
+  function flatParts() {
+    if (!_playlist) return [];
+    return _playlist.songs.flatMap(s =>
+      s.parts.map(p => ({ ...p, songName: s.name, songId: s.id, songColor: s.color || null }))
+    );
+  }
+
+  // ── Render ────────────────────────────────────────────────────
+  function render() {
+    const listEl    = document.getElementById('list');
+    const nameEl    = document.getElementById('hdr-setlist-name');
+    const nowEl     = document.getElementById('now-label');
+    const fillEl    = document.getElementById('progress-fill');
+    const prevBtn   = document.getElementById('btn-prev');
+    const nextBtn   = document.getElementById('btn-next');
+
+    nameEl.textContent = _playlist?.name ? '— ' + _playlist.name : '';
+    listEl.className   = _perfView ? 'perf' : 'normal';
+    nowEl.style.display = _perfView ? 'block' : 'none';
+
+    if (!_playlist || !_playlist.songs || _playlist.songs.length === 0) {
+      listEl.innerHTML = '<div id="waiting"><div class="dot"></div>No setlist loaded</div>';
+      nowEl.textContent = '—';
+      fillEl.style.width = '0%';
+      prevBtn.disabled = true;
+      nextBtn.disabled = true;
+      return;
+    }
+
+    const flat     = flatParts();
+    const activeIdx = flat.findIndex(p => p.id === _activePartId);
+    const pct      = activeIdx >= 0 ? Math.round(((activeIdx + 1) / flat.length) * 100) : 0;
+    fillEl.style.width = pct + '%';
+
+    prevBtn.disabled = activeIdx <= 0;
+    nextBtn.disabled = activeIdx >= flat.length - 1 || activeIdx < 0;
+
+    if (_perfView) {
+      // Current label above list
+      if (activeIdx >= 0) {
+        const p = flat[activeIdx];
+        const display = p.name === 'Full song' ? p.songName : p.songName + ' · ' + p.name;
+        nowEl.textContent = '▶ ' + (activeIdx + 1) + ' / ' + flat.length + '  —  ' + display;
+      } else {
+        nowEl.textContent = flat.length + ' parts · nothing playing';
+      }
+      renderPerfView(listEl, flat, activeIdx);
+    } else {
+      renderNormalView(listEl, flat);
+    }
+  }
+
+  function renderNormalView(listEl, flat) {
+    listEl.innerHTML = '';
+    let idx = 0;
+
+    for (const song of _playlist.songs) {
+      const songEl = document.createElement('div');
+      songEl.className = 'song';
+
+      const songHdr = document.createElement('div');
+      songHdr.className = 'song-hdr';
+      songHdr.textContent = song.name;
+      if (song.color) {
+        songHdr.style.color        = song.color;
+        songHdr.style.borderLeft   = '3px solid ' + song.color;
+        songHdr.style.paddingLeft  = '8px';
+        songHdr.style.opacity      = '0.85';
+      }
+      songEl.appendChild(songHdr);
+
+      for (const part of song.parts) {
+        idx++;
+        const isActive = part.id === _activePartId;
+        const partEl = document.createElement('div');
+        partEl.className = 'part' + (isActive ? ' active' : '');
+
+        const idxEl  = document.createElement('span'); idxEl.className = 'part-idx';  idxEl.textContent = idx;
+        const nameEl = document.createElement('span'); nameEl.className = 'part-name'; nameEl.textContent = part.name;
+        partEl.appendChild(idxEl);
+        partEl.appendChild(nameEl);
+
+        if (part.sceneName) {
+          const scEl = document.createElement('span'); scEl.className = 'part-scene'; scEl.textContent = part.sceneName;
+          partEl.appendChild(scEl);
+        }
+
+        partEl.addEventListener('click', () => ch.postMessage({ type: 'navigate', partId: part.id }));
+        songEl.appendChild(partEl);
+
+        if (isActive) requestAnimationFrame(() => partEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+      }
+
+      listEl.appendChild(songEl);
+    }
+  }
+
+  function renderPerfView(listEl, flat, activeIdx) {
+    listEl.innerHTML = '';
+
+    flat.forEach((p, i) => {
+      const isActive = p.id === _activePartId;
+      const display  = p.name === 'Full song' ? p.songName : p.songName + ' · ' + p.name;
+
+      const row = document.createElement('div');
+      row.className = 'pf-row' + (isActive ? ' active' : '');
+
+      const strip = document.createElement('div');
+      strip.className = 'pf-strip';
+      strip.style.background = p.songColor || 'transparent';
+
+      const num = document.createElement('span');
+      num.className = 'pf-num';
+      num.textContent = i + 1;
+
+      const arrow = document.createElement('span');
+      arrow.className = 'pf-arrow';
+      arrow.textContent = isActive ? '▶' : '';
+
+      const name = document.createElement('span');
+      name.className = 'pf-name';
+      name.textContent = display;
+
+      row.append(strip, num, arrow, name);
+      row.addEventListener('click', () => ch.postMessage({ type: 'navigate', partId: p.id }));
+      listEl.appendChild(row);
+
+      if (isActive) requestAnimationFrame(() => row.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+    });
+  }
+
+  // Ask for state on open
+  ch.postMessage({ type: 'request-state' });
+
+  window.addEventListener('keydown', e => {
+    if (e.key === 'Escape')                               window.close();
+    if (e.key === 'ArrowRight' || e.key === 'ArrowDown') ch.postMessage({ type: 'next' });
+    if (e.key === 'ArrowLeft'  || e.key === 'ArrowUp')   ch.postMessage({ type: 'prev' });
+    if (e.key === 'p' || e.key === 'P')                  btnToggle.click();
+  });
+</script>
+</body>
+</html>

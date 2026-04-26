@@ -178,6 +178,10 @@ class SetlistManager {
     this._pendingPreset = null;
     this._fadeT         = 0;
     this._fading        = true;
+    if (preset?.name) {
+      window._vaelActiveScene = preset.name;
+      window.dispatchEvent(new CustomEvent('vael:active-scene-changed', { detail: { name: preset.name } }));
+    }
 
     if (this.transitionType === 'flash' || this.transitionType === 'blur') {
       this._pendingPreset = preset;
@@ -210,6 +214,10 @@ class SetlistManager {
         if (def.modMatrix && layer.modMatrix) layer.modMatrix.fromJSON(def.modMatrix, layer);
         if (def.fx)         layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
         if (Array.isArray(def.automation)) layer.automation = def.automation.map(r => ({ ...r }));
+        if (Array.isArray(def.lfos)) layer._lfos = def.lfos.map(l => ({
+          ...l, _phase: 0, _value: 0,
+          targets: (l.targets || []).map(t => ({ paramId: t.paramId, depth: t.depth })),
+        }));
         if (def.clipShape  !== undefined) layer.clipShape  = def.clipShape  ? { ...def.clipShape  } : null;
         if (def.colorMask  !== undefined) layer.colorMask  = def.colorMask  ? { ...def.colorMask  } : null;
         if (def.softUpdate !== undefined) layer.softUpdate = def.softUpdate;
@@ -338,6 +346,10 @@ class SetlistManager {
 
   _loadPreset(preset) {
     if (!preset?.layers) return;
+    if (preset.name) {
+      window._vaelActiveScene = preset.name;
+      window.dispatchEvent(new CustomEvent('vael:active-scene-changed', { detail: { name: preset.name } }));
+    }
     [...this._layerStack.layers].forEach(l => this._layerStack.remove(l.id));
     preset.layers.forEach(def => {
       try {
@@ -356,6 +368,10 @@ class SetlistManager {
         if (def.modMatrix && layer.modMatrix) layer.modMatrix.fromJSON(def.modMatrix, layer);
         if (def.fx)         layer.fx = def.fx.map(f => ({ ...f, params: { ...f.params } }));
         if (Array.isArray(def.automation)) layer.automation = def.automation.map(r => ({ ...r }));
+        if (Array.isArray(def.lfos)) layer._lfos = def.lfos.map(l => ({
+          ...l, _phase: 0, _value: 0,
+          targets: (l.targets || []).map(t => ({ paramId: t.paramId, depth: t.depth })),
+        }));
         if (def.clipShape  !== undefined) layer.clipShape  = def.clipShape  ? { ...def.clipShape  } : null;
         if (def.colorMask  !== undefined) layer.colorMask  = def.colorMask  ? { ...def.colorMask  } : null;
         if (def.softUpdate !== undefined) layer.softUpdate = def.softUpdate;

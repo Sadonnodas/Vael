@@ -91,6 +91,16 @@ const PlaylistPanel = (() => {
   function _prevPart(){const p=_flatParts(),i=p.findIndex(x=>x.id===_activePartId);if(i>0)_selectPart(p[i-1].id);}
 
   function _selectPart(partId){
+    const part=_flatParts().find(p=>p.id===partId);
+    if(!part)return;
+    if(typeof SceneDirtyGuard!=='undefined'&&part.sceneName){
+      SceneDirtyGuard.confirmSwitch(part.sceneName,()=>_doSelectPart(partId));
+    } else {
+      _doSelectPart(partId);
+    }
+  }
+
+  function _doSelectPart(partId){
     _activePartId=partId;
     const part=_flatParts().find(p=>p.id===partId);
     if(!part)return;
@@ -125,6 +135,7 @@ const PlaylistPanel = (() => {
   function _save(){
     if(!_playlist)return;
     try{localStorage.setItem(STORAGE_KEY,JSON.stringify({playlist:_playlist,activePartId:_activePartId}));}catch{}
+    _broadcastState();
   }
 
   function _load(){
@@ -143,7 +154,7 @@ const PlaylistPanel = (() => {
     _container.appendChild(_root); _renderRoot();
   }
 
-  function _refreshUI(){ if(_root)_renderRoot(); }
+  function _refreshUI(){ if(_root)_renderRoot(); _broadcastState(); }
 
   function _renderRoot(){
     _root.innerHTML='';
@@ -731,5 +742,32 @@ const PlaylistPanel = (() => {
   function _sb(l,fn){const b=document.createElement('button');b.className='btn';b.style.cssText='font-size:8px;padding:3px 8px;color:var(--text-dim)';b.textContent=l;b.addEventListener('click',fn);return b;}
   function _tb(l,fn,t=''){const b=document.createElement('button');b.style.cssText='background:none;border:1px solid var(--border-dim);border-radius:3px;color:var(--text-dim);font-family:var(--font-mono);font-size:7px;padding:2px 5px;cursor:pointer';b.textContent=l;b.title=t;b.addEventListener('click',e=>{e.stopPropagation();fn();});return b;}
 
-  return { init };
+  function renameScene(oldName, newName) {
+    if (!_playlist || !oldName || !newName || oldName === newName) return;
+    let changed = false;
+    _playlist.songs.forEach(s => s.parts.forEach(p => {
+      if (p.sceneName === oldName) { p.sceneName = newName; changed = true; }
+    }));
+    if (changed) { _save(); _refreshUI(); }
+  }
+
+  // ── Setlist monitor broadcast ──────────────────────────────────
+  // Opens a BroadcastChannel so an external setlist-monitor.html window
+  // (on a different display) can receive live state and send navigation back.
+  const _monitorCh = new BroadcastChannel('vael-setlist');
+
+  function _broadcastState() {
+    if (!_playlist) return;
+    _monitorCh.postMessage({ type: 'state', playlist: _playlist, activePartId: _activePartId });
+  }
+
+  _monitorCh.onmessage = (e) => {
+    const msg = e.data;
+    if (msg.type === 'navigate' && msg.partId)  { _selectPart(msg.partId); return; }
+    if (msg.type === 'next')                     { _nextPart(); return; }
+    if (msg.type === 'prev')                     { _prevPart(); return; }
+    if (msg.type === 'request-state')            { _broadcastState(); return; }
+  };
+
+  return { init, renameScene };
 })();

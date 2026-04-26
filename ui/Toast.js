@@ -34,6 +34,7 @@ const Toast = (() => {
   }
 
   function _show(message, type = 'info', duration = 3000) {
+    if (document.body.classList.contains('vael-presentation')) return null;
     const container = _getContainer();
 
     const colors = {

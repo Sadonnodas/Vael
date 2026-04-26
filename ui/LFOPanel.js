@@ -55,6 +55,15 @@ const LFOPanel = (() => {
       } else if (t.paramId === 'opacity') {
         if (t.base === undefined) t.base = layer.opacity ?? 1;
         layer.opacity = Math.max(0, Math.min(1, t.base + out * depth));
+      } else if (t.paramId.startsWith('fx:')) {
+        const dotIdx  = t.paramId.indexOf('.', 3);
+        if (dotIdx < 0) return;
+        const fxIndex = parseInt(t.paramId.slice(3, dotIdx), 10);
+        const paramId = t.paramId.slice(dotIdx + 1);
+        const fx      = layer.fx?.[fxIndex];
+        if (!fx?.params || !(paramId in fx.params)) return;
+        if (t.base === undefined) t.base = fx.params[paramId] ?? 0;
+        fx.params[paramId] = Math.max(0, Math.min(1, t.base + out * depth));
       } else if (layer.params && t.paramId in layer.params) {
         if (t.base === undefined) t.base = layer.params[t.paramId] ?? ((min+max)/2);
         layer.params[t.paramId] = Math.max(min, Math.min(max, t.base + out * depth * (max - min)));
@@ -166,14 +175,23 @@ const LFOPanel = (() => {
     const _renderTargets = () => {
       tList.innerHTML='';
       const manifest = layer.constructor?.manifest?.params || [];
+      const fxOpts = (layer.fx || []).flatMap((fx, i) => {
+        const catalog = typeof LayerFX !== 'undefined' ? LayerFX.CATALOG?.find(e => e.type === fx.type) : null;
+        const fxLabel = catalog?.label || fx.type;
+        return Object.keys(fx.params || {}).map(paramId => ({
+          id: `fx:${i}.${paramId}`,
+          label: `FX ${i + 1} ${fxLabel} – ${paramId}`,
+        }));
+      });
       const opts = [
-        ...manifest.filter(p=>p.type==='float').map(p=>({ id:p.id, label:p.label })),
+        ...manifest.filter(p=>p.type==='float'||p.type==='int').map(p=>({ id:p.id, label:p.label })),
         { id:'opacity',            label:'Opacity'    },
         { id:'transform.x',       label:'Position X' },
         { id:'transform.y',       label:'Position Y' },
         { id:'transform.scaleX',  label:'Scale X'    },
         { id:'transform.scaleY',  label:'Scale Y'    },
         { id:'transform.rotation',label:'Rotation'   },
+        ...fxOpts,
       ];
 
       (lfo.targets||[]).forEach((t,ti) => {
