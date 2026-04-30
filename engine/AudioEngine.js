@@ -48,6 +48,7 @@ class AudioEngine {
     // Volume
     this._gainNode     = null;
     this._volume       = 1.0;
+    this._fadeToken    = 0;       // increments on each fade to invalidate stale callbacks
 
     // Callbacks
     this.onStateChange = null;    // called when play/pause/stop changes
@@ -81,6 +82,45 @@ class AudioEngine {
   set volume(v) {
     this._volume = Math.max(0, Math.min(2, v));
     if (this._gainNode) this._gainNode.gain.value = this._volume;
+  }
+
+  // ── Fades ─────────────────────────────────────────────────────
+  // Sample-accurate gain ramps via WebAudio. fadeOut auto-pauses
+  // when the ramp completes (so the source stops eating CPU).
+  // The token guards against late setTimeouts when a new fade
+  // supersedes an in-progress one (rapid "next" presses).
+
+  fadeOut(durationSec, thenPause = true) {
+    if (!this._gainNode || !this.isPlaying) return Promise.resolve();
+    const ctx = this._getCtx();
+    const t   = ctx.currentTime;
+    const g   = this._gainNode.gain;
+    const dur = Math.max(0.01, durationSec);
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(g.value, t);
+    g.linearRampToValueAtTime(0.0001, t + dur);
+    const myToken = ++this._fadeToken;
+    return new Promise(resolve => {
+      setTimeout(() => {
+        if (this._fadeToken !== myToken) { resolve(); return; }
+        if (thenPause && this.isPlaying) this.pause();
+        if (this._gainNode) this._gainNode.gain.value = this._volume;
+        resolve();
+      }, dur * 1000);
+    });
+  }
+
+  fadeIn(durationSec) {
+    if (!this._gainNode) return Promise.resolve();
+    const ctx = this._getCtx();
+    const t   = ctx.currentTime;
+    const g   = this._gainNode.gain;
+    const dur = Math.max(0.01, durationSec);
+    g.cancelScheduledValues(t);
+    g.setValueAtTime(0, t);
+    g.linearRampToValueAtTime(this._volume, t + dur);
+    ++this._fadeToken;
+    return new Promise(resolve => setTimeout(resolve, dur * 1000));
   }
 
   // ── File loading ─────────────────────────────────────────────

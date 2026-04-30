@@ -234,6 +234,25 @@ const PresetBrowser = (() => {
     return copy;
   }
 
+  /**
+   * Bulk import presets from a setlist bundle.
+   * Existing presets with the same name are overwritten.
+   * Returns { added, updated } counts.
+   */
+  function importBulk(presets) {
+    if (!Array.isArray(presets)) return { added: 0, updated: 0 };
+    const existing = _getAll();
+    let added = 0, updated = 0;
+    presets.forEach(p => {
+      if (!p || !p.name) return;
+      const idx = existing.findIndex(e => e.name === p.name);
+      if (idx >= 0) { existing[idx] = p; updated++; }
+      else          { existing.unshift(p); added++; }
+    });
+    _setAll(existing.slice(0, MAX_CAP));
+    return { added, updated };
+  }
+
   // ── Load into scene ──────────────────────────────────────────
 
   function _applyPreset(preset) {
@@ -815,6 +834,6 @@ const PresetBrowser = (() => {
     _isOpen ? close() : open();
   }
 
-  return { init, save, remove, rename, duplicate, restoreVersion, open, close, toggle, _getAll, _applyPreset };
+  return { init, save, remove, rename, duplicate, restoreVersion, importBulk, open, close, toggle, _getAll, _applyPreset };
 
 })();

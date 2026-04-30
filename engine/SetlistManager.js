@@ -114,7 +114,8 @@ class SetlistManager {
   tick(dt) {
     if (!this._fading) return;
 
-    this._fadeT = Math.min(1, this._fadeT + dt / this.fadeDuration);
+    const _dur = this._fadeDurOverride ?? this.fadeDuration;
+    this._fadeT = Math.min(1, this._fadeT + dt / Math.max(0.01, _dur));
     const t = VaelMath.smoothstep(this._fadeT);
 
     switch (this.transitionType) {
@@ -284,6 +285,7 @@ class SetlistManager {
     this._fadeT         = 0;
     this._flashLoaded   = false;
     this._pendingPreset = null;
+    this._fadeDurOverride = null;
   }
 
   _finishFade() {
@@ -315,6 +317,7 @@ class SetlistManager {
     this._fading       = false;
     this._fadeT        = 0;
     this._flashLoaded  = false;
+    this._fadeDurOverride = null;
 
     // Auto-capture thumbnail after fade completes — small delay lets the
     // new scene render a frame first so the snapshot isn't black.
@@ -333,11 +336,15 @@ class SetlistManager {
    * Used by the SCENES tab (PresetBrowser) so preset switches also crossfade.
    * Does not affect the setlist index or trigger onSceneChange.
    */
-  fadeToPreset(preset) {
+  fadeToPreset(preset, opts = {}) {
     if (this._fading) this._cancelFade();
-    if (this.fadeDuration > 0 && this.transitionType !== 'cut') {
+    // Allow a per-call duration override without mutating the global setting.
+    const dur = (opts.duration != null) ? opts.duration : this.fadeDuration;
+    if (dur > 0 && this.transitionType !== 'cut') {
+      this._fadeDurOverride = dur;
       this._startFade(preset);
     } else {
+      this._fadeDurOverride = null;
       this._loadPreset(preset);
     }
   }

@@ -44,6 +44,16 @@ const PlaylistPanel = (() => {
   function _flatParts(){ if(!_playlist)return []; return _playlist.songs.flatMap(s=>s.parts.map(p=>({...p,songName:s.name,songId:s.id}))); }
   function _activePart(){ return _flatParts().find(p=>p.id===_activePartId)||null; }
 
+  // Fade durations: per-part override falls back to playlist default falls back to hardcoded.
+  function _resolveFades(part){
+    const d=_playlist||{};
+    return {
+      audioFadeIn:    part?.audioFadeIn    ?? d.audioFadeIn    ?? 0,
+      audioFadeOut:   part?.audioFadeOut   ?? d.audioFadeOut   ?? 1.5,
+      videoCrossfade: part?.videoCrossfade ?? d.videoCrossfade ?? (_setlist?.fadeDuration ?? 1.5),
+    };
+  }
+
   function init({setlist,audio,container}){
     _setlist=setlist; _audio=audio;
     _container=container||document.getElementById('tab-scenes');
@@ -101,35 +111,71 @@ const PlaylistPanel = (() => {
   }
 
   function _doSelectPart(partId){
+    const newPart=_flatParts().find(p=>p.id===partId);
+    if(!newPart)return;
+    const oldPart=_activePartId?_flatParts().find(p=>p.id===_activePartId):null;
+    const oldFades=_resolveFades(oldPart);
+    const newFades=_resolveFades(newPart);
+
     _activePartId=partId;
-    const part=_flatParts().find(p=>p.id===partId);
-    if(!part)return;
-    if(part.sceneName&&typeof PresetBrowser!=='undefined'){
-      const preset=(PresetBrowser._getAll?PresetBrowser._getAll():[]).find(p=>p.name===part.sceneName);
-      if(preset&&_setlist)_setlist.fadeToPreset(preset.data||preset);
+
+    // Visual crossfade — kicks off in parallel with audio fade-out
+    if(newPart.sceneName&&typeof PresetBrowser!=='undefined'){
+      const preset=(PresetBrowser._getAll?PresetBrowser._getAll():[]).find(p=>p.name===newPart.sceneName);
+      if(preset&&_setlist) _setlist.fadeToPreset(preset.data||preset, { duration: newFades.videoCrossfade });
     }
-    if(part.audioUrl&&part.audioAutoPlay!==false&&_audio){
-      if(_audioWatchTimer){clearInterval(_audioWatchTimer);_audioWatchTimer=null;}
-      _audio.loadUrl(part.audioUrl,part.audioName||'audio').then(()=>{
-        const inPt  = part.audioIn  ?? 0;
-        const outPt = part.audioOut ?? 0;
-        if(inPt>0) _audio._offset = inPt;
-        _audio.volume = part.audioVolume ?? 1;
-        _audio.loop   = !!(part.audioLoop && !(outPt>inPt));
-        _audio.play();
-        if(outPt>inPt){
-          _audioWatchTimer=setInterval(()=>{
-            if(!_audio.isPlaying){clearInterval(_audioWatchTimer);_audioWatchTimer=null;return;}
-            if(_audio.currentTime>=outPt){
-              if(part.audioLoop){_audio.seekTo(inPt);}
-              else{_audio.pause();clearInterval(_audioWatchTimer);_audioWatchTimer=null;}
-            }
-          },100);
-        }
-      }).catch(()=>{});
-    }
+
+    // Audio: fade out current → load + fade in new (sequential so a single
+    // _audio engine can handle the handoff without stepping on itself).
+    _doAudioTransition(newPart, oldFades.audioFadeOut, newFades.audioFadeIn);
+
     _save(); _refreshUI();
-    Toast.info('▶ '+part.songName+' — '+part.name);
+    Toast.info('▶ '+newPart.songName+' — '+newPart.name);
+  }
+
+  async function _doAudioTransition(part, fadeOutSec, fadeInSec){
+    if(_audioWatchTimer){clearInterval(_audioWatchTimer);_audioWatchTimer=null;}
+    if(!_audio) return;
+
+    if(_audio.isPlaying){
+      if(fadeOutSec>0) await _audio.fadeOut(fadeOutSec);
+      else _audio.pause();
+    }
+
+    // Fallback: if AssetStore restore hasn't run yet but we have a stored
+    // audioId, fetch the blob directly so the part still plays.
+    if(!part.audioUrl && part.audioId && typeof AssetStore !== 'undefined'){
+      try {
+        const entries = await AssetStore.list('audio');
+        const entry   = entries.find(e => e.id === part.audioId);
+        if (entry?.blob) {
+          part.audioUrl  = URL.createObjectURL(entry.blob);
+          part.audioName = entry.name || part.audioName;
+        }
+      } catch {}
+    }
+
+    if(!part.audioUrl||part.audioAutoPlay===false) return;
+
+    try{
+      await _audio.loadUrl(part.audioUrl, part.audioName||'audio');
+      const inPt  = part.audioIn  ?? 0;
+      const outPt = part.audioOut ?? 0;
+      if(inPt>0) _audio._offset = inPt;
+      _audio.volume = part.audioVolume ?? 1;
+      _audio.loop   = !!(part.audioLoop && !(outPt>inPt));
+      _audio.play();
+      if(fadeInSec>0) _audio.fadeIn(fadeInSec);
+      if(outPt>inPt){
+        _audioWatchTimer=setInterval(()=>{
+          if(!_audio.isPlaying){clearInterval(_audioWatchTimer);_audioWatchTimer=null;return;}
+          if(_audio.currentTime>=outPt){
+            if(part.audioLoop){_audio.seekTo(inPt);}
+            else{_audio.pause();clearInterval(_audioWatchTimer);_audioWatchTimer=null;}
+          }
+        },100);
+      }
+    }catch{}
   }
 
   function _save(){
@@ -144,8 +190,35 @@ const PlaylistPanel = (() => {
       if(!raw)return;
       const saved=JSON.parse(raw);
       _playlist=saved.playlist||null; _activePartId=saved.activePartId||null;
-      if(_playlist)_playlist.songs.forEach(s=>s.parts.forEach(p=>{if(p.audioUrl?.startsWith('blob:')){p.audioUrl=null;p.audioName=null;}}));
+      // Blob URLs don't survive reload — clear them. audioName/audioId stay so the
+      // part keeps its label and AssetStore restore can reattach the blob.
+      if(_playlist)_playlist.songs.forEach(s=>s.parts.forEach(p=>{
+        if(p.audioUrl?.startsWith('blob:')){p.audioUrl=null;}
+      }));
     }catch{}
+    _restoreAudioFromAssetStore();
+  }
+
+  // Async: rehydrate audioUrl from IndexedDB-backed AssetStore using part.audioId.
+  // Best-effort — UI re-renders if anything was restored.
+  async function _restoreAudioFromAssetStore(){
+    if(!_playlist || typeof AssetStore === 'undefined') return;
+    let entries;
+    try { entries = await AssetStore.list('audio'); } catch { return; }
+    if (!entries?.length) return;
+    const byId = new Map(entries.map(e => [e.id, e]));
+    let restored = 0;
+    _playlist.songs.forEach(s => s.parts.forEach(p => {
+      if (p.audioId && !p.audioUrl) {
+        const entry = byId.get(p.audioId);
+        if (entry?.blob) {
+          p.audioUrl  = URL.createObjectURL(entry.blob);
+          p.audioName = entry.name || p.audioName;
+          restored++;
+        }
+      }
+    }));
+    if (restored > 0) _refreshUI();
   }
 
   function _inject(){
@@ -320,13 +393,17 @@ const PlaylistPanel = (() => {
     }
 
     // ── Transition controls ───────────────────────────────────
+    const _vidDur = (_playlist?.videoCrossfade ?? _setlist.fadeDuration ?? 1.5);
+    const _audIn  = (_playlist?.audioFadeIn  ?? 0);
+    const _audOut = (_playlist?.audioFadeOut ?? 1.5);
+
     const trSection=document.createElement('div');
     trSection.style.cssText='margin-top:12px;padding:10px;background:var(--bg-card);border:1px solid var(--border-dim);border-radius:5px';
     trSection.innerHTML=`
-      <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Scene transition</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+      <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">Default transitions</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
         <div>
-          <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:4px">Type</div>
+          <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:4px">Visual type</div>
           <select id="tr-type" style="width:100%;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px">
             <option value="crossfade" ${(_setlist.transitionType||'crossfade')==='crossfade'?'selected':''}>Crossfade</option>
             <option value="flash"     ${(_setlist.transitionType)==='flash'?'selected':''}>Flash</option>
@@ -335,10 +412,25 @@ const PlaylistPanel = (() => {
           </select>
         </div>
         <div>
-          <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:4px">Duration (s)</div>
-          <input id="tr-dur" type="number" min="0" max="10" step="0.1" value="${(_setlist.fadeDuration||1.5).toFixed(1)}"
+          <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:4px">Visual crossfade (s)</div>
+          <input id="tr-dur" type="number" min="0" max="30" step="0.1" value="${_vidDur.toFixed(1)}"
             style="width:100%;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px;box-sizing:border-box">
         </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div>
+          <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:4px">Audio fade-in (s)</div>
+          <input id="tr-afi" type="number" min="0" max="30" step="0.1" value="${_audIn.toFixed(1)}"
+            style="width:100%;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px;box-sizing:border-box">
+        </div>
+        <div>
+          <div style="font-family:var(--font-mono);font-size:8px;color:var(--text-dim);margin-bottom:4px">Audio fade-out (s)</div>
+          <input id="tr-afo" type="number" min="0" max="30" step="0.1" value="${_audOut.toFixed(1)}"
+            style="width:100%;background:var(--bg);border:1px solid var(--border-dim);border-radius:3px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:4px 6px;box-sizing:border-box">
+        </div>
+      </div>
+      <div style="font-family:var(--font-mono);font-size:7px;color:var(--text-dim);line-height:1.6;margin-top:8px">
+        Per-part overrides available in the part editor.
       </div>
     `;
     trSection.querySelector('#tr-type').addEventListener('change',e=>{
@@ -346,9 +438,19 @@ const PlaylistPanel = (() => {
       document.dispatchEvent(new CustomEvent('vael:transition-type',{detail:e.target.value}));
     });
     trSection.querySelector('#tr-dur').addEventListener('change',e=>{
-      const v=parseFloat(e.target.value)||1.5;
-      _setlist.fadeDuration=Math.max(0,Math.min(10,v));
-      document.dispatchEvent(new CustomEvent('vael:fade-duration',{detail:_setlist.fadeDuration}));
+      const v=Math.max(0,Math.min(30,parseFloat(e.target.value)||0));
+      _setlist.fadeDuration=v;
+      if(_playlist) _playlist.videoCrossfade=v;
+      _save();
+      document.dispatchEvent(new CustomEvent('vael:fade-duration',{detail:v}));
+    });
+    trSection.querySelector('#tr-afi').addEventListener('change',e=>{
+      const v=Math.max(0,Math.min(30,parseFloat(e.target.value)||0));
+      if(_playlist) _playlist.audioFadeIn=v; _save();
+    });
+    trSection.querySelector('#tr-afo').addEventListener('change',e=>{
+      const v=Math.max(0,Math.min(30,parseFloat(e.target.value)||0));
+      if(_playlist) _playlist.audioFadeOut=v; _save();
     });
     container.appendChild(trSection);
 
@@ -648,6 +750,27 @@ const PlaylistPanel = (() => {
             </label>
           </div>
         </div>`:''}
+        <div style="background:var(--bg-card);border:1px solid var(--border-dim);border-radius:6px;padding:10px">
+          <div style="font-size:8px;color:var(--text-dim);margin-bottom:9px;text-transform:uppercase;letter-spacing:1px">Transition overrides</div>
+          <p style="font-size:7px;color:var(--text-dim);margin-bottom:9px;line-height:1.5">Leave blank to use the setlist defaults.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px">
+            <div>
+              <div style="font-size:7px;color:var(--text-dim);margin-bottom:3px">Audio in (s)</div>
+              <input id="ovr-afi" type="number" min="0" max="30" step="0.1" placeholder="—" value="${part.audioFadeIn ?? ''}"
+                style="width:100%;background:var(--bg);border:1px solid var(--border-dim);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:5px 6px;box-sizing:border-box">
+            </div>
+            <div>
+              <div style="font-size:7px;color:var(--text-dim);margin-bottom:3px">Audio out (s)</div>
+              <input id="ovr-afo" type="number" min="0" max="30" step="0.1" placeholder="—" value="${part.audioFadeOut ?? ''}"
+                style="width:100%;background:var(--bg);border:1px solid var(--border-dim);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:5px 6px;box-sizing:border-box">
+            </div>
+            <div>
+              <div style="font-size:7px;color:var(--text-dim);margin-bottom:3px">Visual (s)</div>
+              <input id="ovr-vid" type="number" min="0" max="30" step="0.1" placeholder="—" value="${part.videoCrossfade ?? ''}"
+                style="width:100%;background:var(--bg);border:1px solid var(--border-dim);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:5px 6px;box-sizing:border-box">
+            </div>
+          </div>
+        </div>
         <div><div style="font-size:8px;color:var(--text-dim);margin-bottom:5px">Visual scene</div>
           <select id="ps" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font-mono);font-size:9px;padding:6px 8px">
             <option value="">— Not assigned —</option>
@@ -675,9 +798,14 @@ const PlaylistPanel = (() => {
 
     m.querySelector('#ap').addEventListener('click',()=>{
       const inp=document.createElement('input'); inp.type='file'; inp.accept='audio/*';
-      inp.addEventListener('change',e=>{
+      inp.addEventListener('change',async e=>{
         const f=e.target.files[0]; if(!f)return;
         if(part.audioUrl?.startsWith('blob:'))URL.revokeObjectURL(part.audioUrl);
+        // Persist to IndexedDB so the audio survives reloads.
+        if(typeof AssetStore !== 'undefined'){
+          try { part.audioId = await AssetStore.save('audio', f); }
+          catch (err) { console.warn('AssetStore: could not save audio', err); }
+        }
         part.audioUrl=URL.createObjectURL(f); part.audioName=f.name;
         m.querySelector('#an').textContent=f.name; m.querySelector('#an').style.color='var(--accent2)';
       }); inp.click();
@@ -685,7 +813,8 @@ const PlaylistPanel = (() => {
 
     m.querySelector('#ac')?.addEventListener('click',()=>{
       if(part.audioUrl?.startsWith('blob:'))URL.revokeObjectURL(part.audioUrl);
-      part.audioUrl=null; part.audioName=null;
+      // Note: AssetStore entry left intact in case other parts share the same ID.
+      part.audioUrl=null; part.audioName=null; part.audioId=null;
       m.querySelector('#an').textContent='— no audio'; m.querySelector('#an').style.color='var(--text-dim)';
       m.querySelector('#ac').remove();
     });
@@ -716,6 +845,11 @@ const PlaylistPanel = (() => {
         part.audioLoop     = m.querySelector('#alp')?.checked??false;
         part.audioAutoPlay = m.querySelector('#aap')?.checked??true;
       }
+      // Transition overrides — empty input clears the override
+      const _readOvr=(sel)=>{const v=m.querySelector(sel)?.value;return v===''||v==null?undefined:Math.max(0,Math.min(30,parseFloat(v)||0));};
+      const afi=_readOvr('#ovr-afi'); if(afi===undefined) delete part.audioFadeIn;    else part.audioFadeIn    = afi;
+      const afo=_readOvr('#ovr-afo'); if(afo===undefined) delete part.audioFadeOut;   else part.audioFadeOut   = afo;
+      const vid=_readOvr('#ovr-vid'); if(vid===undefined) delete part.videoCrossfade; else part.videoCrossfade = vid;
       _save();close();_refreshUI();Toast.success('Part updated');
     });
     m.querySelector('#x').addEventListener('click',close);
@@ -723,20 +857,160 @@ const PlaylistPanel = (() => {
     ov.addEventListener('click',e=>{if(e.target===ov)close();});
   }
 
-  function _exportSetlist(){
-    const d=JSON.stringify({version:2,playlist:{..._playlist,songs:_playlist.songs.map(s=>({...s,parts:s.parts.map(p=>({...p,audioUrl:null}))}))}},null,2);
-    const a=document.createElement('a'); a.href=URL.createObjectURL(new Blob([d],{type:'application/json'}));
-    a.download=(_playlist.name.replace(/\s+/g,'-'))+'-setlist.json'; a.click();
-    Toast.info('Setlist exported — re-attach audio files after import');
+  // ── Bundled export / import ─────────────────────────────────────
+  // A .vael file packages playlist + referenced scenes + audio blobs (base64),
+  // so a setlist can move between machines/projects intact.
+  // Backward compatible: a v2 .json file (playlist only) still imports.
+
+  function _blobToBase64(blob){
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload  = () => resolve(String(r.result).split(',')[1] || '');
+      r.onerror = reject;
+      r.readAsDataURL(blob);
+    });
+  }
+
+  function _base64ToBlob(b64, mimeType){
+    const bin   = atob(b64);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    return new Blob([bytes], { type: mimeType || 'application/octet-stream' });
+  }
+
+  async function _exportSetlist(){
+    if(!_playlist){ Toast.warn('No setlist to export'); return; }
+    Toast.info('Building setlist bundle…');
+
+    // Referenced scenes
+    const sceneNames = new Set();
+    _playlist.songs.forEach(s => s.parts.forEach(p => { if (p.sceneName) sceneNames.add(p.sceneName); }));
+    const allPresets = (typeof PresetBrowser !== 'undefined' && PresetBrowser._getAll) ? PresetBrowser._getAll() : [];
+    const scenes = allPresets.filter(p => sceneNames.has(p.name));
+
+    // Audio blobs
+    const audio = {};
+    for (const song of _playlist.songs) {
+      for (const part of song.parts) {
+        if (part.audioUrl) {
+          try {
+            const resp = await fetch(part.audioUrl);
+            const blob = await resp.blob();
+            const data = await _blobToBase64(blob);
+            audio[part.id] = { name: part.audioName || 'audio', type: blob.type || 'audio/mpeg', data };
+          } catch (e) {
+            console.warn('PlaylistPanel: could not bundle audio for part', part.id, e);
+          }
+        }
+      }
+    }
+
+    const bundle = {
+      vael:       '1.0',
+      kind:       'setlist-bundle',
+      version:    3,
+      exportedAt: new Date().toISOString(),
+      playlist: {
+        ..._playlist,
+        // Strip session-local audio refs — the bundle's `audio` map is the source
+        // of truth on import, where fresh AssetStore IDs are generated.
+        songs: _playlist.songs.map(s => ({
+          ...s,
+          parts: s.parts.map(p => ({ ...p, audioUrl: null, audioId: null })),
+        })),
+      },
+      scenes,
+      audio,
+    };
+
+    const json = JSON.stringify(bundle);
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([json], { type: 'application/json' }));
+    a.download = _playlist.name.replace(/\s+/g, '-') + '.vael';
+    a.click();
+
+    const audioCount = Object.keys(audio).length;
+    Toast.success(`Exported ${scenes.length} scene${scenes.length!==1?'s':''}, ${audioCount} audio file${audioCount!==1?'s':''}`);
   }
 
   function _importSetlist(){
-    const inp=document.createElement('input'); inp.type='file'; inp.accept='.json';
-    inp.addEventListener('change',async e=>{
-      const f=e.target.files[0]; if(!f)return;
-      try{const j=JSON.parse(await f.text());if(j.version>=2&&j.playlist){_playlist=j.playlist;_activePartId=null;_collapsedSongs.clear();_selectedSongs.clear();_save();_refreshUI();Toast.success('Setlist "'+_playlist.name+'" imported — '+_flatParts().length+' parts');}else Toast.error('Unrecognised setlist format');}
-      catch{Toast.error('Could not read setlist file');}
-    }); inp.click();
+    const inp = document.createElement('input');
+    inp.type   = 'file';
+    inp.accept = '.vael,.json';
+    inp.addEventListener('change', async e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      try {
+        const j = JSON.parse(await f.text());
+        if (j.kind === 'setlist-bundle' && j.version >= 3) {
+          await _importBundle(j);
+        } else if (j.version >= 2 && j.playlist) {
+          // Legacy: just the playlist
+          _playlist = j.playlist;
+          _activePartId = null;
+          _collapsedSongs.clear();
+          _selectedSongs.clear();
+          _save();
+          _refreshUI();
+          Toast.success('Setlist "' + _playlist.name + '" imported — ' + _flatParts().length + ' parts');
+        } else {
+          Toast.error('Unrecognised setlist format');
+        }
+      } catch (err) {
+        console.error(err);
+        Toast.error('Could not read setlist file');
+      }
+    });
+    inp.click();
+  }
+
+  async function _importBundle(bundle){
+    // 1. Restore scenes via PresetBrowser bulk-import
+    let sceneInfo = { added: 0, updated: 0 };
+    if (Array.isArray(bundle.scenes) && typeof PresetBrowser !== 'undefined' && PresetBrowser.importBulk) {
+      sceneInfo = PresetBrowser.importBulk(bundle.scenes);
+    }
+
+    // 2. Decode audio blobs, persist to AssetStore so they survive reload,
+    //    and remap onto parts by ID.
+    const partAudio = {};
+    if (bundle.audio && typeof bundle.audio === 'object') {
+      for (const [partId, meta] of Object.entries(bundle.audio)) {
+        try {
+          const blob = _base64ToBlob(meta.data, meta.type);
+          let audioId = null;
+          if (typeof AssetStore !== 'undefined') {
+            try {
+              const file = new File([blob], meta.name || 'audio', { type: blob.type || 'audio/mpeg' });
+              audioId = await AssetStore.save('audio', file);
+            } catch (err) {
+              console.warn('AssetStore: could not persist imported audio', err);
+            }
+          }
+          partAudio[partId] = { url: URL.createObjectURL(blob), name: meta.name, id: audioId };
+        } catch (e) {
+          console.warn('PlaylistPanel: could not decode audio for part', partId, e);
+        }
+      }
+    }
+
+    if (bundle.playlist) {
+      bundle.playlist.songs.forEach(s => s.parts.forEach(p => {
+        const a = partAudio[p.id];
+        if (a) { p.audioUrl = a.url; p.audioName = a.name; if (a.id) p.audioId = a.id; }
+      }));
+    }
+
+    // 3. Replace current playlist
+    _playlist     = bundle.playlist;
+    _activePartId = null;
+    _collapsedSongs.clear();
+    _selectedSongs.clear();
+    _save();
+    _refreshUI();
+
+    const audioCount = Object.keys(partAudio).length;
+    Toast.success(`Imported "${_playlist.name}" — ${_flatParts().length} parts, ${sceneInfo.updated + sceneInfo.added} scenes (${sceneInfo.added} new), ${audioCount} audio files`);
   }
 
   function _sb(l,fn){const b=document.createElement('button');b.className='btn';b.style.cssText='font-size:8px;padding:3px 8px;color:var(--text-dim)';b.textContent=l;b.addEventListener('click',fn);return b;}
